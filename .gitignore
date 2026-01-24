@@ -19,6 +19,8 @@ go.work.sum
 # IDE
 .idea/
 .vscode/
+.lsp/
+.clj-kondo/
 *.swp
 *.swo
 
