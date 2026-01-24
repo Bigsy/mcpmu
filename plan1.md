@@ -81,6 +81,38 @@ Context-aware routing prevents spaghetti, makes Phase 2-5 keys trivial to add.
 - Truncate content if narrow, but same layout structure
 - Iterate on responsive breakpoints in later phases if needed
 
+### 8. MCP SDK & Wire Format
+**Decision**: Start with `mark3labs/mcp-go`, own the framing layer.
+
+**SDK Choice:**
+- Use `github.com/mark3labs/mcp-go` for Phase 1
+- Has working stdio client examples, pipes-friendly
+- Our `McpClient` interface abstracts it - can swap to official SDK later if needed
+- Key requirement: SDK must accept `io.ReadWriter` (not spawn processes itself)
+
+**Framing Strategy** ("be liberal in what you accept, conservative in what you send"):
+- **Read**: Accept both Content-Length (LSP-style) and NDJSON (newline-delimited)
+- **Write**: Always use Content-Length (spec-compliant)
+- Own the framing layer (~50-100 LOC), don't rely on SDK for this
+
+```go
+// StdioTransport framing
+
+// Read: detect format, handle both
+func (t *StdioTransport) Read() ([]byte, error) {
+    // Peek first bytes
+    // If starts with "Content-Length:", use LSP framing
+    // Otherwise, assume NDJSON (read until newline)
+}
+
+// Write: always Content-Length (spec-compliant)
+func (t *StdioTransport) Write(msg []byte) error {
+    fmt.Fprintf(t.w, "Content-Length: %d\r\n\r\n%s", len(msg), msg)
+}
+```
+
+This maximizes compatibility and removes "which spec is it today?" risk.
+
 ---
 
 ## Features
@@ -109,12 +141,21 @@ Context-aware routing prevents spaghetti, makes Phase 2-5 keys trivial to add.
 - [ ] Define `Transport` interface (Connect, Close, Send, Receive)
 - [ ] Define `McpClient` interface (ListTools, InvokeTool, Status)
 - [ ] This abstraction allows Phase 4/5 transports without refactoring
+- [ ] Abstracts SDK choice - can swap `mark3labs/mcp-go` for official SDK later
+
+### Stdio Framing Layer (owned, not from SDK)
+- [ ] `StdioTransport` struct wrapping `io.ReadWriter`
+- [ ] **Read**: Detect and handle both Content-Length and NDJSON formats
+- [ ] **Write**: Always use Content-Length framing (spec-compliant)
+- [ ] Peek-based format detection (check for `Content-Length:` prefix)
+- [ ] Proper `\r\n\r\n` delimiter handling for LSP-style
+- [ ] Newline delimiter handling for NDJSON fallback
 
 ### MCP Client (stdio only)
-- [ ] Integrate `github.com/mark3labs/mcp-go` or evaluate `github.com/modelcontextprotocol/go-sdk`
+- [ ] Use `github.com/mark3labs/mcp-go` for JSON-RPC + MCP types
 - [ ] `Client` struct implementing McpClient interface
-- [ ] `StdioTransport` implementing Transport interface
 - [ ] **Client receives `io.ReadWriter` pipes** (doesn't spawn processes)
+- [ ] Wire through our `StdioTransport` framing layer
 - [ ] Initialize handshake (`initialize` request/response)
 - [ ] `ListTools()` method calling `tools/list`
 - [ ] Connection retry with backoff (3 attempts, exponential delay)
@@ -188,17 +229,18 @@ Context-aware routing prevents spaghetti, makes Phase 2-5 keys trivial to add.
 - See [plan1.1.md](plan1.1.md) for testing strategy
 
 ## Unknowns / Questions
-1. **MCP SDK Choice**: Which Go MCP SDK to use? `mark3labs/mcp-go` seems more mature, but verify feature parity with official SDK. Evaluate early in implementation.
-2. **Config Migration**: Do we need to support importing existing MCP-studio JSON configs? (Defer to Phase 5)
-3. **Tool Schema**: How complex is the inputSchema field? Do we need full JSON Schema validation? (Likely just store as `json.RawMessage` for now)
+1. **Config Migration**: Do we need to support importing existing MCP-studio JSON configs? (Defer to Phase 5)
+2. **Tool Schema**: How complex is the inputSchema field? Do we need full JSON Schema validation? (Likely just store as `json.RawMessage` for now)
 
 **Resolved in Design Decisions:**
+- ~~MCP SDK Choice~~: Use `mark3labs/mcp-go`, own framing layer, abstract via interface
 - ~~Bubble Tea State~~: Component-based with root model routing
 - ~~Event Bus Pattern~~: Channels + Bubble Tea messages (see Event Bus section)
 - ~~Form approach~~: Use `huh` from Phase 1
 - ~~Process ownership~~: Supervisor owns exec.Cmd, Client receives pipes
 - ~~Log visibility~~: Log panel with `l` toggle
 - ~~Responsive layout~~: Single layout, iterate later
+- ~~Wire format~~: Accept Content-Length + NDJSON on read, write Content-Length
 
 ## Risks
 1. **MCP SDK Gaps**: The Go MCP SDKs may have missing features compared to the TypeScript SDK. May need to contribute upstream or implement workarounds.
@@ -222,7 +264,8 @@ internal/
     version.go      # Schema versioning
   mcp/
     client.go       # McpClient interface + Client implementation
-    transport.go    # Transport interface + StdioTransport
+    transport.go    # Transport interface
+    framing.go      # StdioTransport with Content-Length + NDJSON support
     types.go        # MCP protocol types (Tool, etc.)
   process/
     supervisor.go   # Process lifecycle management
@@ -253,13 +296,14 @@ cmd/
 
 ## Estimated Complexity
 - Config layer: Low (~200 LOC)
-- MCP client + transport: Medium (~300 LOC)
+- Stdio framing layer: Low (~100 LOC)
+- MCP client + transport: Medium (~250 LOC)
 - Process supervisor: Medium (~250 LOC)
 - Event bus: Low (~100 LOC)
 - TUI shell + keybindings: Medium (~400 LOC)
 - Feedback primitives (toast, confirm, modal): Medium (~300 LOC)
 - Server form (huh): Low (~150 LOC)
 - Log panel: Low (~100 LOC)
-- **Total: ~1800-2200 lines of Go code**
+- **Total: ~1850-2250 lines of Go code**
 
-Note: Increased from original estimate due to upfront investment in feedback primitives, keybinding architecture, and huh forms. This pays off in Phase 2+ by avoiding rework.
+Note: Increased from original estimate due to upfront investment in feedback primitives, keybinding architecture, huh forms, and owned framing layer. This pays off in Phase 2+ by avoiding rework and maximizing compatibility.

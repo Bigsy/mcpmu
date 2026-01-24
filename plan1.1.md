@@ -21,6 +21,7 @@ This document defines the testing infrastructure required to safely validate Pha
 - **Re-exec pattern**: Spawn the test binary itself as a subprocess (no separate build step, cross-platform)
 - **Configurable behavior**: Pass config via environment variable for declarative test scenarios
 - **Dual-use**: Also expose `cmd/mcp-fake-server` binary for manual debugging
+- **Framing modes**: Support both Content-Length (default) and NDJSON to test client's dual-format reader
 
 ### Configuration Schema
 
@@ -39,6 +40,9 @@ type FakeServerConfig struct {
     CrashOnMethod string `json:"crashOnMethod"`  // crash when this method is called
     CrashOnNthRequest int `json:"crashOnNthRequest"` // crash on Nth request (0 = never)
     CrashExitCode int `json:"crashExitCode"` // exit code when crashing
+
+    // Wire format (to test client's dual-format reader)
+    Framing string `json:"framing"` // "content-length" (default) or "ndjson"
 
     // Protocol edge cases
     Malformed bool `json:"malformed"` // write invalid JSON
@@ -192,12 +196,14 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 | Scenario | Fake Server Config | Expected Behavior |
 |----------|-------------------|-------------------|
 | Happy path | Default tools | Initialize → list tools → stop cleanly |
+| Happy path (NDJSON) | `framing: "ndjson"` | Client reads NDJSON, still works |
 | Slow initialize | `delays: {"initialize": "3s"}` | Context timeout triggers, process cleaned up |
 | Slow tools/list | `delays: {"tools/list": "3s"}` | Timeout after handshake, graceful degradation |
 | Initialize error | `errors: {"initialize": {...}}` | Client surfaces error, no crash |
 | Crash on initialize | `crashOnMethod: "initialize"` | Client detects EOF, marks server as crashed |
 | Crash mid-session | `crashOnNthRequest: 3` | Client handles broken pipe gracefully |
 | Malformed response | `malformed: true` | Client rejects, doesn't hang |
+| Bad framing | `badFraming: true` | Client handles gracefully (wrong Content-Length) |
 | Empty tool list | `tools: []` | Works correctly with zero tools |
 | Many tools | 100+ tools | No performance issues |
 
