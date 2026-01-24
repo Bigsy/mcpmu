@@ -1,9 +1,16 @@
 # Phase 3: Namespaces
 
 ## Objective
-Implement namespace management for grouping servers and controlling tool permissions. This enables fine-grained access control for which tools are exposed through proxies.
+Implement namespace management for grouping servers and controlling tool permissions. This enables fine-grained access control for which tools are exposed via stdio mode (and HTTP proxies if Phase 4 is implemented later).
 
 ## Features
+
+### Active Namespace Selection (stdio mode)
+- [ ] Config: `defaultNamespaceId` (optional, but recommended)
+- [ ] `mcp-studio serve --namespace <id>` selects the active namespace/toolset
+- [ ] If `--namespace` omitted: use `defaultNamespaceId` if present; otherwise fail `initialize` with actionable error
+- [ ] Only servers assigned to the active namespace contribute tools in stdio mode
+- [ ] Tool permission evaluation uses the active namespace only
 
 ### Namespace CRUD
 - [ ] Create namespace form:
@@ -62,9 +69,10 @@ Implement namespace management for grouping servers and controlling tool permiss
 - [ ] Visual indicator of active tab
 
 ### Tool Name Namespacing
-- [ ] Qualified tool names: `{namespaceId}:{serverId}:{toolName}`
-- [ ] Used internally for proxy tool aggregation
+- [ ] Internal qualified tool identity: `{namespaceId}:{serverId}:{toolName}`
+- [ ] Used internally for tool permission lookups and routing
 - [ ] Prevents collision when same server in multiple namespaces
+- [ ] Exposed tool name in stdio mode remains `{serverId}.{toolName}` because stdio selects a single namespace at startup
 
 ## Dependencies
 - Phase 2: Multi-server management, TUI framework

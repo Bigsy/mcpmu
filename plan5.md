@@ -1,7 +1,9 @@
 # Phase 5: SSE Client + OAuth
 
 ## Objective
-Add SSE client transport for connecting to remote MCP servers, implement OAuth 2.1 browser-based authorization flow, and polish the application for release.
+Add SSE client transport for connecting TO remote MCP servers (not serving - that's deferred Phase 4), implement OAuth 2.1 browser-based authorization flow, and polish the application for release.
+
+> **Note**: This phase adds SSE as a CLIENT transport - mcp-studio connecting to remote MCP servers that expose SSE endpoints. This is different from Phase 4 (deferred) which would have mcp-studio SERVE via HTTP/SSE.
 
 ## Features
 
@@ -113,7 +115,8 @@ Add SSE client transport for connecting to remote MCP servers, implement OAuth 2
 - [ ] Responsive layout for terminal resize
 
 ## Dependencies
-- Phase 4: Proxy layer, all TUI components
+- Phase 3: Namespaces, tool permissions, TUI components
+- Phase 4 (HTTP Proxy) is **NOT required** - that phase is deferred
 - See [PLAN-ui.md](PLAN-ui.md) for OAuth badges, toasts, and polish specs
 
 ## Unknowns / Questions
@@ -171,7 +174,7 @@ internal/
 - Token refresh: Medium
 - Import/export: Medium
 - Polish items: Medium
-- Total: ~3000-4000 lines of Go code (cumulative ~9800-13200)
+- Total: ~3000-4000 lines of Go code (cumulative ~7300-9700, excluding deferred Phase 4)
 
 ## Post-Phase 5 / Future Considerations
 - [ ] Plugin system for custom transports

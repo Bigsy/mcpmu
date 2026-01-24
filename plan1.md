@@ -121,8 +121,9 @@ This maximizes compatibility and removes "which spec is it today?" risk.
 - [ ] Define JSON config schema for servers, namespaces, proxies
 - [ ] `ServerConfig` struct: id, name, command, args, cwd, env, kind (stdio/sse), url, headers, OAuth fields
 - [ ] `NamespaceConfig` struct: id, name, description, serverIds
-- [ ] `ProxyConfig` struct: id, name, pathSegment, host, port, runningState, transportType
+- [ ] `ProxyConfig` struct: id, name, pathSegment, host, port, runningState, transportType (Phase 4, deferred - include in schema for forward compatibility)
 - [ ] `ToolPermission` struct: namespaceId, serverId, toolName, enabled
+- [ ] `defaultNamespaceId` config field for stdio toolset selection (Phase 1.5)
 - [ ] Config file location: `~/.config/mcp-studio/config.json`
 - [ ] Atomic writes with temp file + rename
 - [ ] Restrictive file permissions (0600)

@@ -8,8 +8,41 @@ This document defines the testing infrastructure required to safely validate Pha
 
 1. **Fake MCP Server**: A minimal stdio MCP server for tests/CI that can simulate various scenarios
 2. **Integration Tests**: Validate process lifecycle (start, handshake, list tools, stop, crash handling)
-3. **TUI Unit Tests**: Test Bubble Tea model logic without needing a terminal
-4. **CI-Ready**: All tests run without external dependencies, cross-platform
+3. **Protocol Tests (Phase 1.5)**: Test mcp-studio's own stdio server mode end-to-end
+4. **TUI Unit Tests**: Test Bubble Tea model logic without needing a terminal
+5. **CI-Ready**: All tests run without external dependencies, cross-platform
+
+---
+
+## Testing Pyramid
+
+```
+                    ┌─────────────────┐
+                    │  Manual / E2E   │  ← Claude Code integration
+                    │  (Phase 1.5+)   │
+                    └────────┬────────┘
+                             │
+               ┌─────────────┴─────────────┐
+               │      Protocol Tests       │  ← mcp-studio --stdio
+               │      (Phase 1.5)          │     as MCP server
+               └─────────────┬─────────────┘
+                             │
+          ┌──────────────────┴──────────────────┐
+          │        Integration Tests            │  ← Fake MCP server
+          │        (Phase 1)                    │     as subprocess
+          └──────────────────┬──────────────────┘
+                             │
+    ┌────────────────────────┴────────────────────────┐
+    │                  Unit Tests                      │  ← In-memory,
+    │                  (All Phases)                    │     no I/O
+    └──────────────────────────────────────────────────┘
+```
+
+**Phase 1.5 stdio mode becomes the primary integration test vehicle.** It validates:
+- MCP protocol compliance (as a server)
+- Tool aggregation and routing
+- Config loading and server management
+- Error handling end-to-end
 
 ---
 
@@ -283,6 +316,169 @@ func TestServerLifecycle_Timeout(t *testing.T) {
 
 ---
 
+## Protocol Tests (Phase 1.5)
+
+These tests spawn `mcp-studio serve --stdio` and validate it as an MCP server.
+
+### Test MCP Client for Protocol Tests
+
+```go
+// internal/testutil/mcpclient.go
+
+// TestMCPClient speaks MCP protocol over stdin/stdout pipes
+type TestMCPClient struct {
+    stdin  io.WriteCloser
+    stdout io.ReadCloser
+    cmd    *exec.Cmd
+}
+
+func StartMCPStudio(t *testing.T, configPath string) *TestMCPClient {
+    t.Helper()
+
+    cmd := exec.Command("go", "run", "./cmd/mcp-studio", "serve", "--stdio", "--config", configPath)
+    stdin, _ := cmd.StdinPipe()
+    stdout, _ := cmd.StdoutPipe()
+    cmd.Stderr = os.Stderr // Show logs during test
+
+    if err := cmd.Start(); err != nil {
+        t.Fatal(err)
+    }
+
+    t.Cleanup(func() {
+        stdin.Close()
+        cmd.Wait()
+    })
+
+    return &TestMCPClient{stdin: stdin, stdout: stdout, cmd: cmd}
+}
+
+func (c *TestMCPClient) Initialize(ctx context.Context) (*InitializeResult, error) {
+    // Send initialize request, read response
+}
+
+func (c *TestMCPClient) ListTools(ctx context.Context) ([]Tool, error) {
+    // Send tools/list request, read response
+}
+
+func (c *TestMCPClient) CallTool(ctx context.Context, name string, args any) (*ToolResult, error) {
+    // Send tools/call request, read response
+}
+```
+
+### Protocol Test Scenarios
+
+| Scenario | Config | Expected |
+|----------|--------|----------|
+| Empty config | No servers | Returns only manager tools |
+| Single server | One fake server | Returns aggregated tools: `fake.tool1`, `fake.tool2`, `mcp-studio.*` |
+| Multiple servers | Two fake servers | Returns tools from both with proper namespacing |
+| Server not running | Server configured, not started | `tools/call` lazy-starts server |
+| Server crash | Server crashes during call | Returns structured MCP error |
+| Invalid tool | Call non-existent tool | Returns `-32601 Method not found` |
+| Manager tools | Any config | `mcp-studio.servers_list` works |
+
+### Protocol Test Implementation
+
+```go
+// internal/server/protocol_test.go
+//go:build protocol
+
+func TestProtocol_Initialize(t *testing.T) {
+    configPath := createTestConfig(t, Config{
+        Servers: []ServerConfig{},
+    })
+
+    client := testutil.StartMCPStudio(t, configPath)
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    result, err := client.Initialize(ctx)
+    require.NoError(t, err)
+    assert.Equal(t, "mcp-studio", result.ServerInfo.Name)
+    assert.NotNil(t, result.Capabilities.Tools)
+}
+
+func TestProtocol_ToolsListWithManagedServer(t *testing.T) {
+    // Start a fake MCP server first
+    fakeServerPath := buildFakeServer(t)
+
+    configPath := createTestConfig(t, Config{
+        Servers: []ServerConfig{
+            {ID: "fake", Name: "Fake", Command: fakeServerPath, Eager: true},
+        },
+    })
+
+    client := testutil.StartMCPStudio(t, configPath)
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    _, err := client.Initialize(ctx)
+    require.NoError(t, err)
+
+    tools, err := client.ListTools(ctx)
+    require.NoError(t, err)
+
+    // Should have manager tools + fake server tools
+    toolNames := extractToolNames(tools)
+    assert.Contains(t, toolNames, "mcp-studio.servers_list")
+    assert.Contains(t, toolNames, "fake.read_file")  // from fake server
+}
+
+func TestProtocol_ToolCallRouting(t *testing.T) {
+    fakeServerPath := buildFakeServer(t)
+
+    configPath := createTestConfig(t, Config{
+        Servers: []ServerConfig{
+            {ID: "fake", Name: "Fake", Command: fakeServerPath},
+        },
+    })
+
+    client := testutil.StartMCPStudio(t, configPath)
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    _, err := client.Initialize(ctx)
+    require.NoError(t, err)
+
+    // Call a tool - should lazy-start the server
+    result, err := client.CallTool(ctx, "fake.read_file", map[string]any{"path": "/tmp/test"})
+    require.NoError(t, err)
+    assert.NotNil(t, result)
+}
+
+func TestProtocol_ManagerTools(t *testing.T) {
+    fakeServerPath := buildFakeServer(t)
+
+    configPath := createTestConfig(t, Config{
+        Servers: []ServerConfig{
+            {ID: "fake", Name: "Fake", Command: fakeServerPath},
+        },
+    })
+
+    client := testutil.StartMCPStudio(t, configPath)
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    _, err := client.Initialize(ctx)
+    require.NoError(t, err)
+
+    // List servers via manager tool
+    result, err := client.CallTool(ctx, "mcp-studio.servers_list", nil)
+    require.NoError(t, err)
+
+    var servers []ServerStatus
+    json.Unmarshal(result.Content, &servers)
+    assert.Len(t, servers, 1)
+    assert.Equal(t, "fake", servers[0].ID)
+}
+```
+
+---
+
 ## TUI Unit Testing
 
 ### Testing Update Logic
@@ -499,6 +695,22 @@ jobs:
           go-version: '1.22'
       - name: Integration Tests
         run: go test -tags=integration -race -v -timeout=5m ./...
+
+  protocol:
+    # Phase 1.5+: Test mcp-studio as MCP server
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build mcp-studio
+        run: go build -o mcp-studio ./cmd/mcp-studio
+      - name: Protocol Tests
+        run: go test -tags=protocol -race -v -timeout=5m ./...
 ```
 
 ### Test Timeouts
@@ -527,7 +739,7 @@ jobs:
 - [ ] Create `testdata/tools/` with sample tool definitions
 - [ ] Create `internal/mcptest/fixtures.go` with common configs
 
-### Integration Tests
+### Integration Tests (Phase 1 - MCP Client)
 - [ ] Happy path: initialize → list tools → stop
 - [ ] Timeout on initialize
 - [ ] Timeout on tools/list
@@ -536,6 +748,20 @@ jobs:
 - [ ] JSON-RPC error response
 - [ ] Empty tool list
 - [ ] Large tool list (100+)
+
+### Protocol Tests (Phase 1.5 - MCP Server)
+- [ ] Create `internal/testutil/mcpclient.go` test helper
+- [ ] Initialize handshake validates capabilities
+- [ ] tools/list returns manager tools (empty config)
+- [ ] tools/list aggregates from managed servers
+- [ ] tools/call routes to correct server
+- [ ] tools/call lazy-starts stopped server
+- [ ] tools/call handles server failure gracefully
+- [ ] Manager tool: servers_list
+- [ ] Manager tool: servers_start
+- [ ] Manager tool: servers_stop
+- [ ] Invalid tool name returns proper error
+- [ ] Timeout propagation works
 
 ### TUI Unit Tests
 - [ ] Tab switching (1/2/3 keys)

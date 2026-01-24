@@ -1,4 +1,14 @@
-# Phase 4: Proxies
+# Phase 4: HTTP Proxies (DEFERRED)
+
+> **Status: DEFERRED** - This phase is preserved for future implementation. The stdio-only approach (Phase 1.5) covers the primary use case of local Claude Code/Codex workflows. HTTP proxy adds value for web clients, remote access, and shared team servers - implement when those needs arise.
+
+## When to Revisit This Phase
+- Need to expose MCP tools to web browser clients
+- Need remote access from another machine
+- Need a shared team server with multiple concurrent clients
+- Need enterprise features (auth, audit, rate limits)
+
+---
 
 ## Objective
 Implement the HTTP proxy layer that exposes MCP servers to external clients. Support multiple transports (SSE and Streamable-HTTP), namespace binding, and dynamic port assignment.
