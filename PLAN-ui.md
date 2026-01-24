@@ -54,39 +54,97 @@ The original MCP-studio desktop app screenshots are at:
 
 ## Tab 1: Servers
 
-### Default View (List + Form Split)
+### Default View (List Only)
+
+The default view shows just the server list. Forms are accessed via keypress (`a` to add, `e` to edit).
 
 ```
 ┌─ Servers ──────────────────────────────────────────────────────────────────┐
 │                                                                            │
-│  ┌─ Add Server ─────────────┐  ┌─ Configured Servers ────────────────────┐ │
-│  │                          │  │                                         │ │
-│  │  Name: [              ]  │  │  ● obsidian            Running    ⚙ ▶ ✕ │ │
-│  │  Type: [MCP STDIO     ▼] │  │    mcp-obsidian                         │ │
-│  │                          │  │                                         │ │
-│  │  Command:                │  │  ○ chrome-dev-tools    Stopped    ⚙ ▶ ✕ │ │
-│  │  [                    ]  │  │    chrome-devtools-mcp                  │ │
-│  │                          │  │                                         │ │
-│  │  Arguments:              │  │  ● context7            Running    ⚙ ▶ ✕ │ │
-│  │  [                    ]  │  │    context7-mcp                         │ │
-│  │                          │  │                                         │ │
-│  │  Working Dir:            │  │  ✖ clippy              Error      ⚙ ▶ ✕ │ │
-│  │  [                    ]  │  │    Exit code: 1                         │ │
-│  │                          │  │                                         │ │
-│  │  Env Variables:          │  │                                         │ │
-│  │  [                    ]  │  │                                         │ │
-│  │                          │  │                                         │ │
-│  │  [  Save Configuration ] │  │                                         │ │
-│  │                          │  │                                         │ │
-│  └──────────────────────────┘  └─────────────────────────────────────────┘ │
+│  ● obsidian              Running     npx -y @anthropic/mcp-obsidian        │
+│    12 tools              2h 15m      /Users/me/notes                       │
 │                                                                            │
-│  ┌─ Process Logs ──────────────────────────────────────────────────────┐   │
-│  │ [obsidian] 10:42:15 MCP server started on stdio                     │   │
-│  │ [obsidian] 10:42:15 Registered 12 tools                             │   │
-│  │ [context7] 10:42:18 Connected to context7 API                       │   │
-│  │ [clippy] 10:42:20 Error: ENOENT: command not found                  │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
+│  ○ chrome-dev-tools      Stopped     npx -y @anthropic/chrome-devtools     │
+│    27 tools              —           ~/                                    │
 │                                                                            │
+│  ● context7              Running     npx -y context7-mcp                   │
+│    8 tools               45m         ~/projects                            │
+│                                                                            │
+│  ✖ clippy                Error       clippy-mcp                            │
+│    — tools               Exit: 1     ENOENT: command not found             │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+├────────────────────────────────────────────────────────────────────────────┤
+│  [a]dd  [e]dit  [d]elete  [s]tart  [x]stop  [r]estart  [l]ogs  [?]help    │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Add/Edit Server Form (Modal - `a` or `e` key)
+
+Opens as a centered modal overlay:
+
+```
+┌─ Add Server ───────────────────────────────────────────────────────────────┐
+│                                                                            │
+│  Name                                                                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ obsidian                                                             │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  Type                                                                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ MCP STDIO                                                        ▼   │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  Command                                                                   │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ npx -y @anthropic/mcp-obsidian                                       │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  Arguments                                                                 │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                                                                      │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  Working Directory                                                         │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ /Users/me/notes                                                      │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  Environment Variables                                                     │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ OBSIDIAN_VAULT=/Users/me/notes                                       │  │
+│  │                                                                      │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│                        [ Cancel ]    [ Save ]                              │
+│                                                                            │
+│  [Tab] next field    [Shift+Tab] prev    [Enter] save    [Esc] cancel     │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Server List with Logs (toggle with `l`)
+
+```
+┌─ Servers ──────────────────────────────────────────────────────────────────┐
+│                                                                            │
+│  ● obsidian              Running     npx -y @anthropic/mcp-obsidian        │
+│    12 tools              2h 15m      /Users/me/notes                       │
+│                                                                            │
+│  ○ chrome-dev-tools      Stopped     npx -y @anthropic/chrome-devtools     │
+│    27 tools              —           ~/                                    │
+│                                                                            │
+│  ● context7              Running     npx -y context7-mcp                   │
+│    8 tools               45m         ~/projects                            │
+│                                                                            │
+├─ Logs ─────────────────────────────────────────────────────────────────────┤
+│ [obsidian] 10:42:15 MCP server started on stdio                            │
+│ [obsidian] 10:42:15 Registered 12 tools                                    │
+│ [context7] 10:42:18 Connected to context7 API                              │
+│ [clippy] 10:42:20 Error: ENOENT: command not found                         │
+├────────────────────────────────────────────────────────────────────────────┤
+│  [a]dd  [e]dit  [d]elete  [s]tart  [x]stop  [l]ogs  [f]ollow  [?]help     │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -134,31 +192,60 @@ The original MCP-studio desktop app screenshots are at:
 
 ## Tab 2: Namespaces
 
-### Default View
+### Default View (List Only)
+
+The default view shows just the namespace list. Forms are accessed via keypress (`a` to add, `e` to edit).
 
 ```
 ┌─ Namespaces ───────────────────────────────────────────────────────────────┐
 │                                                                            │
-│  ┌─ Create Namespace ───────┐  ┌─ Configured Namespaces ─────────────────┐ │
-│  │                          │  │                                         │ │
-│  │  Name: [              ]  │  │  chrome                                 │ │
-│  │                          │  │    Servers: chrome-dev-tools            │ │
-│  │  Description:            │  │    Tools: 24/27 enabled        [e][d]  │ │
-│  │  [                    ]  │  │                                         │ │
-│  │                          │  │  ─────────────────────────────────────  │ │
-│  │  ─────────────────────   │  │                                         │ │
-│  │  Assign Servers:         │  │  test                                   │ │
-│  │                          │  │    Servers: obsidian, context7          │ │
-│  │  [●] obsidian     ●      │  │    Tools: 15/15 enabled        [e][d]  │ │
-│  │  [●] chrome-dev   ○      │  │                                         │ │
-│  │  [ ] context7     ●      │  │  ─────────────────────────────────────  │ │
-│  │  [ ] clippy       ✖      │  │                                         │ │
-│  │                          │  │  work                                   │ │
-│  │                          │  │    Servers: obsidian, context7, clippy  │ │
-│  │  [  Create Namespace  ]  │  │    Tools: 8/24 enabled         [e][d]  │ │
-│  │                          │  │                                         │ │
-│  └──────────────────────────┘  └─────────────────────────────────────────┘ │
+│  chrome                                                                    │
+│    Servers: chrome-dev-tools                                               │
+│    Tools: 24/27 enabled                                                    │
 │                                                                            │
+│  test                                                                      │
+│    Servers: obsidian, context7                                             │
+│    Tools: 15/15 enabled                                                    │
+│                                                                            │
+│  work                                                                      │
+│    Servers: obsidian, context7, clippy                                     │
+│    Tools: 8/24 enabled                                                     │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+├────────────────────────────────────────────────────────────────────────────┤
+│  [a]dd  [e]dit  [d]elete  [t]ools  [Enter] details  [?]help               │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Add/Edit Namespace Form (Modal - `a` or `e` key)
+
+Opens as a centered modal overlay:
+
+```
+┌─ Create Namespace ─────────────────────────────────────────────────────────┐
+│                                                                            │
+│  Name                                                                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ work                                                                 │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  Description                                                               │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ Work-related MCP servers and tools                                   │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  ─────────────────────────────────────────────────────────────────────     │
+│  Assign Servers                                                            │
+│                                                                            │
+│  [●] obsidian            ● Running      12 tools                           │
+│  [●] chrome-dev-tools    ○ Stopped      27 tools                           │
+│  [ ] context7            ● Running       8 tools                           │
+│  [ ] clippy              ✖ Error         — tools                           │
+│                                                                            │
+│                        [ Cancel ]    [ Save ]                              │
+│                                                                            │
+│  [Space] toggle server    [Enter] save    [Esc] cancel                    │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -195,31 +282,65 @@ The original MCP-studio desktop app screenshots are at:
 
 ## Tab 3: Proxies
 
-### Default View
+### Default View (List Only)
+
+The default view shows just the proxy list. Forms are accessed via keypress (`a` to add, `e` to edit).
 
 ```
 ┌─ Proxies ──────────────────────────────────────────────────────────────────┐
 │                                                                            │
-│  ┌─ Create Proxy ───────────┐  ┌─ Configured Proxies ────────────────────┐ │
-│  │                          │  │                                         │ │
-│  │  Name: [              ]  │  │  ● Wildcat                              │ │
-│  │                          │  │    http://localhost:4200/mcp/wildcat    │ │
-│  │  Path Segment:           │  │    Upstreams: 3    Tools: 29            │ │
-│  │  [                    ]  │  │    Transport: SSE              [▶][⚙]  │ │
-│  │                          │  │                                         │ │
-│  │  Host:                   │  │  ─────────────────────────────────────  │ │
-│  │  [localhost           ]  │  │                                         │ │
-│  │                          │  │  ○ BubbleCore                           │ │
-│  │  Port:                   │  │    http://localhost:4388/mcp/bubble     │ │
-│  │  [0 (auto)            ]  │  │    Upstreams: 4    Tools: 12            │ │
-│  │                          │  │    Transport: Streamable     [▶][⚙]    │ │
-│  │  Transport:              │  │                                         │ │
-│  │  [SSE              ▼]    │  │                                         │ │
-│  │                          │  │                                         │ │
-│  │  [    Create Proxy    ]  │  │                                         │ │
-│  │                          │  │                                         │ │
-│  └──────────────────────────┘  └─────────────────────────────────────────┘ │
+│  ● Wildcat                                                                 │
+│    http://localhost:4200/mcp/wildcat                                       │
+│    Namespaces: 3    Tools: 29    Transport: SSE                            │
 │                                                                            │
+│  ○ BubbleCore                                                              │
+│    http://localhost:4388/mcp/bubble                                        │
+│    Namespaces: 4    Tools: 12    Transport: Streamable                     │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+├────────────────────────────────────────────────────────────────────────────┤
+│  [a]dd  [e]dit  [d]elete  [s]tart  [x]stop  [c]opy URL  [Enter] details   │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Add/Edit Proxy Form (Modal - `a` or `e` key)
+
+Opens as a centered modal overlay:
+
+```
+┌─ Create Proxy ─────────────────────────────────────────────────────────────┐
+│                                                                            │
+│  Name                                                                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ Wildcat                                                              │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  Path Segment                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ wildcat                                                              │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  Host                                                                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ localhost                                                            │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  Port                                                                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ 0 (auto-assign)                                                      │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│  Transport                                                                 │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ SSE                                                              ▼   │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                            │
+│                        [ Cancel ]    [ Save ]                              │
+│                                                                            │
+│  [Tab] next field    [Enter] save    [Esc] cancel                         │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -260,10 +381,9 @@ The original MCP-studio desktop app screenshots are at:
 | `1` | Switch to Servers tab |
 | `2` | Switch to Namespaces tab |
 | `3` | Switch to Proxies tab |
-| `Tab` | Cycle focus between panes |
-| `Shift+Tab` | Cycle focus backwards |
-| `h` / `Ctrl+←` | Focus left pane |
-| `l` / `Ctrl+→` | Focus right pane |
+| `Tab` | Next field (in forms) / Toggle log panel focus |
+| `Shift+Tab` | Previous field (in forms) |
+| `Esc` | Close modal / Go back / Clear filter |
 | `?` | Show help overlay (context-aware) |
 | `q` | Quit application (confirm if servers running) |
 | `Ctrl+C` | Force quit (always quits, no repurposing) |
@@ -359,29 +479,41 @@ Use terminal's default colors with semantic meaning:
 
 ## Responsive Behavior
 
+### Layout Philosophy
+
+**List-first design**: Default view shows only the list. Forms/modals appear on demand via keypress.
+
+- `a` → Add form (modal overlay)
+- `e` → Edit form (modal overlay)
+- `Enter` → Detail view (replaces list, `Esc` to return)
+- `l` → Toggle log panel (bottom split)
+
 ### Narrow Terminal (< 100 cols)
 
-- **Focus Mode**: Single pane visible at a time
-- Toggle between List ↔ Details/Form with `Tab` or `h`/`l`
-- Press `a` to open form as full-screen editor
-- Truncate long names with `...`
-- Breadcrumb shows location: `Servers › obsidian › Edit`
+- List items show condensed info (name, status only)
+- Modals take full screen width with small margins
+- Detail views replace the list entirely
+- Truncate long names/paths with `...`
+- Breadcrumb shows location: `Servers › obsidian`
 
-### Wide Terminal (100-140 cols)
+### Standard Terminal (100-140 cols)
 
-- Split panel: list on right (primary), details on left
-- Form opens as overlay/modal rather than always-visible
-- Log panel toggleable at bottom
+- List items show full info (name, status, command, metadata)
+- Modals centered with comfortable margins (~80% width)
+- Log panel toggleable at bottom (when visible, list shrinks)
+- Detail views can show side-by-side info
 
-### Extra Wide Terminal (> 140 cols)
+### Wide Terminal (> 140 cols)
 
-- Three-column potential: list + details + logs
-- Show more columns in lists (timestamps, full paths)
+- List items show extended info (timestamps, full paths)
+- Detail view with logs: list + detail + logs visible simultaneously
+- Modals remain centered, don't stretch too wide (max ~100 cols)
 
 ### Minimum Size
 
 - 80 columns × 24 rows minimum
 - Show warning if terminal too small
+- Graceful degradation: hide secondary info, not functionality
 
 ---
 
