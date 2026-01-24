@@ -39,6 +39,13 @@ Config schema, domain model, single stdio server connection, minimal TUI shell.
 - Basic Bubble Tea TUI with server list
 - Single server start/stop/status
 
+### [Phase 1.1: Testing Strategy](plan1.1.md) ⬜
+Testing infrastructure and fixtures for validating Phase 1–2 work.
+- Fake MCP server (stdio) for tests/CI
+- Integration tests (start, handshake, list tools, stop, crash handling)
+- TUI unit tests (Update/View logic)
+- CI configuration (GitHub Actions, OS matrix)
+
 ### [Phase 2: Multi-Server TUI](plan2.md) ⬜
 Server list view, CRUD operations, start/stop, log streaming.
 - Server add/edit/delete forms
@@ -77,6 +84,7 @@ SSE client transport, OAuth browser flow, token storage/refresh, polish.
 | Phase | Status | Features | Notes |
 |-------|--------|----------|-------|
 | 1 - Foundation | ⬜ Not Started | 0/5 | |
+| 1.1 - Testing | ⬜ Not Started | 0/5 | Fake MCP server, integration tests |
 | 2 - Multi-Server | ⬜ Not Started | 0/6 | |
 | 3 - Namespaces | ⬜ Not Started | 0/7 | |
 | 4 - Proxies | ⬜ Not Started | 0/10 | |
