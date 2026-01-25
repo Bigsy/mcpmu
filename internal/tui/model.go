@@ -55,6 +55,7 @@ type Model struct {
 	serverList   views.ServerListModel
 	serverDetail views.ServerDetailModel
 	logPanel     views.LogPanelModel
+	helpOverlay  views.HelpOverlayModel
 
 	// Server status tracking
 	serverStatuses map[string]events.ServerStatus
@@ -87,6 +88,7 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 		serverList:     views.NewServerList(th),
 		serverDetail:   views.NewServerDetail(th),
 		logPanel:       views.NewLogPanel(th),
+		helpOverlay:    views.NewHelpOverlay(th),
 		serverStatuses: make(map[string]events.ServerStatus),
 		serverTools:    make(map[string][]events.McpTool),
 		eventCh:        make(chan events.Event, 100),
@@ -128,6 +130,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateLayout()
+		m.helpOverlay.SetSize(msg.Width, msg.Height)
 
 	case tea.KeyMsg:
 		// Always handle Ctrl+C
@@ -138,6 +141,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle confirm dialog
 		if m.showConfirm {
 			return m.handleConfirmKey(msg)
+		}
+
+		// Handle help overlay
+		if m.helpOverlay.IsVisible() {
+			if key.Matches(msg, m.keys.Help) || key.Matches(msg, m.keys.Escape) {
+				m.helpOverlay.SetVisible(false)
+				return m, nil
+			}
+			// Forward scroll keys to help overlay
+			var cmd tea.Cmd
+			m.helpOverlay, cmd = m.helpOverlay.Update(msg)
+			return m, cmd
 		}
 
 		// Handle our custom keys first
@@ -196,6 +211,10 @@ func (m *Model) handleEvent(e events.Event) {
 func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {
 	// Global keys
 	switch {
+	case key.Matches(msg, m.keys.Help):
+		m.helpOverlay.Toggle()
+		return true, m, nil
+
 	case key.Matches(msg, m.keys.Quit):
 		if m.supervisor.RunningCount() > 0 {
 			m.showConfirmQuit()
@@ -264,17 +283,23 @@ func (m *Model) handleListKey(msg tea.KeyMsg) (handled bool, model tea.Model, cm
 		}
 		return true, m, nil
 
-	case key.Matches(msg, m.keys.Start):
-		log.Printf("Start key pressed, selected item: %v", m.serverList.SelectedItem())
+	case key.Matches(msg, m.keys.Test):
+		log.Printf("Test key pressed, selected item: %v", m.serverList.SelectedItem())
 		if item := m.serverList.SelectedItem(); item != nil {
-			log.Printf("Starting server: %s", item.Config.ID)
-			go m.startServer(item.Config)
+			// Toggle: if running, stop; otherwise start
+			if item.Status.State == events.StateRunning {
+				log.Printf("Stopping server: %s", item.Config.ID)
+				go m.supervisor.Stop(item.Config.ID)
+			} else {
+				log.Printf("Starting server: %s", item.Config.ID)
+				go m.startServer(item.Config)
+			}
 		}
 		return true, m, nil
 
-	case key.Matches(msg, m.keys.Stop):
+	case key.Matches(msg, m.keys.ToggleEnabled):
 		if item := m.serverList.SelectedItem(); item != nil {
-			go m.supervisor.Stop(item.Config.ID)
+			m.toggleServerEnabled(item.Config.ID)
 		}
 		return true, m, nil
 	}
@@ -314,6 +339,27 @@ func (m *Model) startServer(srv config.ServerConfig) {
 	}
 }
 
+func (m *Model) toggleServerEnabled(id string) {
+	srv := m.cfg.GetServer(id)
+	if srv == nil {
+		return
+	}
+
+	// Toggle enabled state
+	newEnabled := !srv.IsEnabled()
+	srv.SetEnabled(newEnabled)
+	m.cfg.Servers[id] = *srv
+
+	// Save config
+	go func() {
+		if err := config.Save(m.cfg); err != nil {
+			log.Printf("Failed to save config after toggle: %v", err)
+		}
+	}()
+
+	m.refreshServerList()
+}
+
 func (m *Model) refreshServerList() {
 	servers := m.cfg.ServerList()
 	items := make([]views.ServerItem, len(servers))
@@ -339,21 +385,28 @@ func (m *Model) convertTools(mcpTools []events.McpTool) []mcp.Tool {
 }
 
 func (m *Model) updateLayout() {
-	// Calculate heights
-	headerHeight := 3  // Tab bar + border
+	// Calculate heights more carefully
+	headerHeight := 1  // Tab bar (single line)
 	statusHeight := 1  // Status bar
 	logHeight := 0
 	if m.logPanel.IsVisible() {
-		logHeight = 8 // Log panel height when visible
+		logHeight = 10 // Log panel height when visible (including border)
 	}
 
+	// Available height for main content
 	contentHeight := m.height - headerHeight - statusHeight - logHeight
+	if contentHeight < 5 {
+		contentHeight = 5 // Minimum content height
+	}
+
+	// Available width: total width minus App padding (2)
+	contentWidth := m.width - 4
 
 	// Set component sizes
-	m.serverList.SetSize(m.width-2, contentHeight)
-	m.serverDetail.SetSize(m.width-2, contentHeight)
+	m.serverList.SetSize(contentWidth, contentHeight)
+	m.serverDetail.SetSize(contentWidth, contentHeight)
 	if m.logPanel.IsVisible() {
-		m.logPanel.SetSize(m.width-2, logHeight)
+		m.logPanel.SetSize(contentWidth, logHeight)
 	}
 }
 
@@ -387,6 +440,11 @@ func (m Model) View() string {
 	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	if m.showConfirm {
 		content = m.renderConfirmOverlay(content)
+	}
+
+	// Help overlay
+	if m.helpOverlay.IsVisible() {
+		content = m.helpOverlay.RenderOverlay(content, m.width, m.height)
 	}
 
 	return m.theme.App.Render(content)
@@ -435,9 +493,9 @@ func (m Model) renderStatusBar() string {
 	// Show context-sensitive key hints
 	var keys string
 	if m.currentView == ViewList {
-		keys = "j/k:nav  s:start  x:stop  enter:details  l:logs  q:quit"
+		keys = "j/k:nav  t:test  e:enable  enter:details  l:logs  ?:help  q:quit"
 	} else {
-		keys = "esc:back  s:start  x:stop  l:logs  q:quit"
+		keys = "esc:back  t:test  l:logs  ?:help  q:quit"
 	}
 
 	padding := m.width - lipgloss.Width(left) - lipgloss.Width(keys) - 4

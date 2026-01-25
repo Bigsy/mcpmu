@@ -9,13 +9,14 @@
 - Didn't need `mark3labs/mcp-go` SDK - custom JSON-RPC client was simpler
 - Key routing needed careful handling to not block bubbles/list navigation
 
-**Remaining items for polish:**
-- [ ] Connection retry with backoff
-- [ ] Signal handling for graceful app shutdown
-- [ ] Orphan process cleanup
-- [ ] Per-server enabled/disabled toggle (persisted; config-only, not lifecycle)
-- [ ] Replace manual start/stop with a "Test" toggle (temporary start → initialize → tools/list; press again stops)
-- [ ] Help overlay (`?` key)
+**Polish items completed (2026-01-25):**
+- [x] Connection retry with backoff (3 attempts, exponential delay)
+- [x] Signal handling for graceful app shutdown (SIGINT/SIGTERM)
+- [x] Orphan process cleanup (PID tracking in ~/.config/mcp-studio/pids.json)
+- [x] Per-server enabled/disabled toggle (`e` key, persisted to config)
+- [x] Replace manual start/stop with a "Test" toggle (`t` key toggles start/stop)
+- [x] Help overlay (`?` key)
+- [x] Orange theme (user requested)
 
 ---
 
@@ -196,7 +197,7 @@ This maximizes compatibility and removes "which spec is it today?" risk.
 - [x] Wire through our `StdioTransport` framing layer
 - [x] Initialize handshake (`initialize` request/response)
 - [x] `ListTools()` method calling `tools/list`
-- [ ] Connection retry with backoff (3 attempts, exponential delay) - not implemented yet
+- [x] Connection retry with backoff (3 attempts, exponential delay)
 
 ### Process Supervisor
 - [x] **Supervisor owns `exec.Cmd` lifecycle** (spawns, stops, monitors)
@@ -205,8 +206,8 @@ This maximizes compatibility and removes "which spec is it today?" risk.
 - [x] Capture stdin/stdout pipes for MCP transport
 - [x] Capture stderr for log streaming
 - [x] Graceful process termination (SIGTERM → SIGKILL after timeout)
-- [ ] Signal handling (SIGINT, SIGTERM for app shutdown) - partial, Ctrl+C works
-- [ ] Orphan process cleanup on app crash/restart - not implemented
+- [x] Signal handling (SIGINT, SIGTERM for app shutdown)
+- [x] Orphan process cleanup on app crash/restart (PID tracking)
 - [x] Exit code/signal capture for debugging
 - [x] Returns `ServerHandle{Client, Stop(), Logs()}` to TUI
 
@@ -235,7 +236,8 @@ This maximizes compatibility and removes "which spec is it today?" risk.
 
 ### Feedback Primitives
 - [x] **Confirm dialog**: modal with Yes/No (quit-with-running only)
-- [ ] Toast, modal overlay, help overlay: deferred to Phase 2 (see PLAN-ui.md)
+- [x] **Help overlay**: full keybinding reference (`?` key)
+- [ ] Toast, modal overlay: deferred to Phase 2 (see PLAN-ui.md)
 
 ### Log Panel
 - [x] Bottom panel using `bubbles/viewport`
@@ -246,11 +248,8 @@ This maximizes compatibility and removes "which spec is it today?" risk.
 
 ### Server List & Actions (config-file-driven)
 - [x] List shows: status icon, name, command (truncated), tool count
-- [x] Start server (`s`): spawns process, connects MCP client
-- [x] Stop server (`x`): graceful shutdown
-- [ ] Remove `s`/`x` UI actions (keep stop-all-on-exit); use test toggle for lifecycle instead
-- [ ] Toggle enabled/disabled (persist to config; does not start/stop; later gates exposure in `serve --stdio`)
-- [ ] Test toggle (`t`): start+validate (init + tools/list), press again stops; allowed even if disabled
+- [x] Test toggle (`t`): start+validate (init + tools/list), press again stops
+- [x] Toggle enabled/disabled (`e`): persist to config; shows [disabled] indicator
 - [x] Detail view (`Enter`): full info + scrollable tool list
 
 ## Dependencies

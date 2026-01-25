@@ -22,20 +22,39 @@ import (
 const (
 	// GracefulShutdownTimeout is how long to wait for SIGTERM before SIGKILL.
 	GracefulShutdownTimeout = 5 * time.Second
+
+	// MaxInitRetries is the maximum number of MCP initialization attempts.
+	MaxInitRetries = 3
+
+	// InitRetryBaseDelay is the base delay between retry attempts.
+	InitRetryBaseDelay = 500 * time.Millisecond
 )
 
 // Supervisor manages MCP server process lifecycles.
 type Supervisor struct {
-	bus     *events.Bus
-	handles map[string]*Handle
-	mu      sync.RWMutex
+	bus        *events.Bus
+	handles    map[string]*Handle
+	pidTracker *PIDTracker
+	mu         sync.RWMutex
 }
 
 // NewSupervisor creates a new process supervisor.
+// It also cleans up any orphan processes from previous runs.
 func NewSupervisor(bus *events.Bus) *Supervisor {
+	pidTracker, err := NewPIDTracker()
+	if err != nil {
+		log.Printf("Warning: failed to create PID tracker: %v", err)
+	} else {
+		// Clean up orphans on startup
+		if killed := pidTracker.CleanupOrphans(); killed > 0 {
+			log.Printf("Cleaned up %d orphan process(es)", killed)
+		}
+	}
+
 	return &Supervisor{
-		bus:     bus,
-		handles: make(map[string]*Handle),
+		bus:        bus,
+		handles:    make(map[string]*Handle),
+		pidTracker: pidTracker,
 	}
 }
 
@@ -90,6 +109,13 @@ func (s *Supervisor) Start(ctx context.Context, srv config.ServerConfig) (*Handl
 		return nil, fmt.Errorf("start process: %w", err)
 	}
 
+	// Track PID for orphan cleanup
+	if s.pidTracker != nil {
+		if err := s.pidTracker.Add(srv.ID, cmd.Process.Pid); err != nil {
+			log.Printf("Warning: failed to track PID: %v", err)
+		}
+	}
+
 	// Create transport and client
 	transport := mcp.NewStdioTransport(stdin, stdout)
 	client := mcp.NewClient(transport)
@@ -114,18 +140,37 @@ func (s *Supervisor) Start(ctx context.Context, srv config.ServerConfig) (*Handl
 	// Start process watcher goroutine
 	go handle.watchProcess()
 
-	// Initialize MCP connection
-	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	// Initialize MCP connection with retry and exponential backoff
+	var initErr error
+	for attempt := 1; attempt <= MaxInitRetries; attempt++ {
+		initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		initErr = client.Initialize(initCtx)
+		cancel()
 
-	if err := client.Initialize(initCtx); err != nil {
+		if initErr == nil {
+			break
+		}
+
+		log.Printf("MCP init attempt %d/%d failed: %v", attempt, MaxInitRetries, initErr)
+
+		if attempt < MaxInitRetries {
+			// Exponential backoff: 500ms, 1s, 2s...
+			delay := InitRetryBaseDelay * time.Duration(1<<(attempt-1))
+			log.Printf("Retrying in %v", delay)
+			time.Sleep(delay)
+		}
+	}
+
+	if initErr != nil {
 		handle.Stop()
-		s.emitStatus(srv.ID, events.StateError, cmd.Process.Pid, nil, fmt.Sprintf("MCP init failed: %v", err))
-		return nil, fmt.Errorf("initialize mcp: %w", err)
+		s.emitStatus(srv.ID, events.StateError, cmd.Process.Pid, nil, fmt.Sprintf("MCP init failed after %d attempts: %v", MaxInitRetries, initErr))
+		return nil, fmt.Errorf("initialize mcp: %w", initErr)
 	}
 
 	// Discover tools
-	tools, err := client.ListTools(initCtx)
+	toolsCtx, toolsCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer toolsCancel()
+	tools, err := client.ListTools(toolsCtx)
 	if err != nil {
 		// Non-fatal - server is still running
 		s.bus.Publish(events.NewErrorEvent(srv.ID, err, "Failed to list tools"))
@@ -157,7 +202,16 @@ func (s *Supervisor) Stop(id string) error {
 		return fmt.Errorf("server %s not found", id)
 	}
 
-	return handle.Stop()
+	err := handle.Stop()
+
+	// Remove PID tracking after stop
+	if s.pidTracker != nil {
+		if removeErr := s.pidTracker.Remove(id); removeErr != nil {
+			log.Printf("Warning: failed to remove PID tracking: %v", removeErr)
+		}
+	}
+
+	return err
 }
 
 // Get returns the handle for a server, or nil if not running.

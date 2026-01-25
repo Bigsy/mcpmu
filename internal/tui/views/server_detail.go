@@ -47,8 +47,16 @@ func (m *ServerDetailModel) SetServer(srv *config.ServerConfig, status *events.S
 func (m *ServerDetailModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	m.viewport.Width = width - 4  // Account for borders and padding
-	m.viewport.Height = height - 4
+	// Viewport gets: width minus borders (2) minus padding (2) = width - 4
+	// Height: height minus borders (2) = height - 2
+	m.viewport.Width = width - 4
+	m.viewport.Height = height - 2
+	if m.viewport.Width < 10 {
+		m.viewport.Width = 10
+	}
+	if m.viewport.Height < 1 {
+		m.viewport.Height = 1
+	}
 	m.updateContent()
 }
 
@@ -196,7 +204,8 @@ func (m ServerDetailModel) View() string {
 		style = m.theme.PaneFocused
 	}
 
-	return style.Width(m.width).Height(m.height).Render(m.viewport.View())
+	// Width is content width; borders are outside this
+	return style.Width(m.width - 2).Render(m.viewport.View())
 }
 
 func formatDuration(d time.Duration) string {

@@ -43,11 +43,11 @@ type Theme struct {
 	ToastErr  lipgloss.Style
 }
 
-// New creates the default theme.
+// New creates the default theme (orange accent).
 func New() Theme {
-	primary := lipgloss.AdaptiveColor{Light: "#0B5FFF", Dark: "#7AA2F7"}
+	primary := lipgloss.AdaptiveColor{Light: "#EA580C", Dark: "#FB923C"} // Orange
 	success := lipgloss.AdaptiveColor{Light: "#0F7B0F", Dark: "#9ECE6A"}
-	warn := lipgloss.AdaptiveColor{Light: "#8A5A00", Dark: "#E0AF68"}
+	warn := lipgloss.AdaptiveColor{Light: "#B45309", Dark: "#FBBF24"}
 	danger := lipgloss.AdaptiveColor{Light: "#B00020", Dark: "#F7768E"}
 	border := lipgloss.AdaptiveColor{Light: "#D0D7DE", Dark: "#3B4261"}
 	muted := lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#A9B1D6"}
@@ -94,7 +94,7 @@ func New() Theme {
 			Padding(0, 1).
 			Foreground(muted),
 
-		ToastInfo: lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#2563EB")),
+		ToastInfo: lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#EA580C")),
 		ToastWarn: lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#111827")).Background(lipgloss.Color("#F59E0B")),
 		ToastErr:  lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#DC2626")),
 	}

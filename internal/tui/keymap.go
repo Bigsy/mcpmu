@@ -35,14 +35,14 @@ type KeyBindings struct {
 	Enter  key.Binding
 
 	// Server actions
-	Start    key.Binding
-	Stop     key.Binding
-	Restart  key.Binding
-	Add      key.Binding
-	Edit     key.Binding
-	Delete   key.Binding
-	ToggleLogs key.Binding
-	FollowLogs key.Binding
+	Test          key.Binding // Toggle start/stop for testing
+	Restart       key.Binding
+	Add           key.Binding
+	Edit          key.Binding
+	Delete        key.Binding
+	ToggleLogs    key.Binding
+	FollowLogs    key.Binding
+	ToggleEnabled key.Binding
 
 	// Confirm dialog
 	Yes key.Binding
@@ -105,13 +105,9 @@ func NewKeyBindings() KeyBindings {
 		),
 
 		// Server actions
-		Start: key.NewBinding(
-			key.WithKeys("s"),
-			key.WithHelp("s", "start"),
-		),
-		Stop: key.NewBinding(
-			key.WithKeys("x"),
-			key.WithHelp("x", "stop"),
+		Test: key.NewBinding(
+			key.WithKeys("t"),
+			key.WithHelp("t", "test toggle"),
 		),
 		Restart: key.NewBinding(
 			key.WithKeys("r"),
@@ -137,6 +133,10 @@ func NewKeyBindings() KeyBindings {
 			key.WithKeys("f"),
 			key.WithHelp("f", "follow"),
 		),
+		ToggleEnabled: key.NewBinding(
+			key.WithKeys("e"),
+			key.WithHelp("e", "toggle enabled"),
+		),
 
 		// Confirm dialog
 		Yes: key.NewBinding(
@@ -152,14 +152,14 @@ func NewKeyBindings() KeyBindings {
 
 // ShortHelp returns keybindings for the short help view.
 func (k KeyBindings) ShortHelp() []key.Binding {
-	return []key.Binding{k.Start, k.Stop, k.ToggleLogs, k.Help, k.Quit}
+	return []key.Binding{k.Test, k.ToggleEnabled, k.ToggleLogs, k.Help, k.Quit}
 }
 
 // FullHelp returns keybindings for the full help view.
 func (k KeyBindings) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Top, k.Bottom, k.Enter, k.Escape},
-		{k.Start, k.Stop, k.Restart, k.Add, k.Edit, k.Delete},
+		{k.Test, k.ToggleEnabled, k.Restart, k.Add, k.Edit, k.Delete},
 		{k.ToggleLogs, k.FollowLogs, k.Tab1, k.Tab2, k.Tab3},
 		{k.Help, k.Quit, k.CtrlC},
 	}

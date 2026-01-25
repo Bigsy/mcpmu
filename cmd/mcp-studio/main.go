@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hedworth/mcp-studio-go/internal/config"
@@ -67,14 +69,30 @@ func main() {
 	// Create TUI model
 	model := tui.NewModel(cfg, supervisor, bus)
 
+	// Set up signal handling for graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 	// Run Bubble Tea program
 	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	// Handle signals in background
+	go func() {
+		sig := <-sigCh
+		log.Printf("Received signal %v, initiating graceful shutdown", sig)
+		p.Quit()
+	}()
+
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running program: %v\n", err)
 		os.Exit(1)
 	}
 
+	// Stop signal handling
+	signal.Stop(sigCh)
+
 	// Ensure all servers are stopped
+	log.Println("Stopping all servers...")
 	supervisor.StopAll()
 
 	// Save config

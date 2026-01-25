@@ -44,8 +44,16 @@ func NewLogPanel(theme theme.Theme) LogPanelModel {
 func (m *LogPanelModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	m.viewport.Width = width - 4  // Account for borders and padding
-	m.viewport.Height = height - 2
+	// Viewport gets: width minus borders (2) minus padding (2) = width - 4
+	// Height: height minus borders (2) minus header line (1) = height - 3
+	m.viewport.Width = width - 4
+	m.viewport.Height = height - 3
+	if m.viewport.Width < 10 {
+		m.viewport.Width = 10
+	}
+	if m.viewport.Height < 1 {
+		m.viewport.Height = 1
+	}
 	m.updateContent()
 }
 
@@ -184,5 +192,6 @@ func (m LogPanelModel) View() string {
 	header := m.theme.Title.Render(title) + "\n"
 	content := header + m.viewport.View()
 
-	return style.Width(m.width).Height(m.height).Render(content)
+	// Width is content width; borders are outside this
+	return style.Width(m.width - 2).Render(content)
 }

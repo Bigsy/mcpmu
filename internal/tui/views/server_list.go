@@ -61,7 +61,17 @@ func (m *ServerListModel) SetItems(items []ServerItem) {
 func (m *ServerListModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	m.list.SetSize(width-2, height-2) // Account for borders
+	// List gets: width minus borders (2) minus padding (2) = width - 4
+	// Height: height minus borders (2) = height - 2
+	listWidth := width - 4
+	listHeight := height - 2
+	if listWidth < 10 {
+		listWidth = 10
+	}
+	if listHeight < 3 {
+		listHeight = 3
+	}
+	m.list.SetSize(listWidth, listHeight)
 }
 
 // SetFocused sets whether the list is focused.
@@ -102,7 +112,8 @@ func (m ServerListModel) View() string {
 	if m.focused {
 		style = m.theme.PaneFocused
 	}
-	return style.Width(m.width).Height(m.height).Render(m.list.View())
+	// Width is content width; borders are outside this
+	return style.Width(m.width - 2).Render(m.list.View())
 }
 
 // serverDelegate is a custom delegate for rendering server items.
@@ -125,6 +136,7 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	}
 
 	selected := index == m.Index()
+	enabled := si.Config.IsEnabled()
 
 	// First line: icon, name, status pill
 	var line1 strings.Builder
@@ -136,11 +148,18 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	)
 
 	name := si.Config.Name
-	if selected {
+	if !enabled {
+		// Dim disabled servers
+		name = d.theme.Faint.Render(name)
+	} else if selected {
 		name = d.theme.ItemSelected.Render(name)
-		line1.WriteString("> ")
 	} else {
 		name = d.theme.Item.Render(name)
+	}
+
+	if selected {
+		line1.WriteString("> ")
+	} else {
 		line1.WriteString("  ")
 	}
 
@@ -148,10 +167,15 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	line1.WriteString(" ")
 	line1.WriteString(name)
 
-	// Status pill
-	statePill := d.theme.StatusPill(si.Status.State.String())
-	line1.WriteString("  ")
-	line1.WriteString(statePill)
+	// Status pill or disabled indicator
+	if !enabled {
+		line1.WriteString("  ")
+		line1.WriteString(d.theme.Faint.Render("[disabled]"))
+	} else {
+		statePill := d.theme.StatusPill(si.Status.State.String())
+		line1.WriteString("  ")
+		line1.WriteString(statePill)
+	}
 
 	// Second line: command (truncated), tool count
 	var line2 strings.Builder

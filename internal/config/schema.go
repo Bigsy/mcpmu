@@ -23,6 +23,7 @@ type ServerConfig struct {
 	ID      string            `json:"id"`
 	Name    string            `json:"name"`
 	Kind    ServerKind        `json:"kind"`
+	Enabled *bool             `json:"enabled,omitempty"` // nil treated as true (enabled by default)
 	Command string            `json:"command,omitempty"` // stdio only
 	Args    []string          `json:"args,omitempty"`    // stdio only
 	Cwd     string            `json:"cwd,omitempty"`
@@ -88,6 +89,16 @@ func NewConfig() *Config {
 		Proxies:       []ProxyConfig{},
 		LastModified:  time.Now(),
 	}
+}
+
+// IsEnabled returns whether the server is enabled (nil defaults to true).
+func (s ServerConfig) IsEnabled() bool {
+	return s.Enabled == nil || *s.Enabled
+}
+
+// SetEnabled sets the enabled state.
+func (s *ServerConfig) SetEnabled(enabled bool) {
+	s.Enabled = &enabled
 }
 
 // ServerList returns the servers as a slice, sorted by name for display.
