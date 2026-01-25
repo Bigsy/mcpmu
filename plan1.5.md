@@ -70,7 +70,7 @@ Note: `tools/list` triggers tool discovery and may start servers as needed (stil
 
 ### 5. Output Discipline
 **Decision**: Strict stdout/stderr separation.
-- **stdout**: MCP JSON-RPC protocol only (Content-Length framed)
+- **stdout**: MCP JSON-RPC protocol only (NDJSON framed - newline-delimited JSON)
 - **stderr**: All logs, debug output, progress messages
 - Never mix - any stdout pollution breaks the protocol
 - Log level configurable via `--log-level` flag or env var
@@ -113,8 +113,7 @@ mcp-studio.namespaces_list   # List namespaces and show the active namespace
 - [ ] Ensure Cobra never writes help/usage to stdout in `--stdio` mode (stdout is protocol-only)
 
 ### MCP Server Protocol (stdio)
-- [ ] Content-Length framed JSON-RPC on stdout
-- [ ] Accept both Content-Length and NDJSON on stdin (liberal reader)
+- [ ] NDJSON framed JSON-RPC on stdin/stdout (newline-delimited JSON, matching `internal/mcp/framing.go`)
 - [ ] `initialize` request/response with capabilities
 - [ ] `initialized` notification handling
 - [ ] `tools/list` returns aggregated tools from servers in the active namespace (or all servers if no namespaces configured)
@@ -200,7 +199,9 @@ This phase establishes the **primary testing infrastructure** for the project.
 - [ ] Test graceful handling of malformed input
 
 ### Integration Tests (with fake servers)
-- [ ] Create minimal fake MCP server (Go test binary or in-process)
+- [x] Fake MCP server infrastructure exists in `internal/mcptest/fakeserver/` (Phase 1.1)
+- [x] Test helper process pattern in `internal/mcptest/helper.go` (Phase 1.1)
+- [x] Configurable fixtures in `internal/mcptest/fixtures.go` (Phase 1.1)
 - [ ] Test tool discovery from fake server
 - [ ] Test tool call forwarding
 - [ ] Test lazy server start
@@ -215,9 +216,10 @@ This phase establishes the **primary testing infrastructure** for the project.
 - [ ] Test with real MCP servers (filesystem, GitHub, etc.)
 
 ### Test Fixtures
-- [ ] Sample config files for tests
-- [ ] Fake MCP server binary (minimal, for integration tests)
-- [ ] MCP request/response fixtures (JSON files)
+- [x] Fake MCP server via re-exec pattern (no separate binary needed) - `internal/mcptest/`
+- [x] Programmatic fixture generation via `internal/mcptest/fixtures.go` (no JSON files needed)
+- [x] Test home isolation via `internal/testutil/home.go`
+- [ ] Sample config files for tests (`testdata/configs/`)
 
 ---
 
@@ -249,7 +251,8 @@ Available tools:
 
 ## Dependencies
 - Phase 1: Config schema, MCP client, process supervisor, event bus
-- Reuses: `StdioTransport` (framing layer), `McpClient` interface, `Supervisor`
+- Phase 1.1: Fake MCP server infrastructure (`internal/mcptest/`), test utilities (`internal/testutil/`)
+- Reuses: `StdioTransport` (NDJSON framing), `Client` interface, `Supervisor`
 
 ## Unknowns / Questions
 1. **Tool Refresh**: When should we re-fetch tools from managed servers? On reconnect? Periodically? On-demand via manager tool?
@@ -290,10 +293,16 @@ internal/
   protocol/
     messages.go       # MCP message types (request, response, notification)
     capabilities.go   # Server capabilities declaration
+
+# Already exists (Phase 1.1):
+internal/
+  mcptest/            # Fake MCP server infrastructure
+    fakeserver/       # Server implementation
+    helper.go         # StartFakeServer, RunHelperProcess
+    fixtures.go       # DefaultConfig, SlowInitConfig, etc.
   testutil/
-    fake_server.go    # Fake MCP server for testing
-    mcp_client.go     # Test MCP client (for protocol tests)
-    fixtures/         # JSON test fixtures
+    home.go           # SetupTestHome for $HOME isolation
+    events.go         # EventCollector for test assertions
 ```
 
 ## Estimated Complexity
@@ -316,11 +325,10 @@ internal/
 
 ### What This Defers
 - TUI (Phase 2) - optional management interface
-- Namespace filtering and permissions (Phase 3) - Phase 1.5 exposes all configured servers, no filtering
+- Permission enforcement within namespaces (Phase 3) - Phase 1.5 implements namespace selection but not per-tool permissions
 - HTTP proxy serving (Phase 4) - **DEFERRED**, add only if web/remote/team needs arise
 - SSE client transport (Phase 5) - for connecting TO remote MCP servers
 
 ### Future Enhancements (Post-Phase 1.5)
-- Namespace-aware tool filtering in stdio mode
-- Permission enforcement in stdio mode
+- Permission enforcement in stdio mode (Phase 3)
 - HTTP server mode (`--http`) for web clients (Phase 4, if needed)

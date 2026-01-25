@@ -111,7 +111,7 @@ func (s *Supervisor) Start(ctx context.Context, srv config.ServerConfig) (*Handl
 
 	// Track PID for orphan cleanup
 	if s.pidTracker != nil {
-		if err := s.pidTracker.Add(srv.ID, cmd.Process.Pid); err != nil {
+		if err := s.pidTracker.Add(srv.ID, cmd.Process.Pid, srv.Command, srv.Args); err != nil {
 			log.Printf("Warning: failed to track PID: %v", err)
 		}
 	}
@@ -382,8 +382,20 @@ func (h *Handle) Uptime() time.Duration {
 // IsRunning returns true if the process is still running.
 func (h *Handle) IsRunning() bool {
 	h.stopMu.Lock()
-	defer h.stopMu.Unlock()
-	return !h.stopped && h.cmd.ProcessState == nil
+	stopped := h.stopped
+	h.stopMu.Unlock()
+
+	if stopped {
+		return false
+	}
+
+	// Check if done channel is closed (non-blocking)
+	select {
+	case <-h.done:
+		return false
+	default:
+		return true
+	}
 }
 
 // Stop gracefully stops the server process.

@@ -167,14 +167,13 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	line1.WriteString(" ")
 	line1.WriteString(name)
 
-	// Status pill or disabled indicator
+	// Status pill - always show runtime state, add disabled indicator if applicable
+	statePill := d.theme.StatusPill(si.Status.State.String())
+	line1.WriteString("  ")
+	line1.WriteString(statePill)
 	if !enabled {
-		line1.WriteString("  ")
+		line1.WriteString(" ")
 		line1.WriteString(d.theme.Faint.Render("[disabled]"))
-	} else {
-		statePill := d.theme.StatusPill(si.Status.State.String())
-		line1.WriteString("  ")
-		line1.WriteString(statePill)
 	}
 
 	// Second line: command (truncated), tool count

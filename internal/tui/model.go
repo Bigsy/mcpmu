@@ -350,12 +350,10 @@ func (m *Model) toggleServerEnabled(id string) {
 	srv.SetEnabled(newEnabled)
 	m.cfg.Servers[id] = *srv
 
-	// Save config
-	go func() {
-		if err := config.Save(m.cfg); err != nil {
-			log.Printf("Failed to save config after toggle: %v", err)
-		}
-	}()
+	// Save config synchronously (fast operation, avoids race conditions)
+	if err := config.Save(m.cfg); err != nil {
+		log.Printf("Failed to save config after toggle: %v", err)
+	}
 
 	m.refreshServerList()
 }

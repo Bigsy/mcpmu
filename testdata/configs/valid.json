@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "servers": {
+    "test-server": {
+      "id": "test-server",
+      "name": "Test Server",
+      "kind": "stdio",
+      "command": "echo",
+      "args": ["hello"]
+    },
+    "disabled-server": {
+      "id": "disabled-server",
+      "name": "Disabled Server",
+      "kind": "stdio",
+      "enabled": false,
+      "command": "echo",
+      "args": ["disabled"]
+    }
+  },
+  "namespaces": [],
+  "proxies": [],
+  "lastModified": "2024-01-01T00:00:00Z"
+}
