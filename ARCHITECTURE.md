@@ -61,9 +61,21 @@ Claude Code/Codex spawns mcp-studio as a subprocess. No daemons, no manual start
 }
 ```
 
+### Config Compatibility (mcpServers-style)
+
+The mcp-studio config is designed so server entries remain compatible with the common `mcpServers` object shape used by MCP clients. In practice that means the server config uses the familiar field names:
+- `command`
+- `args`
+- `cwd`
+- `env`
+
+This keeps manual editing easy (copy/paste a server definition from a client config into mcp-studio, then add the namespace assignments/permissions as needed).
+
 ### Multiple Toolsets (Namespaces) for Different Contexts
 
 The stdio server exposes a *single toolset* per process, selected by namespace at startup. Configure multiple MCP entries that run the same binary with different `--namespace` values.
+
+If multiple namespaces exist and none is selected (and no default is set), mcp-studio fails `initialize` with an actionable error rather than accidentally exposing all tools.
 
 ```json
 // Work context
@@ -108,7 +120,10 @@ github.list_repos
 mcp-studio.servers_list    # Manager tools
 mcp-studio.servers_start
 mcp-studio.servers_stop
+mcp-studio.namespaces_list
 ```
+
+`serverId` is a stable internal identifier (auto-generated short `[a-z0-9]`, no `.`), not the human display name.
 
 ## Phase Overview
 
@@ -136,7 +151,7 @@ The core is designed to be transport-agnostic, so HTTP can be added later withou
 
 ## Key Design Principles
 
-1. **Non-blocking initialize**: Return immediately, start managed servers in background
+1. **Non-blocking initialize**: Return immediately; optionally start `eager` servers in background (otherwise start on-demand)
 2. **Lazy server start**: Servers start on first tool call (configurable)
 3. **Graceful degradation**: If one server fails, others still work
 4. **Strict output discipline**: stdout = MCP protocol only, stderr = logs

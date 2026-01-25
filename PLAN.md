@@ -36,8 +36,9 @@ A TUI-based MCP (Model Context Protocol) server manager. Rewrite of [MCP-studio]
 Config schema, domain model, single stdio server connection, minimal TUI shell.
 - Config persistence with atomic writes
 - MCP client for stdio transport
-- Basic Bubble Tea TUI with server list
-- Single server start/stop/status
+- Basic Bubble Tea TUI shell (config-file-driven)
+- Start/stop a server, list tools, view stderr logs (log panel)
+- No in-TUI CRUD forms yet (Phase 2)
 
 ### [Phase 1.1: Testing Strategy](plan1.1.md) ⬜
 Testing infrastructure and fixtures for validating Phase 1–2 work.

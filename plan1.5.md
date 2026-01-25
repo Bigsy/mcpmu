@@ -22,17 +22,23 @@ mcp-studio status          # Quick CLI status check
 - HTTP mode (`--http`) can be added later if needed (Phase 4, deferred)
 
 ### 2. Namespace Selection (Toolset Selection)
-**Decision**: stdio mode exposes exactly one namespace (toolset) per process.
+**Decision**: stdio mode exposes exactly one toolset per process, selected by namespace at startup.
+
+Selection rules:
+- If `--namespace <id>` is provided: use it (error if unknown)
+- Else if `config.defaultNamespaceId` is set: use it (error if unknown)
+- Else if there is exactly 1 namespace configured: use it
+- Else if there are 0 namespaces configured: expose all servers (backward compatible)
+- Else (2+ namespaces, none selected): fail `initialize` with an actionable error
+
+Phase interaction:
+- Phase 1.5 implements selection + filtering by server membership
+- Phase 3 adds tool permission enforcement within the active namespace
 
 Rationale:
-- Stdio MCP servers are naturally single-tenant per spawned process (per client entry).
-- “Work vs personal” (different toolsets) maps cleanly to “different MCP server entries” that differ only by `--namespace`.
-
-Rules:
-- `serve --namespace <id>` selects the active namespace.
-- If `--namespace` is omitted, use `config.defaultNamespaceId` if set; otherwise return an error on `initialize` explaining how to set it.
-- Only servers assigned to the active namespace contribute tools (plus manager tools).
-- Tool permissions are evaluated within the active namespace only.
+- Stdio MCP servers are naturally single-tenant per spawned process
+- "Work vs personal" maps to different MCP server entries with different `--namespace` values
+- This avoids accidentally exposing “all tools” when multiple toolsets exist
 
 ### 3. Tool Namespacing Strategy
 **Decision**: Aggregated tools with `serverId.toolName` format.
@@ -47,12 +53,20 @@ github.list_repos
 - Collision-free: server ID guarantees uniqueness
 - Human-readable: easy to understand tool provenance
 
+**Server ID constraints:**
+- `serverId` is a stable internal identifier, not the display name
+- Auto-generate a short 4-char `[a-z0-9]` id by default; regenerate on collision
+- Disallow `.` in `serverId` (tool name parsing safety)
+
 ### 4. Lazy Server Start
 **Decision**: Servers start on first tool call, not on mcp-studio init.
 - Faster startup: mcp-studio initializes instantly
 - Resource efficient: only running servers that are actually used
 - Config flag `eager: true` available for servers that should pre-start
 - Failed lazy-start returns MCP error to client (doesn't crash mcp-studio)
+Note: `tools/list` triggers tool discovery and may start servers as needed (still not on `initialize`).
+- Use bounded concurrency (e.g. 4 servers at a time) and per-server timeouts (e.g. 3–5s) so the client sees tools quickly
+- Cache discovered tools in-memory for the stdio session; refresh on reconnect/restart
 
 ### 5. Output Discipline
 **Decision**: Strict stdout/stderr separation.
@@ -64,7 +78,7 @@ github.list_repos
 ### 6. Graceful Degradation
 **Decision**: Partial failures don't break the whole server.
 - If one managed server fails to start, others still work
-- `tools/list` returns tools from healthy servers only
+- `tools/list` returns tools from healthy servers only (within the active namespace/toolset)
 - `tools/call` to failed server returns structured MCP error
 - Status of all servers available via manager tools
 
@@ -91,17 +105,19 @@ mcp-studio.namespaces_list   # List namespaces and show the active namespace
 - [ ] `--stdio` flag for stdio transport (default for `serve`)
 - [ ] `--config` flag to specify config file path
 - [ ] `--namespace` flag to select active namespace/toolset
+- [ ] Server entries in config remain **`mcpServers`-compatible** (`command`, `args`, `cwd`, `env`) so users can edit manually or copy/paste from MCP client configs
 - [ ] `--log-level` flag (debug, info, warn, error)
 - [ ] `--eager` flag to pre-start all servers on init
 - [ ] Version flag (`--version`)
 - [ ] Clean shutdown on SIGINT/SIGTERM
+- [ ] Ensure Cobra never writes help/usage to stdout in `--stdio` mode (stdout is protocol-only)
 
 ### MCP Server Protocol (stdio)
 - [ ] Content-Length framed JSON-RPC on stdout
 - [ ] Accept both Content-Length and NDJSON on stdin (liberal reader)
 - [ ] `initialize` request/response with capabilities
 - [ ] `initialized` notification handling
-- [ ] `tools/list` returns aggregated tools from all managed servers
+- [ ] `tools/list` returns aggregated tools from servers in the active namespace (or all servers if no namespaces configured)
 - [ ] `tools/call` routes to correct upstream server
 - [ ] `ping` for keepalive
 - [ ] Proper error responses (JSON-RPC error codes)
@@ -300,7 +316,7 @@ internal/
 
 ### What This Defers
 - TUI (Phase 2) - optional management interface
-- Namespaces and permissions (Phase 3) - stdio mode exposes all tools initially
+- Namespace filtering and permissions (Phase 3) - Phase 1.5 exposes all configured servers, no filtering
 - HTTP proxy serving (Phase 4) - **DEFERRED**, add only if web/remote/team needs arise
 - SSE client transport (Phase 5) - for connecting TO remote MCP servers
 

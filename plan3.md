@@ -8,7 +8,7 @@ Implement namespace management for grouping servers and controlling tool permiss
 ### Active Namespace Selection (stdio mode)
 - [ ] Config: `defaultNamespaceId` (optional, but recommended)
 - [ ] `mcp-studio serve --namespace <id>` selects the active namespace/toolset
-- [ ] If `--namespace` omitted: use `defaultNamespaceId` if present; otherwise fail `initialize` with actionable error
+- [ ] If `--namespace` omitted: use `defaultNamespaceId` if present; else auto-select if exactly 1 namespace; else expose all servers if 0 namespaces; else fail `initialize` with actionable error
 - [ ] Only servers assigned to the active namespace contribute tools in stdio mode
 - [ ] Tool permission evaluation uses the active namespace only
 

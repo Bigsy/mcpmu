@@ -1,9 +1,47 @@
 # Phase 1: Foundation
 
-## Objective
-Establish the core infrastructure: config schema, domain model, single stdio server connection, and minimal TUI shell. This phase delivers a working proof-of-concept that can connect to one MCP server and list its tools.
+## Implementation Status: ✅ COMPLETE (2026-01-25)
+
+**Summary**: Phase 1 core functionality is working. Servers can be started/stopped, tools are discovered, logs are captured.
+
+**Key learnings during implementation:**
+- MCP stdio uses NDJSON framing (not Content-Length as originally planned)
+- Didn't need `mark3labs/mcp-go` SDK - custom JSON-RPC client was simpler
+- Key routing needed careful handling to not block bubbles/list navigation
+
+**Remaining items for polish:**
+- [ ] Connection retry with backoff
+- [ ] Signal handling for graceful app shutdown
+- [ ] Orphan process cleanup
+- [ ] Per-server enabled/disabled toggle (persisted; config-only, not lifecycle)
+- [ ] Replace manual start/stop with a "Test" toggle (temporary start → initialize → tools/list; press again stops)
+- [ ] Help overlay (`?` key)
 
 ---
+
+## Objective
+Establish the core infrastructure (config schema, domain model, process supervisor, stdio MCP client, event bus) and a minimal TUI shell that can:
+- Load servers from config (manual editing in this phase)
+- Start/stop a server
+- Show a server’s tools (after connect)
+- Tail stderr logs in a toggleable log panel
+
+---
+
+## Phase 1 Scope (to keep momentum)
+
+**In scope**
+- Read/validate config; optional save helpers (no in-TUI editing)
+- Process lifecycle + stderr log capture
+- MCP stdio client + `tools/list`
+- Minimal Bubble Tea app shell (Servers tab only) with list → detail navigation
+- Log panel (`l`) + follow mode (`f`)
+- Minimal “quit with running servers” confirm
+
+**Out of scope (defer to Phase 2)**
+- Add/Edit/Delete server forms (`huh`)
+- Toasts and “polish” feedback primitives (beyond quit confirm)
+- Rich multi-pane layout (list+detail split, filtering, etc.)
 
 ## Design Decisions (Locked In)
 
@@ -16,10 +54,9 @@ These decisions are made upfront to avoid rework in later phases.
 - Validates MCP `tools/list` flow end-to-end in Phase 1
 
 ### 2. Form Library
-**Decision**: Use `huh` from Phase 1 for Add/Edit Server forms.
-- No throwaway text input code
-- Consistent form UX from the start
-- `huh` is small, well-documented, and already planned for Phase 2+
+**Decision**: Use `huh` for Add/Edit Server forms in **Phase 2**.
+- Phase 1 stays config-file-driven to keep the core loop (start/connect/list tools/logs) small and testable
+- Avoids building “temporary” text inputs while still keeping forms as the clear next step
 
 ### 3. Process Ownership Model
 **Decision**: Supervisor owns `exec.Cmd`, MCP client receives pipes.
@@ -46,14 +83,14 @@ Clean separation: Supervisor handles lifecycle, Client handles protocol.
 - `f` for follow mode (auto-scroll)
 
 ### 5. Feedback Primitives
-**Decision**: Establish these mechanisms in Phase 1:
+**Decision**: Keep Phase 1 feedback minimal to avoid UI churn.
 
 | Primitive | Phase 1 Scope |
 |-----------|---------------|
-| Toast | Full implementation (server started/stopped/error) |
-| Confirm dialog | Full implementation (quit with running servers) |
-| Modal | Full implementation (Add/Edit Server form) |
-| Help overlay | Stub (shows `?` pressed, minimal content) |
+| Toast | Deferred (Phase 2) |
+| Confirm dialog | Minimal implementation (quit with running servers) |
+| Modal | Deferred (Phase 2) |
+| Help overlay | Deferred or stub (optional) |
 
 ### 6. Keybinding Architecture
 **Decision**: Establish dispatch pattern, don't hardcode.
@@ -68,8 +105,8 @@ const (
 
 type Keymap struct {
     Global map[string]Action  // q, ?, 1/2/3
-    List   map[string]Action  // j, k, Enter, a, e, d, s, x
-    Modal  map[string]Action  // Tab, Esc, Enter
+    List   map[string]Action  // j, k, Enter, s, x, l
+    Modal  map[string]Action  // Esc
     Log    map[string]Action  // f, Esc
 }
 ```
@@ -118,111 +155,103 @@ This maximizes compatibility and removes "which spec is it today?" risk.
 ## Features
 
 ### Config Schema & Persistence
-- [ ] Define JSON config schema for servers, namespaces, proxies
-- [ ] `ServerConfig` struct: id, name, command, args, cwd, env, kind (stdio/sse), url, headers, OAuth fields
-- [ ] `NamespaceConfig` struct: id, name, description, serverIds
-- [ ] `ProxyConfig` struct: id, name, pathSegment, host, port, runningState, transportType (Phase 4, deferred - include in schema for forward compatibility)
-- [ ] `ToolPermission` struct: namespaceId, serverId, toolName, enabled
-- [ ] `defaultNamespaceId` config field for stdio toolset selection (Phase 1.5)
-- [ ] Config file location: `~/.config/mcp-studio/config.json`
-- [ ] Atomic writes with temp file + rename
-- [ ] Restrictive file permissions (0600)
-- [ ] Load/save config functions with validation
-- [ ] **Config versioning**: schema version field for future migrations
+- [x] Define JSON config schema for servers, namespaces, proxies
+- [x] `ServerConfig` struct: id, name, command, args, cwd, env, kind (stdio/sse), url, headers, OAuth fields
+- [x] `NamespaceConfig` struct: id, name, description, serverIds
+- [x] `ProxyConfig` struct: id, name, pathSegment, host, port, runningState, transportType (Phase 4, deferred - include in schema for forward compatibility)
+- [x] `ToolPermission` struct: namespaceId, serverId, toolName, enabled
+- [x] `defaultNamespaceId` config field for stdio toolset selection (Phase 1.5)
+- [x] **`mcpServers`-compatible server entries**: keep JSON field names aligned (`command`, `args`, `cwd`, `env`) so users can copy/paste from common MCP client configs
+- [x] **Servers map format**: support `servers` (or `mcpServers`) as an object map `serverId → {command,args,cwd,env,...}` for easy manual editing
+- [x] Server ID rules: auto-generate short 4-char `[a-z0-9]` id by default; regenerate on collision; disallow `.` in ids
+- [x] Config file location: `~/.config/mcp-studio/config.json`
+- [x] Atomic writes with temp file + rename
+- [x] Restrictive file permissions (0600)
+- [x] Load/save config functions with validation
+- [x] **Config versioning**: schema version field for future migrations
 - [ ] **Secret references**: placeholder pattern for OAuth tokens (stored separately, not in config JSON)
 
 ### Domain Model & Types
-- [ ] `RuntimeState` enum: idle, running, stopped, error
-- [ ] `LastExit` struct: code, signal, timestamp
-- [ ] `ServerStatus` struct: id, state, pid, lastExit
-- [ ] `McpTool` struct: name, description, inputSchema
-- [ ] Event types for status changes, log output, tool updates
+- [x] `RuntimeState` enum: idle, running, stopped, error
+- [x] `LastExit` struct: code, signal, timestamp
+- [x] `ServerStatus` struct: id, state, pid, lastExit
+- [x] `McpTool` struct: name, description, inputSchema
+- [x] Event types for status changes, log output, tool updates
 
 ### Transport Abstraction
-- [ ] Define `Transport` interface (Connect, Close, Send, Receive)
-- [ ] Define `McpClient` interface (ListTools, InvokeTool, Status)
-- [ ] This abstraction allows Phase 4/5 transports without refactoring
-- [ ] Abstracts SDK choice - can swap `mark3labs/mcp-go` for official SDK later
+- [x] Define `Transport` interface (Connect, Close, Send, Receive)
+- [x] Define `McpClient` interface (ListTools, InvokeTool, Status)
+- [x] This abstraction allows Phase 4/5 transports without refactoring
+- [x] Abstracts SDK choice - can swap `mark3labs/mcp-go` for official SDK later
 
 ### Stdio Framing Layer (owned, not from SDK)
-- [ ] `StdioTransport` struct wrapping `io.ReadWriter`
-- [ ] **Read**: Detect and handle both Content-Length and NDJSON formats
-- [ ] **Write**: Always use Content-Length framing (spec-compliant)
-- [ ] Peek-based format detection (check for `Content-Length:` prefix)
-- [ ] Proper `\r\n\r\n` delimiter handling for LSP-style
-- [ ] Newline delimiter handling for NDJSON fallback
+- [x] `StdioTransport` struct wrapping `io.ReadWriter`
+- [x] **NDJSON framing** (newline-delimited JSON) - this is what MCP stdio actually uses
+- **NOTE**: Original plan said Content-Length, but MCP stdio uses NDJSON. Fixed during implementation.
 
 ### MCP Client (stdio only)
-- [ ] Use `github.com/mark3labs/mcp-go` for JSON-RPC + MCP types
-- [ ] `Client` struct implementing McpClient interface
-- [ ] **Client receives `io.ReadWriter` pipes** (doesn't spawn processes)
-- [ ] Wire through our `StdioTransport` framing layer
-- [ ] Initialize handshake (`initialize` request/response)
-- [ ] `ListTools()` method calling `tools/list`
-- [ ] Connection retry with backoff (3 attempts, exponential delay)
+- [x] Custom JSON-RPC client (didn't need mark3labs/mcp-go SDK)
+- [x] `Client` struct implementing McpClient interface
+- [x] **Client receives `io.ReadWriter` pipes** (doesn't spawn processes)
+- [x] Wire through our `StdioTransport` framing layer
+- [x] Initialize handshake (`initialize` request/response)
+- [x] `ListTools()` method calling `tools/list`
+- [ ] Connection retry with backoff (3 attempts, exponential delay) - not implemented yet
 
 ### Process Supervisor
-- [ ] **Supervisor owns `exec.Cmd` lifecycle** (spawns, stops, monitors)
-- [ ] Process states: idle, starting, running, stopping, stopped, error, crashed
-- [ ] PATH augmentation for Homebrew locations (`/opt/homebrew/bin`, `/usr/local/bin`)
-- [ ] Capture stdin/stdout pipes for MCP transport
-- [ ] Capture stderr for log streaming
-- [ ] Graceful process termination (SIGTERM → SIGKILL after timeout)
-- [ ] Signal handling (SIGINT, SIGTERM for app shutdown)
-- [ ] Orphan process cleanup on app crash/restart
-- [ ] Exit code/signal capture for debugging
-- [ ] Returns `ServerHandle{Client, Stop(), Logs()}` to TUI
+- [x] **Supervisor owns `exec.Cmd` lifecycle** (spawns, stops, monitors)
+- [x] Process states: idle, starting, running, stopping, stopped, error, crashed
+- [x] PATH augmentation for Homebrew locations (`/opt/homebrew/bin`, `/usr/local/bin`)
+- [x] Capture stdin/stdout pipes for MCP transport
+- [x] Capture stderr for log streaming
+- [x] Graceful process termination (SIGTERM → SIGKILL after timeout)
+- [ ] Signal handling (SIGINT, SIGTERM for app shutdown) - partial, Ctrl+C works
+- [ ] Orphan process cleanup on app crash/restart - not implemented
+- [x] Exit code/signal capture for debugging
+- [x] Returns `ServerHandle{Client, Stop(), Logs()}` to TUI
 
 ### Event Bus Pattern
-- [ ] Define event types: StatusChanged, LogReceived, ToolsUpdated, Error
-- [ ] Goroutine-safe event dispatch (channels)
-- [ ] Bubble Tea integration: convert events to Bubble Tea messages
-- [ ] Prevents race conditions from concurrent goroutines updating state
+- [x] Define event types: StatusChanged, LogReceived, ToolsUpdated, Error
+- [x] Goroutine-safe event dispatch (channels)
+- [x] Bubble Tea integration: convert events to Bubble Tea messages
+- [x] Prevents race conditions from concurrent goroutines updating state
 
 ### TUI Shell & Layout
-- [ ] Bubble Tea main model with basic layout
-- [ ] Tab bar (Servers tab active, Namespaces/Proxies disabled but visible)
-- [ ] Server list view (using `bubbles/list` with custom delegate)
-- [ ] Server detail view (Enter on server → tools list, Esc to return)
-- [ ] Status bar showing running count and help hint
-- [ ] **Single layout** - handle `WindowSizeMsg`, truncate if narrow
-- [ ] Theme struct with Lipgloss styles (see PLAN-ui.md patterns)
+- [x] Bubble Tea main model with basic layout
+- [x] Tab bar (Servers tab active; Namespaces/Proxies visible but disabled)
+- [x] Server list view (using `bubbles/list` with custom delegate)
+- [x] Server detail view (Enter on server → tools list, Esc to return)
+- [x] Status bar showing running count and help hint
+- [x] **Single layout** - handle `WindowSizeMsg`, truncate if narrow
+- [x] Theme struct with Lipgloss styles (see PLAN-ui.md patterns)
 
 ### Keybinding System
-- [ ] `Keymap` struct with context-aware routing
-- [ ] `KeyContext` enum: List, Modal, LogPanel, Help, Confirm
-- [ ] Global keys: `q` (quit), `?` (help), `1/2/3` (tabs)
-- [ ] List keys: `j/k` (navigate), `Enter` (detail), `a` (add), `e` (edit), `d` (delete), `s` (start), `x` (stop)
-- [ ] Modal keys: `Tab` (next field), `Esc` (cancel), `Enter` (submit)
-- [ ] Log keys: `l` (toggle), `f` (follow), `Esc` (close)
+- [x] `Keymap` struct with context-aware routing
+- [x] `KeyContext` enum: List, Modal, LogPanel, Help, Confirm
+- [x] Global keys: `q` (quit), `?` (help - not implemented), `1/2/3` (tabs)
+- [x] List keys (Phase 1): `j/k` (navigate), `Enter` (detail), `s` (start), `x` (stop), `l` (toggle logs)
+- [x] Modal keys (Phase 1): `Esc` (cancel/close confirm)
+- [x] Log keys: `l` (toggle), `f` (follow), `Esc` (close)
 
 ### Feedback Primitives
-- [ ] **Toast component**: auto-dismiss messages (success/info/warning/error)
-- [ ] **Confirm dialog**: modal with Yes/No (used for quit-with-running, delete)
-- [ ] **Modal overlay**: centered form container with backdrop dimming
-- [ ] **Help overlay**: stub implementation (shows keybindings, minimal content)
+- [x] **Confirm dialog**: modal with Yes/No (quit-with-running only)
+- [ ] Toast, modal overlay, help overlay: deferred to Phase 2 (see PLAN-ui.md)
 
 ### Log Panel
-- [ ] Bottom panel using `bubbles/viewport`
-- [ ] Toggle with `l` key
-- [ ] Shows stderr from all running servers with `[server]` prefix
-- [ ] Follow mode (`f`) auto-scrolls to bottom
-- [ ] Timestamp prefix on each line
+- [x] Bottom panel using `bubbles/viewport`
+- [x] Toggle with `l` key
+- [x] Shows stderr from all running servers with `[server]` prefix
+- [x] Follow mode (`f`) auto-scrolls to bottom
+- [x] Timestamp prefix on each line
 
-### Add/Edit Server Form
-- [ ] **Use `huh` library** for form (not throwaway textinput)
-- [ ] Fields: Name, Type (dropdown), Command, Arguments, Working Dir, Env Vars
-- [ ] Validation: name required, command required
-- [ ] Opens as centered modal overlay
-- [ ] `Esc` cancels, `Enter` on Save button submits
-
-### Server List & Actions
-- [ ] List shows: status icon, name, command (truncated), tool count
-- [ ] Start server (`s`): spawns process, connects MCP client
-- [ ] Stop server (`x`): graceful shutdown
-- [ ] Delete server (`d`): confirm dialog, then remove from config
-- [ ] Edit server (`e`): opens form with existing values
-- [ ] Detail view (`Enter`): full info + scrollable tool list
+### Server List & Actions (config-file-driven)
+- [x] List shows: status icon, name, command (truncated), tool count
+- [x] Start server (`s`): spawns process, connects MCP client
+- [x] Stop server (`x`): graceful shutdown
+- [ ] Remove `s`/`x` UI actions (keep stop-all-on-exit); use test toggle for lifecycle instead
+- [ ] Toggle enabled/disabled (persist to config; does not start/stop; later gates exposure in `serve --stdio`)
+- [ ] Test toggle (`t`): start+validate (init + tools/list), press again stops; allowed even if disabled
+- [x] Detail view (`Enter`): full info + scrollable tool list
 
 ## Dependencies
 - None (this is the foundation phase)
@@ -251,9 +280,10 @@ This maximizes compatibility and removes "which spec is it today?" risk.
 
 ## Success Criteria
 - App launches and displays TUI
-- Can add a server config (even hardcoded)
+- Can load server configs from `~/.config/mcp-studio/config.json` (manual editing)
 - Can start/stop an MCP server
 - Can see the list of tools exposed by the server
+- Can view stderr logs in the log panel
 - Config persists across app restarts
 
 ## Files to Create
@@ -283,16 +313,11 @@ internal/
       server_list.go    # Server list component (bubbles/list delegate)
       server_detail.go  # Server detail view (tools list)
       log_panel.go      # Log panel component (bubbles/viewport)
-    forms/
-      server_form.go    # Add/Edit Server form (huh)
     feedback/
-      toast.go          # Toast component
-      confirm.go        # Confirm dialog
-      modal.go          # Modal overlay container
-      help.go           # Help overlay (stub)
+      confirm.go        # Confirm dialog (quit-with-running)
 cmd/
-  mcp-studio-go/
-    main.go         # Entry point
+  mcp-studio/
+    main.go         # Entry point (Phase 1: TUI; Phase 1.5 adds Cobra)
 ```
 
 ## Estimated Complexity

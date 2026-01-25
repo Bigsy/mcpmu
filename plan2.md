@@ -7,7 +7,7 @@ Extend the TUI to manage multiple servers with full CRUD operations, start/stop 
 
 ### Server CRUD Operations
 - [ ] Add Server form using `charmbracelet/huh`:
-  - ID (auto-generated UUID or user-provided)
+  - ID (auto-generated short 4-char `[a-z0-9]` or user-provided)
   - Name (display name)
   - Command (required)
   - Arguments (space-separated or array)

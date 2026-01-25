@@ -672,13 +672,16 @@ TUI apps with similar patterns to reference:
 
 ### Phase 1
 - Basic layout with tab bar (tabs disabled except Servers)
-- Server list component (no form yet)
+- Server list + detail view (Enter/Esc)
+- Start/stop (s/x) and basic status indicators
+- Log panel (toggle `l`, follow `f`) for stderr debugging
 - Status bar with help hint
 
 ### Phase 2
 - Server form panel
-- Server detail view
-- Log viewer component
+- CRUD flows via `huh` (add/edit/delete)
+- Toasts + help overlay polish
+- Log viewer enhancements (filters, full-screen mode, buffering/dedupe)
 - All server keybindings
 
 ### Phase 3
