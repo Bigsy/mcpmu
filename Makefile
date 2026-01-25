@@ -1,4 +1,4 @@
-.PHONY: build test test-v test-integration lint clean
+.PHONY: build test test-v test-integration lint clean run run-debug
 
 build:
 	go build -o mcp-studio ./cmd/mcp-studio
@@ -18,3 +18,9 @@ lint:
 clean:
 	rm -f mcp-studio
 	go clean -testcache
+
+run:
+	go run ./cmd/mcp-studio
+
+debug:
+	go run ./cmd/mcp-studio -debug
