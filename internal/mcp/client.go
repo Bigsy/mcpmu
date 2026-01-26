@@ -132,6 +132,58 @@ func (c *Client) ServerInfo() (name, version string) {
 	return c.serverName, c.serverVersion
 }
 
+// CallTool invokes a tool on the MCP server.
+func (c *Client) CallTool(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+	params := toolCallParams{
+		Name:      name,
+		Arguments: arguments,
+	}
+
+	var result toolCallResult
+	if err := c.call(ctx, "tools/call", params, &result); err != nil {
+		return nil, fmt.Errorf("tools/call: %w", err)
+	}
+
+	return &ToolResult{
+		Content: result.Content,
+		IsError: result.IsError,
+	}, nil
+}
+
+// toolCallParams is the params for tools/call.
+type toolCallParams struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
+// toolCallResult is the result of tools/call.
+type toolCallResult struct {
+	Content []ContentBlock `json:"content"`
+	IsError bool           `json:"isError,omitempty"`
+}
+
+// ToolResult represents the result of a tool call.
+type ToolResult struct {
+	Content []ContentBlock `json:"content"`
+	IsError bool           `json:"isError,omitempty"`
+}
+
+// ContentBlock represents a content block in a tool result.
+// Uses json.RawMessage to preserve all fields from upstream servers,
+// including non-text content types (images, resources, etc.).
+type ContentBlock json.RawMessage
+
+// MarshalJSON implements json.Marshaler.
+func (c ContentBlock) MarshalJSON() ([]byte, error) {
+	return json.RawMessage(c), nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (c *ContentBlock) UnmarshalJSON(data []byte) error {
+	*c = ContentBlock(data)
+	return nil
+}
+
 // Close closes the client connection.
 func (c *Client) Close() error {
 	c.mu.Lock()

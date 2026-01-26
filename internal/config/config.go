@@ -26,12 +26,26 @@ func ConfigPath() (string, error) {
 	return filepath.Join(home, configDir, configFile), nil
 }
 
-// Load reads the configuration from disk.
+// Load reads the configuration from the default path.
 // Returns a new empty config if the file doesn't exist.
 func Load() (*Config, error) {
 	path, err := ConfigPath()
 	if err != nil {
 		return nil, err
+	}
+	return LoadFrom(path)
+}
+
+// LoadFrom reads the configuration from a specific path.
+// Returns a new empty config if the file doesn't exist.
+func LoadFrom(path string) (*Config, error) {
+	// Expand ~ in path
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("get home dir: %w", err)
+		}
+		path = filepath.Join(home, path[2:])
 	}
 
 	data, err := os.ReadFile(path)

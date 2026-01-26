@@ -114,3 +114,15 @@ func MalformedResponseConfig() FakeServerConfig {
 		Malformed: true,
 	}
 }
+
+// EchoToolsConfig returns a config that echoes tool calls back as text.
+// Useful for testing tool call routing.
+func EchoToolsConfig() FakeServerConfig {
+	return FakeServerConfig{
+		Tools: []Tool{
+			{Name: "echo", Description: "Echo the input back"},
+			{Name: "greet", Description: "Return a greeting"},
+		},
+		EchoToolCalls: true,
+	}
+}

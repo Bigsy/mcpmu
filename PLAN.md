@@ -32,7 +32,7 @@ A TUI-based MCP (Model Context Protocol) server manager. Rewrite of [MCP-studio]
 
 ## Implementation Phases
 
-### [Phase 1: Foundation](plan1.md) ⬜
+### [Phase 1: Foundation](plan1.md) ✅
 Config schema, domain model, single stdio server connection, minimal TUI shell.
 - Config persistence with atomic writes
 - MCP client for stdio transport
@@ -40,12 +40,21 @@ Config schema, domain model, single stdio server connection, minimal TUI shell.
 - Start/stop a server, list tools, view stderr logs (log panel)
 - No in-TUI CRUD forms yet (Phase 2)
 
-### [Phase 1.1: Testing Strategy](plan1.1.md) ⬜
+### [Phase 1.1: Testing Strategy](plan1.1.md) ✅
 Testing infrastructure and fixtures for validating Phase 1–2 work.
 - Fake MCP server (stdio) for tests/CI
 - Integration tests (start, handshake, list tools, stop, crash handling)
 - TUI unit tests (Update/View logic)
 - CI configuration (GitHub Actions, OS matrix)
+
+### [Phase 1.5: stdio Server Mode](plan1.5.md) ✅
+Enable mcp-studio to be spawned by Claude Code as an MCP server.
+- Cobra CLI with serve subcommand
+- MCP server protocol (NDJSON)
+- Tool aggregation from managed servers
+- Tool call routing with lazy start
+- Manager tools (servers_list, servers_start, etc.)
+- Namespace selection and enforcement
 
 ### [Phase 2: Multi-Server TUI](plan2.md) ⬜
 Server list view, CRUD operations, start/stop, log streaming.
@@ -84,8 +93,9 @@ SSE client transport, OAuth browser flow, token storage/refresh, polish.
 
 | Phase | Status | Features | Notes |
 |-------|--------|----------|-------|
-| 1 - Foundation | ⬜ Not Started | 0/5 | |
-| 1.1 - Testing | ⬜ Not Started | 0/5 | Fake MCP server, integration tests |
+| 1 - Foundation | ✅ Complete | 5/5 | |
+| 1.1 - Testing | ✅ Complete | 5/5 | Fake MCP server, integration tests |
+| 1.5 - stdio Server | ✅ Complete | 6/6 | MCP server mode for Claude Code |
 | 2 - Multi-Server | ⬜ Not Started | 0/6 | |
 | 3 - Namespaces | ⬜ Not Started | 0/7 | |
 | 4 - Proxies | ⬜ Not Started | 0/10 | |

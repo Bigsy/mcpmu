@@ -34,6 +34,10 @@ type Config struct {
 
 	// Protocol edge cases
 	Malformed bool `json:"malformed"` // write invalid JSON
+
+	// Tool call handling
+	ToolHandler ToolHandler `json:"-"` // Custom handler for tools/call (not JSON-serializable)
+	EchoToolCalls bool `json:"echoToolCalls"` // If true, tools/call returns the tool name and arguments as text
 }
 
 // Tool represents an MCP tool definition.
@@ -100,6 +104,27 @@ type ToolsCapability struct {
 type ToolsListResult struct {
 	Tools []Tool `json:"tools"`
 }
+
+// ToolCallParams is the params for tools/call.
+type ToolCallParams struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
+// ToolCallResult is the result of tools/call.
+type ToolCallResult struct {
+	Content []ContentBlock `json:"content"`
+	IsError bool           `json:"isError,omitempty"`
+}
+
+// ContentBlock represents a content block in a tool result.
+type ContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// ToolHandler is a function that handles a tool call.
+type ToolHandler func(name string, arguments json.RawMessage) ([]ContentBlock, bool, error)
 
 // writeResponse writes a JSON-RPC response with NDJSON framing.
 func writeResponse(out io.Writer, id json.RawMessage, result any, cfg Config) error {

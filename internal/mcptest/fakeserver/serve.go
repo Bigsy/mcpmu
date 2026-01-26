@@ -92,6 +92,48 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			}
 			writeResponse(out, req.ID, ToolsListResult{Tools: tools}, cfg)
 
+		case "tools/call":
+			var params ToolCallParams
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				writeErrorResponse(out, req.ID, JSONRPCError{
+					Code: -32602, Message: "Invalid params: " + err.Error(),
+				}, cfg)
+				continue
+			}
+
+			// Check if we have a custom handler
+			if cfg.ToolHandler != nil {
+				content, isError, err := cfg.ToolHandler(params.Name, params.Arguments)
+				if err != nil {
+					writeErrorResponse(out, req.ID, JSONRPCError{
+						Code: -32603, Message: err.Error(),
+					}, cfg)
+					continue
+				}
+				writeResponse(out, req.ID, ToolCallResult{
+					Content: content,
+					IsError: isError,
+				}, cfg)
+				continue
+			}
+
+			// Default: echo the call
+			if cfg.EchoToolCalls {
+				text := "Called tool: " + params.Name
+				if params.Arguments != nil {
+					text += "\nArguments: " + string(params.Arguments)
+				}
+				writeResponse(out, req.ID, ToolCallResult{
+					Content: []ContentBlock{{Type: "text", Text: text}},
+				}, cfg)
+				continue
+			}
+
+			// If no handler and no echo, return success with tool name
+			writeResponse(out, req.ID, ToolCallResult{
+				Content: []ContentBlock{{Type: "text", Text: "Tool executed: " + params.Name}},
+			}, cfg)
+
 		case "notifications/initialized":
 			// No response needed for notifications
 
