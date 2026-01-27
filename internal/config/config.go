@@ -77,12 +77,25 @@ func LoadFrom(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Save writes the configuration to disk atomically.
-// Uses a temp file + rename pattern for atomic writes.
+// Save writes the configuration to the default path atomically.
 func Save(cfg *Config) error {
 	path, err := ConfigPath()
 	if err != nil {
 		return err
+	}
+	return SaveTo(cfg, path)
+}
+
+// SaveTo writes the configuration to a specific path atomically.
+// Uses a temp file + rename pattern for atomic writes.
+func SaveTo(cfg *Config, path string) error {
+	// Expand ~ in path
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("get home dir: %w", err)
+		}
+		path = filepath.Join(home, path[2:])
 	}
 
 	// Ensure config directory exists
@@ -144,7 +157,15 @@ func ValidateID(id string) error {
 }
 
 // AddServer adds a new server to the config, generating an ID if needed.
+// Returns an error if a server with the same name already exists.
 func (c *Config) AddServer(srv ServerConfig) (string, error) {
+	// Check for duplicate name
+	if srv.Name != "" {
+		if existing := c.FindServerByName(srv.Name); existing != nil {
+			return "", fmt.Errorf("server with name %q already exists", srv.Name)
+		}
+	}
+
 	// Generate ID if empty
 	if srv.ID == "" {
 		for {
@@ -160,7 +181,7 @@ func (c *Config) AddServer(srv ServerConfig) (string, error) {
 		return "", fmt.Errorf("invalid id: %w", err)
 	}
 
-	// Check for collision
+	// Check for ID collision
 	if _, exists := c.Servers[srv.ID]; exists {
 		return "", fmt.Errorf("server id %q already exists", srv.ID)
 	}
@@ -172,6 +193,27 @@ func (c *Config) AddServer(srv ServerConfig) (string, error) {
 
 	c.Servers[srv.ID] = srv
 	return srv.ID, nil
+}
+
+// FindServerByName returns the server with the given name, or nil if not found.
+func (c *Config) FindServerByName(name string) *ServerConfig {
+	for _, srv := range c.Servers {
+		if srv.Name == name {
+			return &srv
+		}
+	}
+	return nil
+}
+
+// DeleteServerByName removes a server by name.
+// Returns an error if no server with that name exists.
+func (c *Config) DeleteServerByName(name string) error {
+	for id, srv := range c.Servers {
+		if srv.Name == name {
+			return c.DeleteServer(id)
+		}
+	}
+	return fmt.Errorf("server %q not found", name)
 }
 
 // UpdateServer updates an existing server configuration.

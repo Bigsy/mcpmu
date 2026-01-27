@@ -325,9 +325,96 @@ func TestConfig_AddServer_Collision(t *testing.T) {
 	}
 
 	// Try to add another server with same ID
-	_, err = cfg.AddServer(srv)
+	srv2 := ServerConfig{
+		ID:      "abcd",
+		Name:    "Different Name",
+		Kind:    ServerKindStdio,
+		Command: "echo",
+	}
+	_, err = cfg.AddServer(srv2)
 	if err == nil {
 		t.Error("expected error for duplicate ID")
+	}
+}
+
+func TestConfig_AddServer_DuplicateName(t *testing.T) {
+	cfg := NewConfig()
+
+	srv1 := ServerConfig{
+		Name:    "My Server",
+		Kind:    ServerKindStdio,
+		Command: "echo",
+	}
+
+	_, err := cfg.AddServer(srv1)
+	if err != nil {
+		t.Fatalf("first AddServer failed: %v", err)
+	}
+
+	// Try to add another server with same name (different ID)
+	srv2 := ServerConfig{
+		Name:    "My Server",
+		Kind:    ServerKindStdio,
+		Command: "cat",
+	}
+	_, err = cfg.AddServer(srv2)
+	if err == nil {
+		t.Error("expected error for duplicate name")
+	}
+}
+
+func TestConfig_FindServerByName(t *testing.T) {
+	cfg := NewConfig()
+
+	cfg.Servers["abcd"] = ServerConfig{
+		ID:      "abcd",
+		Name:    "Test Server",
+		Kind:    ServerKindStdio,
+		Command: "echo",
+	}
+
+	// Found
+	srv := cfg.FindServerByName("Test Server")
+	if srv == nil {
+		t.Fatal("expected server to be found")
+	}
+	if srv.ID != "abcd" {
+		t.Errorf("expected ID 'abcd', got %q", srv.ID)
+	}
+
+	// Not found
+	srv = cfg.FindServerByName("Nonexistent")
+	if srv != nil {
+		t.Error("expected nil for non-existent server name")
+	}
+}
+
+func TestConfig_DeleteServerByName(t *testing.T) {
+	cfg := NewConfig()
+
+	cfg.Servers["abcd"] = ServerConfig{
+		ID:      "abcd",
+		Name:    "Test Server",
+		Kind:    ServerKindStdio,
+		Command: "echo",
+	}
+
+	err := cfg.DeleteServerByName("Test Server")
+	if err != nil {
+		t.Fatalf("DeleteServerByName failed: %v", err)
+	}
+
+	if _, ok := cfg.Servers["abcd"]; ok {
+		t.Error("expected server to be deleted")
+	}
+}
+
+func TestConfig_DeleteServerByName_NotFound(t *testing.T) {
+	cfg := NewConfig()
+
+	err := cfg.DeleteServerByName("Nonexistent")
+	if err == nil {
+		t.Error("expected error for non-existent server name")
 	}
 }
 

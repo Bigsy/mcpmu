@@ -400,13 +400,14 @@ func formatArgs(args []string) string {
 
 	var parts []string
 	for _, arg := range args {
+		escaped := strings.ReplaceAll(arg, "\\", "\\\\")
+		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
 		if strings.Contains(arg, " ") || strings.Contains(arg, "'") || strings.Contains(arg, "\"") {
 			// Quote args containing spaces or quotes
 			// Use double quotes and escape any existing double quotes
-			escaped := strings.ReplaceAll(arg, "\"", "\\\"")
 			parts = append(parts, "\""+escaped+"\"")
 		} else {
-			parts = append(parts, arg)
+			parts = append(parts, escaped)
 		}
 	}
 	return strings.Join(parts, " ")

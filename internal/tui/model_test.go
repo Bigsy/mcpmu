@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"encoding/json"
+	"os"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hedworth/mcp-studio-go/internal/config"
 	"github.com/hedworth/mcp-studio-go/internal/events"
+	"github.com/hedworth/mcp-studio-go/internal/mcptest"
 	"github.com/hedworth/mcp-studio-go/internal/process"
 	"github.com/hedworth/mcp-studio-go/internal/testutil"
 )
@@ -221,5 +225,55 @@ func TestModel_ViewList_InitialState(t *testing.T) {
 
 	if m.activeTab != TabServers {
 		t.Errorf("expected initial tab to be TabServers, got %v", m.activeTab)
+	}
+}
+
+// TestHelperProcess is the entry point for the fake MCP server subprocess.
+func TestHelperProcess(t *testing.T) {
+	mcptest.RunHelperProcess(t)
+}
+
+func TestModel_TestKeyInDetailStartsServer(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 24
+
+	collector := testutil.NewEventCollector()
+	m.bus.Subscribe(collector.Handler)
+
+	srv := fakeServerConfig(t, "test", mcptest.DefaultConfig())
+	m.cfg.Servers[srv.ID] = srv
+	m.refreshServerList()
+	m.currentView = ViewDetail
+
+	t.Cleanup(func() {
+		m.supervisor.StopAll()
+	})
+
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+
+	if ok := collector.WaitForState(srv.ID, events.StateRunning, 2*time.Second); !ok {
+		t.Fatal("expected server to reach running state after pressing 't' in detail view")
+	}
+}
+
+func fakeServerConfig(t *testing.T, id string, fakeCfg mcptest.FakeServerConfig) config.ServerConfig {
+	t.Helper()
+
+	cfgJSON, err := json.Marshal(fakeCfg)
+	if err != nil {
+		t.Fatalf("marshal fake config: %v", err)
+	}
+
+	return config.ServerConfig{
+		ID:      id,
+		Name:    "test-" + id,
+		Kind:    config.ServerKindStdio,
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestHelperProcess", "--"},
+		Env: map[string]string{
+			"GO_WANT_HELPER_PROCESS": "1",
+			"FAKE_MCP_CFG":           string(cfgJSON),
+		},
 	}
 }

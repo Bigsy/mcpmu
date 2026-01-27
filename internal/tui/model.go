@@ -167,6 +167,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Server form needs ALL messages (including internal huh messages like cursor blink)
 	// Handle this first, before the type switch
 	if m.serverForm.IsVisible() {
+		var cmds []tea.Cmd
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			// Always handle Ctrl+C even in form
@@ -177,13 +178,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.width = msg.Width
 			m.height = msg.Height
 			m.updateLayout()
+			m.helpOverlay.SetSize(msg.Width, msg.Height)
 			m.serverForm.SetSize(msg.Width, msg.Height)
+			m.confirmDlg.SetSize(msg.Width, msg.Height)
+			m.toast.SetSize(msg.Width, msg.Height)
 		case views.ServerFormResult:
 			return m.handleServerFormResult(msg)
 		}
 		// Pass all messages to the form (pointer receiver to preserve huh's value bindings)
-		cmd := m.serverForm.Update(msg)
-		return m, cmd
+		if cmd := m.serverForm.Update(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+		// Keep server events flowing while the modal is open.
+		if evt, ok := msg.(events.Event); ok {
+			if cmd := m.handleEvent(evt); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			cmds = append(cmds, m.waitForEvent())
+		}
+
+		// Allow toast timers and key-dismiss to work while the form is visible.
+		var toastCmd tea.Cmd
+		m.toast, toastCmd = m.toast.Update(msg)
+		if toastCmd != nil {
+			cmds = append(cmds, toastCmd)
+		}
+
+		return m, tea.Batch(cmds...)
 	}
 
 	switch msg := msg.(type) {
@@ -379,6 +401,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 	if m.currentView == ViewList {
 		return m.handleListKey(msg)
 	}
+	if m.currentView == ViewDetail {
+		return m.handleDetailKey(msg)
+	}
 
 	return false, m, nil
 }
@@ -438,6 +463,23 @@ func (m *Model) handleListKey(msg tea.KeyMsg) (handled bool, model tea.Model, cm
 	}
 
 	return false, m, nil // Let list handle navigation keys
+}
+
+func (m *Model) handleDetailKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Test):
+		if item := m.serverList.SelectedItem(); item != nil {
+			// Toggle: if running, stop; otherwise start
+			if item.Status.State == events.StateRunning {
+				go m.supervisor.Stop(item.Config.ID)
+			} else {
+				go m.startServer(item.Config)
+			}
+		}
+		return true, m, nil
+	}
+
+	return false, m, nil
 }
 
 func (m *Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
