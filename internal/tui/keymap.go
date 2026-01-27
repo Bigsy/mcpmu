@@ -36,7 +36,6 @@ type KeyBindings struct {
 
 	// Server actions
 	Test          key.Binding // Toggle start/stop for testing
-	Restart       key.Binding
 	Add           key.Binding
 	Edit          key.Binding
 	Delete        key.Binding
@@ -107,11 +106,7 @@ func NewKeyBindings() KeyBindings {
 		// Server actions
 		Test: key.NewBinding(
 			key.WithKeys("t"),
-			key.WithHelp("t", "test toggle"),
-		),
-		Restart: key.NewBinding(
-			key.WithKeys("r"),
-			key.WithHelp("r", "restart"),
+			key.WithHelp("t", "test (start/stop)"),
 		),
 		Add: key.NewBinding(
 			key.WithKeys("a"),
@@ -134,8 +129,8 @@ func NewKeyBindings() KeyBindings {
 			key.WithHelp("f", "follow"),
 		),
 		ToggleEnabled: key.NewBinding(
-			key.WithKeys("e"),
-			key.WithHelp("e", "toggle enabled"),
+			key.WithKeys("E"),
+			key.WithHelp("E", "enable/disable"),
 		),
 
 		// Confirm dialog
@@ -159,7 +154,7 @@ func (k KeyBindings) ShortHelp() []key.Binding {
 func (k KeyBindings) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Top, k.Bottom, k.Enter, k.Escape},
-		{k.Test, k.ToggleEnabled, k.Restart, k.Add, k.Edit, k.Delete},
+		{k.Test, k.ToggleEnabled, k.Add, k.Edit, k.Delete},
 		{k.ToggleLogs, k.FollowLogs, k.Tab1, k.Tab2, k.Tab3},
 		{k.Help, k.Quit, k.CtrlC},
 	}

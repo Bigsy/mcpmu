@@ -89,11 +89,13 @@ Implement the HTTP proxy layer that exposes MCP servers to external clients. Sup
   - a: add proxy
   - e: edit proxy
   - d: delete proxy
-  - s: start proxy
-  - x: stop proxy
+  - s: start proxy (actually runs HTTP server - different from server enable/disable)
+  - x: stop proxy (shuts down HTTP server)
   - c: copy URL to clipboard
   - n: manage namespaces
 - [ ] Status bar: "X/Y proxies running, N tools exposed"
+
+> **Note**: Unlike servers (where `enable/disable` is a config flag and `t` is for testing), proxies are actual HTTP servers that mcp-studio runs. Start/stop here means binding/unbinding to a port.
 
 ### Proxy Autostart
 - [ ] Persist running state to config

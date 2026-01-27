@@ -56,18 +56,32 @@ type Model struct {
 	serverDetail views.ServerDetailModel
 	logPanel     views.LogPanelModel
 	helpOverlay  views.HelpOverlayModel
+	serverForm   *views.ServerFormModel // Pointer to preserve huh form's value bindings
+	confirmDlg   views.ConfirmModel
+	toast        views.ToastModel
 
 	// Server status tracking
 	serverStatuses map[string]events.ServerStatus
 	serverTools    map[string][]events.McpTool
 
-	// Confirm dialog state
+	// Confirm dialog state (legacy, for quit confirmation)
 	showConfirm    bool
 	confirmMessage string
 	confirmAction  func()
 
+	// Pending delete server ID (for delete confirmation flow)
+	pendingDeleteID string
+
 	// Event channel for Bubble Tea integration
 	eventCh chan events.Event
+}
+
+// newServerFormPtr creates a pointer to a ServerFormModel.
+// This is needed because huh forms store pointers to field values,
+// and we need the form to persist across Bubble Tea's value-based updates.
+func newServerFormPtr(th theme.Theme) *views.ServerFormModel {
+	form := views.NewServerForm(th)
+	return &form
 }
 
 // NewModel creates a new root model.
@@ -89,6 +103,9 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 		serverDetail:   views.NewServerDetail(th),
 		logPanel:       views.NewLogPanel(th),
 		helpOverlay:    views.NewHelpOverlay(th),
+		serverForm:     newServerFormPtr(th),
+		confirmDlg:     views.NewConfirm(th),
+		toast:          views.NewToast(th),
 		serverStatuses: make(map[string]events.ServerStatus),
 		serverTools:    make(map[string][]events.McpTool),
 		eventCh:        make(chan events.Event, 100),
@@ -111,7 +128,29 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	return m.waitForEvent()
+	// Start autostart servers and wait for events
+	return tea.Batch(
+		m.startAutostartServers(),
+		m.waitForEvent(),
+	)
+}
+
+// startAutostartServers starts all servers with autostart=true.
+func (m Model) startAutostartServers() tea.Cmd {
+	return func() tea.Msg {
+		for _, srv := range m.cfg.ServerList() {
+			if srv.Autostart && srv.IsEnabled() {
+				log.Printf("Autostarting server: %s", srv.ID)
+				go func(s config.ServerConfig) {
+					_, err := m.supervisor.Start(m.ctx, s)
+					if err != nil {
+						log.Printf("Failed to autostart server %s: %v", s.ID, err)
+					}
+				}(srv)
+			}
+		}
+		return nil
+	}
 }
 
 // waitForEvent returns a command that waits for the next event.
@@ -125,12 +164,37 @@ func (m Model) waitForEvent() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Server form needs ALL messages (including internal huh messages like cursor blink)
+	// Handle this first, before the type switch
+	if m.serverForm.IsVisible() {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			// Always handle Ctrl+C even in form
+			if key.Matches(msg, m.keys.CtrlC) {
+				return m, tea.Quit
+			}
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+			m.updateLayout()
+			m.serverForm.SetSize(msg.Width, msg.Height)
+		case views.ServerFormResult:
+			return m.handleServerFormResult(msg)
+		}
+		// Pass all messages to the form (pointer receiver to preserve huh's value bindings)
+		cmd := m.serverForm.Update(msg)
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateLayout()
 		m.helpOverlay.SetSize(msg.Width, msg.Height)
+		m.serverForm.SetSize(msg.Width, msg.Height)
+		m.confirmDlg.SetSize(msg.Width, msg.Height)
+		m.toast.SetSize(msg.Width, msg.Height)
 
 	case tea.KeyMsg:
 		// Always handle Ctrl+C
@@ -138,7 +202,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
+		// Dismiss toast on any key press
+		if m.toast.IsVisible() {
+			m.toast.Hide()
+		}
+
 		// Handle confirm dialog
+		if m.confirmDlg.IsVisible() {
+			var cmd tea.Cmd
+			m.confirmDlg, cmd = m.confirmDlg.Update(msg)
+			return m, cmd
+		}
+
+		// Handle legacy confirm dialog (quit)
 		if m.showConfirm {
 			return m.handleConfirmKey(msg)
 		}
@@ -160,9 +236,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return newModel, cmd
 		}
 
+	case views.ServerFormResult:
+		return m.handleServerFormResult(msg)
+
+	case views.ConfirmResult:
+		return m.handleConfirmResult(msg)
+
 	case events.Event:
-		m.handleEvent(msg)
+		cmd := m.handleEvent(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		cmds = append(cmds, m.waitForEvent())
+
+	default:
+		// Handle toast timer messages
+		var cmd tea.Cmd
+		m.toast, cmd = m.toast.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// Update child components (including for unhandled keys)
@@ -185,11 +278,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) handleEvent(e events.Event) {
+func (m *Model) handleEvent(e events.Event) tea.Cmd {
 	switch evt := e.(type) {
 	case events.StatusChangedEvent:
 		m.serverStatuses[evt.ServerID()] = evt.Status
 		m.refreshServerList()
+
+		// Show toast for state changes
+		serverName := evt.ServerID()
+		if srv := m.cfg.GetServer(evt.ServerID()); srv != nil && srv.Name != "" {
+			serverName = srv.Name
+		}
+
+		switch evt.NewState {
+		case events.StateRunning:
+			return m.toast.ShowSuccess(fmt.Sprintf("Server \"%s\" started", serverName))
+		case events.StateStopped:
+			if evt.OldState == events.StateRunning {
+				return m.toast.ShowInfo(fmt.Sprintf("Server \"%s\" stopped", serverName))
+			}
+		case events.StateError, events.StateCrashed:
+			return m.toast.ShowError(fmt.Sprintf("Server \"%s\" failed", serverName))
+		}
 
 	case events.ToolsUpdatedEvent:
 		m.serverTools[evt.ServerID()] = evt.Tools
@@ -204,8 +314,9 @@ func (m *Model) handleEvent(e events.Event) {
 		m.logPanel.AppendLog(evt.ServerID(), evt.Line)
 
 	case events.ErrorEvent:
-		// Could show toast here in Phase 2
+		return m.toast.ShowError(evt.Message)
 	}
+	return nil
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {
@@ -302,6 +413,28 @@ func (m *Model) handleListKey(msg tea.KeyMsg) (handled bool, model tea.Model, cm
 			m.toggleServerEnabled(item.Config.ID)
 		}
 		return true, m, nil
+
+	case key.Matches(msg, m.keys.Add):
+		cmd := m.serverForm.ShowAdd()
+		return true, m, cmd
+
+	case key.Matches(msg, m.keys.Edit):
+		if item := m.serverList.SelectedItem(); item != nil {
+			cmd := m.serverForm.ShowEdit(item.Config)
+			return true, m, cmd
+		}
+		return true, m, nil
+
+	case key.Matches(msg, m.keys.Delete):
+		if item := m.serverList.SelectedItem(); item != nil {
+			m.pendingDeleteID = item.Config.ID
+			name := item.Config.Name
+			if name == "" {
+				name = item.Config.ID
+			}
+			m.confirmDlg.Show("Delete Server", fmt.Sprintf("Delete server \"%s\"?\nThis cannot be undone.", name), "delete-server")
+		}
+		return true, m, nil
 	}
 
 	return false, m, nil // Let list handle navigation keys
@@ -330,6 +463,94 @@ func (m *Model) showConfirmQuit() {
 		m.supervisor.StopAll()
 	}
 	m.showConfirm = true
+}
+
+func (m Model) handleServerFormResult(result views.ServerFormResult) (tea.Model, tea.Cmd) {
+	if !result.Submitted {
+		// Form was cancelled
+		return m, nil
+	}
+
+	serverName := result.Server.Name
+	if serverName == "" {
+		serverName = result.Server.Command
+	}
+
+	var err error
+	if result.IsEdit {
+		// Update existing server
+		err = m.cfg.UpdateServer(result.Server)
+		if err != nil {
+			log.Printf("Failed to update server: %v", err)
+			return m, m.toast.ShowError(fmt.Sprintf("Failed to update server: %v", err))
+		}
+	} else {
+		// Add new server
+		_, err = m.cfg.AddServer(result.Server)
+		if err != nil {
+			log.Printf("Failed to add server: %v", err)
+			return m, m.toast.ShowError(fmt.Sprintf("Failed to add server: %v", err))
+		}
+	}
+
+	// Save config
+	if err := config.Save(m.cfg); err != nil {
+		log.Printf("Failed to save config: %v", err)
+		return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
+	}
+
+	// Refresh the list
+	m.refreshServerList()
+
+	// Show success toast
+	if result.IsEdit {
+		return m, m.toast.ShowSuccess(fmt.Sprintf("Server \"%s\" updated", serverName))
+	}
+	return m, m.toast.ShowSuccess(fmt.Sprintf("Server \"%s\" added", serverName))
+}
+
+func (m Model) handleConfirmResult(result views.ConfirmResult) (tea.Model, tea.Cmd) {
+	if result.Tag == "delete-server" && result.Confirmed {
+		// Get server name for toast
+		serverName := m.pendingDeleteID
+		if srv := m.cfg.GetServer(m.pendingDeleteID); srv != nil && srv.Name != "" {
+			serverName = srv.Name
+		}
+
+		// Stop server if running
+		if status, ok := m.serverStatuses[m.pendingDeleteID]; ok {
+			if status.State == events.StateRunning || status.State == events.StateStarting {
+				m.supervisor.Stop(m.pendingDeleteID)
+			}
+		}
+
+		// Delete from config
+		if err := m.cfg.DeleteServer(m.pendingDeleteID); err != nil {
+			log.Printf("Failed to delete server: %v", err)
+			m.pendingDeleteID = ""
+			return m, m.toast.ShowError(fmt.Sprintf("Failed to delete server: %v", err))
+		}
+
+		// Save config
+		if err := config.Save(m.cfg); err != nil {
+			log.Printf("Failed to save config: %v", err)
+			m.pendingDeleteID = ""
+			return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
+		}
+
+		// Clear status tracking
+		delete(m.serverStatuses, m.pendingDeleteID)
+		delete(m.serverTools, m.pendingDeleteID)
+
+		// Refresh list
+		m.refreshServerList()
+
+		m.pendingDeleteID = ""
+		return m, m.toast.ShowSuccess(fmt.Sprintf("Server \"%s\" deleted", serverName))
+	}
+
+	m.pendingDeleteID = ""
+	return m, nil
 }
 
 func (m *Model) startServer(srv config.ServerConfig) {
@@ -431,13 +652,29 @@ func (m Model) View() string {
 		sections = append(sections, m.logPanel.View())
 	}
 
-	// Status bar
-	sections = append(sections, m.renderStatusBar())
+	// Status bar (replaced by toast when visible)
+	if m.toast.IsVisible() {
+		sections = append(sections, m.toast.View())
+	} else {
+		sections = append(sections, m.renderStatusBar())
+	}
 
-	// Confirm dialog overlay
+	// Build base content
 	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+
+	// Legacy confirm dialog overlay (quit)
 	if m.showConfirm {
 		content = m.renderConfirmOverlay(content)
+	}
+
+	// Server form overlay
+	if m.serverForm.IsVisible() {
+		content = m.serverForm.RenderOverlay(content, m.width, m.height)
+	}
+
+	// Confirm dialog overlay (delete, etc.)
+	if m.confirmDlg.IsVisible() {
+		content = m.confirmDlg.RenderOverlay(content, m.width, m.height)
 	}
 
 	// Help overlay
@@ -486,14 +723,14 @@ func (m Model) renderStatusBar() string {
 	runningCount := m.supervisor.RunningCount()
 	totalCount := len(m.cfg.Servers)
 
-	left := fmt.Sprintf("%d/%d running", runningCount, totalCount)
+	left := fmt.Sprintf("%d/%d servers running", runningCount, totalCount)
 
 	// Show context-sensitive key hints
 	var keys string
 	if m.currentView == ViewList {
-		keys = "j/k:nav  t:test  e:enable  enter:details  l:logs  ?:help  q:quit"
+		keys = "t:test  E:enable  a:add  e:edit  d:delete  l:logs  ?:help"
 	} else {
-		keys = "esc:back  t:test  l:logs  ?:help  q:quit"
+		keys = "esc:back  t:test  l:logs  ?:help"
 	}
 
 	padding := m.width - lipgloss.Width(left) - lipgloss.Width(keys) - 4

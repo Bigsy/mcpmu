@@ -73,16 +73,13 @@ func TestView_ContainsStatusBar(t *testing.T) {
 	view := testutil.StripANSI(m.View())
 
 	// Status bar should show running count
-	if !strings.Contains(view, "0/0 running") {
-		t.Error("expected view to contain '0/0 running'")
+	if !strings.Contains(view, "0/0 servers running") {
+		t.Error("expected view to contain '0/0 servers running'")
 	}
 
 	// Status bar should show key hints
 	if !strings.Contains(view, "?:help") {
 		t.Error("expected view to contain '?:help'")
-	}
-	if !strings.Contains(view, "q:quit") {
-		t.Error("expected view to contain 'q:quit'")
 	}
 }
 
@@ -92,18 +89,24 @@ func TestView_StatusBarKeyHints_ListContext(t *testing.T) {
 
 	view := testutil.StripANSI(m.View())
 
-	// List view should show navigation keys
-	if !strings.Contains(view, "j/k:nav") {
-		t.Error("expected list view to show 'j/k:nav'")
-	}
+	// List view should show keybindings
 	if !strings.Contains(view, "t:test") {
 		t.Error("expected list view to show 't:test'")
 	}
-	if !strings.Contains(view, "e:enable") {
-		t.Error("expected list view to show 'e:enable'")
+	if !strings.Contains(view, "E:enable") {
+		t.Error("expected list view to show 'E:enable'")
 	}
-	if !strings.Contains(view, "enter:details") {
-		t.Error("expected list view to show 'enter:details'")
+	if !strings.Contains(view, "a:add") {
+		t.Error("expected list view to show 'a:add'")
+	}
+	if !strings.Contains(view, "e:edit") {
+		t.Error("expected list view to show 'e:edit'")
+	}
+	if !strings.Contains(view, "d:delete") {
+		t.Error("expected list view to show 'd:delete'")
+	}
+	if !strings.Contains(view, "l:logs") {
+		t.Error("expected list view to show 'l:logs'")
 	}
 }
 

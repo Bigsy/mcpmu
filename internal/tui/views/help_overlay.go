@@ -97,8 +97,11 @@ func (m HelpOverlayModel) helpContent() string {
 			{"Esc", "Go back / close"},
 		}),
 		m.renderSection("Server Actions", [][]string{
-			{"t", "Test toggle (start/stop)"},
-			{"e", "Toggle enabled/disabled"},
+			{"t", "Test server (start/stop)"},
+			{"E", "Enable/disable (for stdio mode)"},
+			{"a", "Add new server"},
+			{"e", "Edit server"},
+			{"d", "Delete server"},
 		}),
 		m.renderSection("Logs", [][]string{
 			{"l", "Toggle log panel"},

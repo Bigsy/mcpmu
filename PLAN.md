@@ -56,12 +56,15 @@ Enable mcp-studio to be spawned by Claude Code as an MCP server.
 - Manager tools (servers_list, servers_start, etc.)
 - Namespace selection and enforcement
 
-### [Phase 2: Multi-Server TUI](plan2.md) ⬜
-Server list view, CRUD operations, start/stop, log streaming.
-- Server add/edit/delete forms
-- Multi-server registry
-- Real-time log viewer
+### [Phase 2: Multi-Server TUI](plan2.md) ✅
+Server list view, CRUD operations, log streaming.
+- Server add/edit/delete forms (huh library)
+- Test toggle (t) for start/stop testing
+- Enable/disable (E) for stdio serve mode
+- Real-time log viewer with timestamps
 - Server detail view with tools list
+- Toast notifications
+- Autostart on app launch
 
 ### [Phase 3: Namespaces](plan3.md) ⬜
 Namespace CRUD, server assignment, tool permissions UI.
@@ -96,7 +99,7 @@ SSE client transport, OAuth browser flow, token storage/refresh, polish.
 | 1 - Foundation | ✅ Complete | 5/5 | |
 | 1.1 - Testing | ✅ Complete | 5/5 | Fake MCP server, integration tests |
 | 1.5 - stdio Server | ✅ Complete | 6/6 | MCP server mode for Claude Code |
-| 2 - Multi-Server | ⬜ Not Started | 0/6 | |
+| 2 - Multi-Server | ✅ Complete | 6/6 | CRUD forms, toasts, autostart |
 | 3 - Namespaces | ⬜ Not Started | 0/7 | |
 | 4 - Proxies | ⬜ Not Started | 0/10 | |
 | 5 - SSE + OAuth | ⬜ Not Started | 0/12 | |

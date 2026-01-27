@@ -20,14 +20,15 @@ const (
 // ServerConfig represents an MCP server configuration.
 // Field names are compatible with mcpServers format for easy copy/paste.
 type ServerConfig struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	Kind    ServerKind        `json:"kind"`
-	Enabled *bool             `json:"enabled,omitempty"` // nil treated as true (enabled by default)
-	Command string            `json:"command,omitempty"` // stdio only
-	Args    []string          `json:"args,omitempty"`    // stdio only
-	Cwd     string            `json:"cwd,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Kind      ServerKind        `json:"kind"`
+	Enabled   *bool             `json:"enabled,omitempty"`   // nil treated as true (enabled by default)
+	Autostart bool              `json:"autostart,omitempty"` // start server automatically on app launch
+	Command   string            `json:"command,omitempty"`   // stdio only
+	Args      []string          `json:"args,omitempty"`      // stdio only
+	Cwd       string            `json:"cwd,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
 
 	// SSE-specific fields (Phase 5)
 	URL     string            `json:"url,omitempty"`
