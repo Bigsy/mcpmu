@@ -29,6 +29,16 @@ type Options struct {
 	ProtocolVersion string
 }
 
+// SelectionMethod indicates how the active namespace was selected.
+type SelectionMethod string
+
+const (
+	SelectionFlag    SelectionMethod = "flag"    // --namespace flag
+	SelectionDefault SelectionMethod = "default" // config.defaultNamespaceId
+	SelectionOnly    SelectionMethod = "only"    // only one namespace exists
+	SelectionAll     SelectionMethod = "all"     // no namespaces, all servers exposed
+)
+
 // Server is an MCP server that aggregates tools from managed upstream servers.
 type Server struct {
 	opts       Options
@@ -40,15 +50,16 @@ type Server struct {
 
 	// Active namespace (resolved at init)
 	activeNamespace   *config.NamespaceConfig
-	activeServerIDs   []string // Server IDs in the active namespace (or all if no namespace)
+	activeServerIDs   []string        // Server IDs in the active namespace (or all if no namespace)
+	selectionMethod   SelectionMethod // How the namespace was selected
 
 	// Protocol state
 	initialized bool
 	mu          sync.RWMutex
 
 	// IO
-	reader *bufio.Reader
-	writer io.Writer
+	reader  *bufio.Reader
+	writer  io.Writer
 	writeMu sync.Mutex
 }
 
@@ -76,35 +87,64 @@ func New(opts Options) (*Server, error) {
 	return s, nil
 }
 
+// readResult holds a line read from stdin and any error.
+type readResult struct {
+	line []byte
+	err  error
+}
+
 // Run starts the server and processes requests until context is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	defer s.shutdown()
+
+	// Start a goroutine to read lines from stdin
+	lines := make(chan readResult)
+	go func() {
+		defer close(lines)
+		for {
+			line, err := s.reader.ReadBytes('\n')
+			if len(line) > 0 {
+				// ReadBytes buffer is only valid until the next read, so clone it.
+				line = append([]byte(nil), line...)
+			}
+			select {
+			case lines <- readResult{line, err}:
+				if err != nil {
+					return // Stop reading on error (including EOF)
+				}
+			case <-ctx.Done():
+				return // Stop reading when context is cancelled
+			}
+		}
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
-		}
 
-		// Read next request
-		line, err := s.reader.ReadBytes('\n')
-
-		// Process any data we got, even if there's an error (e.g., EOF without newline)
-		line = bytes.TrimSpace(line)
-		if len(line) > 0 {
-			if msgErr := s.handleMessage(ctx, line); msgErr != nil {
-				log.Printf("Error handling message: %v", msgErr)
-			}
-		}
-
-		// Now handle the read error
-		if err != nil {
-			if err == io.EOF {
-				log.Println("Client closed connection (EOF)")
+		case r, ok := <-lines:
+			if !ok {
+				// Channel closed, reader goroutine exited
 				return nil
 			}
-			return fmt.Errorf("read request: %w", err)
+
+			// Process any data we got, even if there's an error (e.g., EOF without newline)
+			line := bytes.TrimSpace(r.line)
+			if len(line) > 0 {
+				if msgErr := s.handleMessage(ctx, line); msgErr != nil {
+					log.Printf("Error handling message: %v", msgErr)
+				}
+			}
+
+			// Handle the read error
+			if r.err != nil {
+				if r.err == io.EOF {
+					log.Println("Client closed connection (EOF)")
+					return nil
+				}
+				return fmt.Errorf("read request: %w", r.err)
+			}
 		}
 	}
 }
@@ -192,6 +232,13 @@ func (s *Server) handleInitialize(ctx context.Context, params json.RawMessage) (
 	if err := s.resolveNamespace(); err != nil {
 		return nil, err
 	}
+
+	// Update router with active namespace info
+	activeID := ""
+	if s.activeNamespace != nil {
+		activeID = s.activeNamespace.ID
+	}
+	s.router.SetActiveNamespace(activeID, s.selectionMethod)
 
 	s.initialized = true
 
@@ -293,7 +340,8 @@ func (s *Server) resolveNamespace() *RPCError {
 			if cfg.Namespaces[i].ID == namespaceID {
 				s.activeNamespace = &cfg.Namespaces[i]
 				s.activeServerIDs = cfg.Namespaces[i].ServerIDs
-				log.Printf("Using namespace %q with %d servers", namespaceID, len(s.activeServerIDs))
+				s.selectionMethod = SelectionFlag
+				log.Printf("Using namespace %q with %d servers (selection: flag)", namespaceID, len(s.activeServerIDs))
 				return nil
 			}
 		}
@@ -306,7 +354,8 @@ func (s *Server) resolveNamespace() *RPCError {
 			if cfg.Namespaces[i].ID == cfg.DefaultNamespaceID {
 				s.activeNamespace = &cfg.Namespaces[i]
 				s.activeServerIDs = cfg.Namespaces[i].ServerIDs
-				log.Printf("Using default namespace %q with %d servers", cfg.DefaultNamespaceID, len(s.activeServerIDs))
+				s.selectionMethod = SelectionDefault
+				log.Printf("Using default namespace %q with %d servers (selection: default)", cfg.DefaultNamespaceID, len(s.activeServerIDs))
 				return nil
 			}
 		}
@@ -317,7 +366,8 @@ func (s *Server) resolveNamespace() *RPCError {
 	if len(cfg.Namespaces) == 1 {
 		s.activeNamespace = &cfg.Namespaces[0]
 		s.activeServerIDs = cfg.Namespaces[0].ServerIDs
-		log.Printf("Using only namespace %q with %d servers", cfg.Namespaces[0].ID, len(s.activeServerIDs))
+		s.selectionMethod = SelectionOnly
+		log.Printf("Using only namespace %q with %d servers (selection: only)", cfg.Namespaces[0].ID, len(s.activeServerIDs))
 		return nil
 	}
 
@@ -330,7 +380,8 @@ func (s *Server) resolveNamespace() *RPCError {
 				s.activeServerIDs = append(s.activeServerIDs, id)
 			}
 		}
-		log.Printf("No namespaces configured, exposing all %d enabled servers", len(s.activeServerIDs))
+		s.selectionMethod = SelectionAll
+		log.Printf("No namespaces configured, exposing all %d enabled servers (selection: all)", len(s.activeServerIDs))
 		return nil
 	}
 

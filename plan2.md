@@ -3,6 +3,23 @@
 ## Objective
 Extend the TUI to manage multiple servers with full CRUD operations, start/stop controls, and real-time log streaming. This phase makes the Servers tab fully functional.
 
+## Deferred from Phase 1.5
+These items were deferred from stdio server mode and should be addressed here or later:
+- [ ] `mcp-studio.config_reload` tool - only matters for long-lived sessions (could skip entirely)
+- [ ] `--log-level` actual filtering - currently parses flag but doesn't filter (polish item)
+- [ ] `notifications/cancelled` propagation to upstream servers - add when needed
+
+## Architecture Notes
+**Existing primitives cover most needs - extend, don't recreate:**
+- `process.Supervisor` + `events.Bus` = multi-server registry (no need for new wrapper)
+- Log streaming already wired: stderr → events → views
+- Views exist (`server_list`, `server_detail`, `log_panel`) - extend these, don't create new components
+
+**Phase 2 should focus on:**
+- CRUD forms using `huh` + confirm dialogs
+- `autostart` config field
+- UX polish in existing views
+
 ## Features
 
 ### Server CRUD Operations
@@ -26,12 +43,13 @@ Extend the TUI to manage multiple servers with full CRUD operations, start/stop 
 - [ ] Last exit metadata display (exit code, signal, timestamp)
 
 ### Log Streaming
-- [ ] Real-time stderr capture from server processes
-- [ ] Log buffer with configurable size (last N lines, default 1000)
-- [ ] Log deduplication (collapse repeated lines)
-- [ ] Log viewer panel (scrollable, auto-scroll to bottom)
-- [ ] Toggle log viewer visibility (l key)
-- [ ] Log timestamps
+**Note: Basic log streaming already wired (stderr → events → log_panel):**
+- [x] Real-time stderr capture from server processes → Already implemented
+- [x] Log buffer with configurable size (last N lines, default 1000) → Already implemented
+- [x] Log viewer panel (scrollable, auto-scroll to bottom) → `log_panel.go` exists
+- [x] Toggle log viewer visibility (l key) → Already bound
+- [ ] Log deduplication (collapse repeated lines) - polish
+- [ ] Log timestamps - polish
 
 ### Server Detail View
 - [ ] Split view: server list | detail pane
@@ -40,9 +58,10 @@ Extend the TUI to manage multiple servers with full CRUD operations, start/stop 
 - [ ] Log viewer embedded in detail view
 
 ### Multi-Server Registry
-- [ ] ServerRegistry manages multiple McpClient instances
-- [ ] Concurrent connection support
-- [ ] Status events broadcast to TUI via event bus
+**Note: `process.Supervisor` + `events.Bus` already provide this - extend rather than create new:**
+- [x] ServerRegistry manages multiple McpClient instances → `process.Supervisor` already does this
+- [x] Concurrent connection support → Already implemented
+- [x] Status events broadcast to TUI via event bus → `events.Bus` already wired
 - [ ] Tool cache per server (persists across reconnects)
 - [ ] Tool discovery on connect + periodic refresh
 - [ ] Offline tool representation (for Phase 3 permissions when server is stopped)
@@ -100,17 +119,19 @@ Extend the TUI to manage multiple servers with full CRUD operations, start/stop 
 ```
 internal/
   config/
-    config.go       # Add server CRUD methods
-  mcp/
-    registry.go     # Multi-server registry
-    events.go       # Event types and dispatcher
+    config.go           # Add server CRUD methods, autostart field
+  process/
+    supervisor.go       # Already exists - extend if needed
+  events/
+    bus.go              # Already exists - extend if needed
   tui/
-    server_list.go  # Enhanced list with status
-    server_form.go  # Add/edit form using huh
-    server_detail.go # Detail view component
-    log_viewer.go   # Log viewer component
-    confirm.go      # Confirmation dialog
-    messages.go     # Bubble Tea messages
+    views/
+      server_list.go    # Already exists - extend with status indicators
+      server_detail.go  # Already exists - extend with tools list
+      log_panel.go      # Already exists - extend with timestamps, dedup
+    server_form.go      # NEW: Add/edit form using huh
+    confirm.go          # NEW: Confirmation dialog
+    messages.go         # Already exists - add new message types
 ```
 
 ## Estimated Complexity

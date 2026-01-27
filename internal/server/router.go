@@ -23,6 +23,10 @@ type Router struct {
 	cfg        *config.Config
 	supervisor *process.Supervisor
 	aggregator *Aggregator
+
+	// Active namespace info (set after initialize)
+	activeNamespaceID string
+	selectionMethod   SelectionMethod
 }
 
 // NewRouter creates a new tool call router.
@@ -32,6 +36,12 @@ func NewRouter(cfg *config.Config, supervisor *process.Supervisor, aggregator *A
 		supervisor: supervisor,
 		aggregator: aggregator,
 	}
+}
+
+// SetActiveNamespace sets the active namespace info for the router.
+func (r *Router) SetActiveNamespace(namespaceID string, selection SelectionMethod) {
+	r.activeNamespaceID = namespaceID
+	r.selectionMethod = selection
 }
 
 // CallTool routes a tool call to the appropriate server and returns the result.
@@ -285,7 +295,7 @@ func (r *Router) handleServerLogs(ctx context.Context, arguments json.RawMessage
 	return textResult(result), nil
 }
 
-// handleNamespacesList returns the list of namespaces.
+// handleNamespacesList returns the list of namespaces with active namespace info.
 func (r *Router) handleNamespacesList(ctx context.Context) (*ToolCallResult, *RPCError) {
 	namespaces := make([]NamespaceInfo, len(r.cfg.Namespaces))
 	for i, ns := range r.cfg.Namespaces {
@@ -298,7 +308,14 @@ func (r *Router) handleNamespacesList(ctx context.Context) (*ToolCallResult, *RP
 		}
 	}
 
-	return textResult(mustJSON(namespaces)), nil
+	// Return envelope with active namespace info
+	result := NamespacesListResult{
+		ActiveNamespaceID: r.activeNamespaceID,
+		Selection:         string(r.selectionMethod),
+		Namespaces:        namespaces,
+	}
+
+	return textResult(mustJSON(result)), nil
 }
 
 // ServerInfo represents server status information.
@@ -321,6 +338,13 @@ type NamespaceInfo struct {
 	Description string   `json:"description,omitempty"`
 	ServerCount int      `json:"serverCount"`
 	ServerIDs   []string `json:"serverIds"`
+}
+
+// NamespacesListResult is the envelope for the namespaces_list response.
+type NamespacesListResult struct {
+	ActiveNamespaceID string          `json:"activeNamespaceId"`
+	Selection         string          `json:"selection"` // "flag", "default", "only", or "all"
+	Namespaces        []NamespaceInfo `json:"namespaces"`
 }
 
 // ToolCallResult represents the result of a tool call.
