@@ -71,6 +71,77 @@ func runCLI(binary, configPath string, args ...string) (string, string, error) {
 	return stdout.String(), stderr.String(), err
 }
 
+func TestParseEnvFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   []string
+		want    map[string]string
+		wantErr bool
+	}{
+		{
+			name:  "nil input",
+			input: nil,
+			want:  nil,
+		},
+		{
+			name:  "empty input",
+			input: []string{},
+			want:  nil,
+		},
+		{
+			name:  "single valid",
+			input: []string{"FOO=bar"},
+			want:  map[string]string{"FOO": "bar"},
+		},
+		{
+			name:  "multiple valid",
+			input: []string{"FOO=bar", "BAZ=qux"},
+			want:  map[string]string{"FOO": "bar", "BAZ": "qux"},
+		},
+		{
+			name:  "empty value",
+			input: []string{"FOO="},
+			want:  map[string]string{"FOO": ""},
+		},
+		{
+			name:  "value with equals",
+			input: []string{"FOO=bar=baz"},
+			want:  map[string]string{"FOO": "bar=baz"},
+		},
+		{
+			name:    "missing equals",
+			input:   []string{"INVALID"},
+			wantErr: true,
+		},
+		{
+			name:    "empty key",
+			input:   []string{"=value"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseEnvFlags(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseEnvFlags() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr {
+				if len(got) != len(tt.want) {
+					t.Errorf("parseEnvFlags() got %v, want %v", got, tt.want)
+					return
+				}
+				for k, v := range tt.want {
+					if got[k] != v {
+						t.Errorf("parseEnvFlags()[%q] = %q, want %q", k, got[k], v)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestCLI_Add(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)

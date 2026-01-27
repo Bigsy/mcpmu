@@ -1,129 +1,265 @@
-# Phase 3: Namespaces
+# Phase 3: Namespaces & Permissions
 
 ## Objective
-Implement namespace management for grouping servers and controlling tool permissions. This enables fine-grained access control for which tools are exposed via stdio mode (and HTTP proxies if Phase 4 is implemented later).
+Implement namespace management and tool permission enforcement. This enables fine-grained access control for which tools are exposed via stdio mode.
 
-## Features
+---
 
-### Active Namespace Selection (stdio mode)
-- [ ] Config: `defaultNamespaceId` (optional, but recommended)
-- [ ] `mcp-studio serve --namespace <id>` selects the active namespace/toolset
-- [ ] If `--namespace` omitted: use `defaultNamespaceId` if present; else auto-select if exactly 1 namespace; else expose all servers if 0 namespaces; else fail `initialize` with actionable error
-- [ ] Only servers assigned to the active namespace contribute tools in stdio mode
-- [ ] Tool permission evaluation uses the active namespace only
+## Status
 
-### Namespace CRUD
-- [ ] Create namespace form:
-  - ID (required, unique)
-  - Name (display name)
-  - Description (optional)
-- [ ] Edit namespace
-- [ ] Delete namespace (with orphan check)
-- [ ] Namespace list view (new tab in TUI)
+### ✅ Already Implemented (Phase 2)
+- [x] Namespace selection for stdio mode (`--namespace` flag)
+- [x] Auto-selection rules (default → only → all → error)
+- [x] Server filtering by active namespace
+- [x] `mcp-studio.namespaces_list` tool
+- [x] Config schema for namespaces and tool permissions
 
-### Server Assignment
-- [ ] Assign servers to namespaces (multi-select)
-- [ ] Server can belong to multiple namespaces
-- [ ] Visual indicator of namespace membership in server list
-- [ ] "Manage Servers" action from namespace detail view
+### 🎯 Phase 3 Scope (Minimal)
+- [ ] Permission evaluation in `tools/call`
+- [ ] Safe tool classification (pattern-based, for future bulk actions)
+- [ ] CLI namespace management (`namespace add/list/remove/assign`)
+- [ ] CLI permission management (`permission set/unset/list`)
 
-### Tool Permissions
-- [ ] Tool permission grid: namespace × server × tool
-- [ ] Permission states: enabled, disabled, prompt (future)
-- [ ] Default behavior: unconfigured tools enabled until server has any explicit permissions
-- [ ] **Deny by default option**: namespace-level setting to deny unspecified tools
-- [ ] Bulk actions:
-  - "Enable All" - enable all tools for a server
-  - "Disable All" - disable all tools for a server
-  - "Enable Safe Tools" - rule-based classification
-- [ ] **Safe tool classification rules** (not just heuristic):
-  - Pattern matching on tool name prefixes/suffixes
-  - Safe (read-only): read, get, list, search, view, show, describe, fetch, query
-  - Unsafe (mutating): write, update, delete, execute, run, create, set, modify, remove, post, put, patch
-  - Unknown: tools that don't match either pattern → follow namespace default
-  - User can override classification per-tool
-
-### Tool Permission Persistence
-- [ ] Store permissions in config: `namespaceId:serverId:toolName → enabled`
-- [ ] Efficient lookup structure (map of maps)
-- [ ] Serialize/deserialize with config
-
-### Namespace Detail View
-- [ ] Show namespace metadata
-- [ ] List assigned servers with status
-- [ ] Tool count summary (enabled/total)
-- [ ] "Manage Tools" action opens permission editor
-
-### Tool Permission Editor
-- [ ] Modal or dedicated view
-- [ ] Grouped by server
-- [ ] Checkbox per tool
-- [ ] Server-level bulk toggles
+### 🔮 Deferred to Future Phase
+- [ ] TUI Namespaces tab
+- [ ] TUI tool permission editor (modal/grid)
+- [ ] Cached tool lists for offline permission editing
+- [ ] Visual namespace indicators in server list
+- [ ] Bulk permission actions (`enable-safe`, `deny-all`) - requires cached tools
 - [ ] Tool description tooltips
 - [ ] Search/filter tools by name
 
-### TUI Tab Navigation
-- [ ] Servers tab (from Phase 2)
-- [ ] Namespaces tab (new)
-- [ ] Tab switching with number keys (1, 2) or Tab key
-- [ ] Visual indicator of active tab
+---
 
-### Tool Name Namespacing
-- [ ] Internal qualified tool identity: `{namespaceId}:{serverId}:{toolName}`
-- [ ] Used internally for tool permission lookups and routing
-- [ ] Prevents collision when same server in multiple namespaces
-- [ ] Exposed tool name in stdio mode remains `{serverId}.{toolName}` because stdio selects a single namespace at startup
+## Design Decisions
 
-## Dependencies
-- Phase 2: Multi-server management, TUI framework
-- See [PLAN-ui.md](PLAN-ui.md) for namespace list and tool permissions modal specs
+### Namespace Identity: Name vs ID
+**Names are user-facing, IDs are internal** (same as servers).
 
-## Unknowns / Questions
-1. **Permission Granularity**: Per-namespace or global tool permissions? (Design: per-namespace)
-2. **Default Namespace**: Should there be a default namespace? Or require explicit assignment?
-3. **Orphan Handling**: What happens to servers when their namespace is deleted?
-4. **Tool Discovery Timing**: When to refresh tool list? On server connect? On demand?
-5. **Tool Identity**: How to handle tool name collisions? Key by `(serverId, toolName)` or qualified alias?
-6. **Offline Permissions**: Allow editing permissions for servers that aren't running (using cached tools)?
+- Users interact via namespace name (unique, human-readable)
+- IDs are auto-generated 4-char strings (internal only)
+- CLI commands accept names, lookup by name → ID internally
+- Config stores ID references (`defaultNamespaceId`, `ToolPermission.NamespaceID`)
 
-## Risks
-1. **Stale Tool Lists**: If server's tools change, cached permissions may reference non-existent tools. Need graceful handling.
-2. **Complex UI State**: Tool permission editor has many interacting elements. Need careful state management.
-3. **Safe Tool Heuristic**: Pattern matching may have false positives/negatives. Should be overridable.
-4. **Tool Metadata Quality**: Many MCP tools won't clearly declare mutability. Fallback behavior needed.
-5. **Permissions Pending**: What if tool hasn't been discovered yet? Mark as "pending" until server runs.
+### tools/list Behavior
+**Show all tools, block on call.**
 
-## Success Criteria
-- Can create/edit/delete namespaces
-- Can assign servers to namespaces
-- Tool permission editor works correctly
-- "Enable Safe Tools" applies correct permissions
-- Permissions persist across restarts
-- Tab navigation works smoothly
+- `tools/list` returns ALL tools regardless of permissions
+- Permission enforcement happens only in `tools/call`
+- Rationale: Simpler, more transparent, avoids cache invalidation issues
+
+### Safe Tool Classification
+**Strip server prefix before matching.**
+
+- Input: `filesystem.read_file` → classify `read_file`
+- Patterns match against unqualified tool name only
+
+### No Namespace (selection=all) Behavior
+**Skip permission checks entirely.**
+
+When no namespaces are configured and `selectionMethod=all`:
+- No active namespace to check permissions against
+- All tool calls are allowed
+- Rationale: If user hasn't set up namespaces, they haven't set up permissions
+
+---
+
+## Phase 3 Implementation Plan
+
+### 1. Permission Evaluation (`internal/server/permissions.go`)
+
+Add permission checking to `tools/call` handler:
+
+```go
+type PermissionResult int
+const (
+    PermissionAllow PermissionResult = iota
+    PermissionDeny
+    PermissionDefault  // No explicit rule, use namespace default
+)
+
+func (r *Router) CheckPermission(namespaceID, serverID, toolName string) PermissionResult
+```
+
+**Evaluation order:**
+1. Check explicit `ToolPermission` entry → return Allow/Deny
+2. No explicit entry → check namespace `DenyByDefault` setting
+3. If `DenyByDefault=true` → Deny
+4. Otherwise → Allow
+
+**Config changes:**
+- Add `DenyByDefault bool` to `NamespaceConfig`
+
+### 2. Safe Tool Classification (`internal/server/safe_tools.go`)
+
+Pattern-based classification for bulk permission assignment:
+
+```go
+type ToolClassification int
+const (
+    ToolSafe    ToolClassification = iota  // Read-only operations
+    ToolUnsafe                              // Mutating operations
+    ToolUnknown                             // Can't determine
+)
+
+func ClassifyTool(toolName string) ToolClassification
+```
+
+**Safe patterns** (read-only):
+- `read`, `get`, `list`, `search`, `view`, `show`, `describe`, `fetch`, `query`, `find`, `lookup`
+
+**Unsafe patterns** (mutating):
+- `write`, `update`, `delete`, `execute`, `run`, `create`, `set`, `modify`, `remove`, `post`, `put`, `patch`, `send`, `invoke`
+
+**Matching:** Check if tool name contains pattern (case-insensitive).
+
+### 3. CLI Namespace Management
+
+```bash
+# Create namespace
+mcp-studio namespace add <name> [--description "..."]
+
+# List namespaces
+mcp-studio namespace list [--json]
+
+# Remove namespace
+mcp-studio namespace remove <name> [--yes]
+
+# Assign server to namespace
+mcp-studio namespace assign <namespace-name> <server-name>
+
+# Unassign server from namespace
+mcp-studio namespace unassign <namespace-name> <server-name>
+
+# Set as default namespace
+mcp-studio namespace default <name>
+```
+
+### 4. CLI Permission Management
+
+```bash
+# Set permission for a tool
+mcp-studio permission set <namespace> <server> <tool> allow|deny
+
+# Remove explicit permission (revert to default)
+mcp-studio permission unset <namespace> <server> <tool>
+
+# List permissions for namespace
+mcp-studio permission list <namespace> [--json]
+
+# Bulk: enable safe tools for a server in namespace
+mcp-studio permission enable-safe <namespace> <server>
+
+# Bulk: deny all tools for a server in namespace
+mcp-studio permission deny-all <namespace> <server>
+
+# Set namespace default behavior
+mcp-studio namespace set-default-deny <namespace> true|false
+```
+
+---
+
+## Deferred Features (Future Phase)
+
+### TUI Namespaces Tab
+- Tab navigation (1=Servers, 2=Namespaces)
+- Namespace list view with server counts
+- Namespace detail view
+- Create/edit/delete forms
+
+### TUI Tool Permission Editor
+- Modal or dedicated view
+- Grouped by server
+- Checkbox per tool
+- Bulk toggles
+- Requires either:
+  - **On-demand:** Only edit when server is running (simpler)
+  - **Cached:** Persist discovered tool lists (better UX, more complexity)
+
+**Why deferred:** High UI complexity. CLI provides equivalent functionality for power users. TUI can be added later when the backend is stable.
+
+### Cached Tool Lists
+- Persist `tools/list` results to config or separate file
+- Enables offline permission editing
+- Requires cache invalidation strategy
+
+**Why deferred:** Adds complexity (staleness, invalidation). On-demand discovery is sufficient for MVP.
+
+---
 
 ## Files to Create/Modify
+
+### Phase 3 (Minimal)
 ```
 internal/
+  server/
+    permissions.go      # Permission evaluation logic
+    safe_tools.go       # Tool classification
+    router.go           # Add permission check to tools/call
   config/
-    config.go       # Add namespace and permission types
-    permissions.go  # Permission evaluation logic
-  namespace/
-    namespace.go    # Namespace management
-    permissions.go  # Tool permission logic
-    safe_tools.go   # Safe tool heuristic
-  tui/
-    model.go        # Add tab navigation
-    tabs.go         # Tab bar component
-    namespace_list.go    # Namespace list view
-    namespace_form.go    # Namespace form
-    namespace_detail.go  # Namespace detail view
-    tool_permissions.go  # Permission editor
-    server_picker.go     # Multi-select server picker
+    schema.go           # Add DenyByDefault to NamespaceConfig
+
+cmd/mcp-studio/
+    namespace.go        # namespace command group
+    namespace_add.go
+    namespace_list.go
+    namespace_remove.go
+    namespace_assign.go
+    permission.go       # permission command group
+    permission_set.go
+    permission_list.go
 ```
 
+### Deferred (Future)
+```
+internal/
+  tui/
+    tabs.go                 # Tab bar component
+    namespace_list.go       # Namespace list view
+    namespace_form.go       # Create/edit form
+    namespace_detail.go     # Detail view
+    tool_permissions.go     # Permission editor modal
+    server_picker.go        # Multi-select for assignment
+```
+
+---
+
+## Tests
+
+### Unit Tests
+- `permissions_test.go`: Permission evaluation (allow/deny/default paths)
+- `safe_tools_test.go`: Tool classification patterns
+- `cli_test.go`: Namespace and permission CLI commands
+
+### Integration Tests
+- Create namespace → assign server → set permissions → verify `tools/call` enforcement
+- Deny-by-default behavior
+- Safe tool bulk enable
+
+---
+
+## Success Criteria (Phase 3 Minimal)
+- [ ] `tools/call` respects permission settings
+- [ ] Denied tools return clear error message
+- [ ] `DenyByDefault` namespace setting works
+- [ ] Safe tool classification is accurate
+- [ ] CLI can fully manage namespaces and permissions
+- [ ] All changes persist to config
+
+---
+
+## Risks
+1. **Permission bypass:** Must ensure ALL tool calls go through permission check
+2. **Safe tool false positives:** Pattern matching may miscategorize tools; user can override
+3. **Namespace deletion:** Need to handle orphaned permissions gracefully
+
+---
+
 ## Estimated Complexity
-- Namespace CRUD: Low
-- Server assignment: Low-Medium
-- Tool permissions: Medium-High
-- Permission editor UI: High
-- Total: ~1800-2500 lines of Go code (cumulative ~4300-5700)
+- Permission evaluation: Low (~150 lines)
+- Safe tool classification: Low (~100 lines)
+- CLI commands: Medium (~400 lines)
+- Tests: Medium (~300 lines)
+- **Total: ~950 lines**
+
+Deferred TUI work would add ~1500-2000 lines.
