@@ -363,7 +363,15 @@ func (c *Config) deleteNamespace(index int, id string) error {
 }
 
 // UpdateNamespace updates an existing namespace configuration.
+// Returns an error if the new name conflicts with another namespace.
 func (c *Config) UpdateNamespace(ns NamespaceConfig) error {
+	// Check for duplicate name (but allow keeping the same name)
+	if ns.Name != "" {
+		if existing := c.FindNamespaceByName(ns.Name); existing != nil && existing.ID != ns.ID {
+			return fmt.Errorf("namespace with name %q already exists", ns.Name)
+		}
+	}
+
 	for i := range c.Namespaces {
 		if c.Namespaces[i].ID == ns.ID {
 			c.Namespaces[i] = ns

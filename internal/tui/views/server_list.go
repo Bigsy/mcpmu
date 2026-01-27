@@ -14,8 +14,9 @@ import (
 
 // ServerItem represents a server in the list.
 type ServerItem struct {
-	Config config.ServerConfig
-	Status events.ServerStatus
+	Config     config.ServerConfig
+	Status     events.ServerStatus
+	Namespaces []string // Names of namespaces this server belongs to
 }
 
 func (i ServerItem) Title() string       { return i.Config.Name }
@@ -174,6 +175,18 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	if !enabled {
 		line1.WriteString(" ")
 		line1.WriteString(d.theme.Faint.Render("[disabled]"))
+	}
+
+	// Namespace badges on first line
+	if len(si.Namespaces) > 0 {
+		line1.WriteString("  ")
+		for i, ns := range si.Namespaces {
+			if i > 0 {
+				line1.WriteString(" ")
+			}
+			// Short namespace indicator
+			line1.WriteString(d.theme.Faint.Render("[" + ns + "]"))
+		}
 	}
 
 	// Second line: command (truncated), tool count

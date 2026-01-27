@@ -267,12 +267,35 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 		s.mu.RUnlock()
 		return nil, ErrInvalidRequest("not initialized")
 	}
+	activeNamespaceID := ""
+	if s.activeNamespace != nil {
+		activeNamespaceID = s.activeNamespace.ID
+	}
 	s.mu.RUnlock()
 
 	// Get aggregated tools
 	tools, err := s.aggregator.ListTools(ctx, s.activeServerIDs)
 	if err != nil {
 		return nil, ErrInternalError(err.Error())
+	}
+
+	// Filter tools based on permissions (if namespace is active)
+	if activeNamespaceID != "" {
+		filtered := make([]AggregatedTool, 0, len(tools))
+		for _, tool := range tools {
+			serverID, toolName, isManager := ParseToolName(tool.Name)
+			// Manager tools are always shown
+			if isManager {
+				filtered = append(filtered, tool)
+				continue
+			}
+			// Check permission for regular tools
+			allowed, _ := IsToolAllowed(s.cfg, activeNamespaceID, serverID, toolName)
+			if allowed {
+				filtered = append(filtered, tool)
+			}
+		}
+		tools = filtered
 	}
 
 	return toolsListResult{Tools: tools}, nil

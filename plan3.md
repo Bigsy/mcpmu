@@ -20,14 +20,20 @@ Implement namespace management and tool permission enforcement. This enables fin
 - [x] CLI namespace management (`namespace add/list/remove/assign`)
 - [x] CLI permission management (`permission set/unset/list`)
 
-### 🔮 Deferred to Future Phase
-- [ ] TUI Namespaces tab
-- [ ] TUI tool permission editor (modal/grid)
-- [ ] Cached tool lists for offline permission editing
-- [ ] Visual namespace indicators in server list
-- [ ] Bulk permission actions (`enable-safe`, `deny-all`) - requires cached tools
-- [ ] Tool description tooltips
-- [ ] Search/filter tools by name
+### ✅ Phase 3.1 - TUI Namespaces (Completed)
+- [x] TUI Namespaces tab (Tab 2)
+- [x] TUI namespace list/detail/form views
+- [x] TUI tool permission editor (modal, shows tools from running servers)
+- [x] Server picker for namespace assignment
+- [x] Visual namespace indicators in server list
+- [x] Duplicate namespace name validation on edit
+- [x] Permission revert-to-default (toggle back removes explicit permission)
+
+### 📋 Remaining Work (Phase 3.2)
+- [ ] Auto-start servers in test mode when opening permission editor (currently requires manual start)
+- [ ] Bulk permission actions (`enable-safe`, `deny-all`) using safe tool classification
+- [ ] Tool description tooltips in permission editor
+- [ ] Search/filter tools by name in permission editor
 
 ---
 
@@ -159,93 +165,99 @@ mcp-studio permission list <namespace> [--json]
 
 ---
 
-## Deferred Features (Future Phase)
+## Completed Features
 
-### TUI Namespaces Tab
+### TUI Namespaces Tab ✅
 - Tab navigation (1=Servers, 2=Namespaces)
-- Namespace list view with server counts
-- Namespace detail view
-- Create/edit/delete forms
+- Namespace list view with server counts, default indicator, deny-by-default indicator
+- Namespace detail view showing assigned servers and configured permissions
+- Create/edit/delete forms with dirty checking
+- Server picker modal for assignment
+- Visual namespace badges on server list
 
-### TUI Tool Permission Editor
-- Modal or dedicated view
-- Grouped by server
-- Checkbox per tool
-- Bulk toggles
-- Requires either:
-  - **On-demand:** Only edit when server is running (simpler)
-  - **Cached:** Persist discovered tool lists (better UX, more complexity)
+### TUI Tool Permission Editor ✅
+- Modal view opened from namespace detail (`p` key)
+- Tools grouped by server
+- Toggle enable/disable per tool
+- Shows current state and whether explicit or default
+- Revert-to-default by toggling back to namespace default value
+- **Approach:** On-demand - starts servers in test mode to discover tools (no caching needed)
 
-**Why deferred:** High UI complexity. CLI provides equivalent functionality for power users. TUI can be added later when the backend is stable.
+## Remaining Work (Phase 3.2)
 
-### Cached Tool Lists
-- Persist `tools/list` results to config or separate file
-- Enables offline permission editing
-- Requires cache invalidation strategy
+### Auto-start for Permission Editing
+Currently user must manually start servers before opening permission editor. Should auto-start assigned servers in test mode when `p` is pressed, then show the permission editor once tools are discovered.
 
-**Why deferred:** Adds complexity (staleness, invalidation). On-demand discovery is sufficient for MVP.
+### Bulk Permission Actions
+- `enable-safe` - Allow all tools classified as safe (read-only)
+- `deny-all` - Deny all tools (then selectively allow)
+- Uses existing `ClassifyTool()` from `safe_tools.go`
+
+### UX Improvements
+- Tool description tooltips (show full description on hover/focus)
+- Search/filter tools by name in large lists
 
 ---
 
-## Files to Create/Modify
+## Files Created/Modified
 
-### Phase 3 (Minimal)
+### Phase 3 (CLI + Server) ✅
 ```
-internal/
-  server/
-    permissions.go      # Permission evaluation logic
-    safe_tools.go       # Tool classification (for future bulk actions)
-    router.go           # Add permission check to tools/call
-  config/
-    schema.go           # Add DenyByDefault to NamespaceConfig
-    config.go           # Add FindNamespaceByName, AddNamespace, DeleteNamespaceByName
-
+internal/server/
+    permissions.go          # Permission evaluation logic ✅
+    safe_tools.go           # Tool classification ✅
+    router.go               # Permission check in tools/call ✅
+internal/config/
+    schema.go               # DenyByDefault in NamespaceConfig ✅
+    config.go               # Namespace CRUD, UpdateNamespace duplicate check ✅
 cmd/mcp-studio/
-    namespace.go        # namespace command group
-    namespace_add.go    # Create namespace
-    namespace_list.go   # List namespaces
-    namespace_remove.go # Remove namespace
-    namespace_assign.go # Assign/unassign server
-    namespace_default.go # Set default namespace
-    permission.go       # permission command group
-    permission_set.go   # Set/unset permission
-    permission_list.go  # List permissions
+    namespace.go            # namespace command group ✅
+    permission.go           # permission command group ✅
 ```
 
-### Deferred (Future)
+### Phase 3.1 (TUI Namespaces) ✅
 ```
-internal/
-  tui/
-    tabs.go                 # Tab bar component
-    namespace_list.go       # Namespace list view
-    namespace_form.go       # Create/edit form
-    namespace_detail.go     # Detail view
-    tool_permissions.go     # Permission editor modal
-    server_picker.go        # Multi-select for assignment
+internal/tui/views/
+    namespace_list.go       # Namespace list view ✅
+    namespace_form.go       # Create/edit form ✅
+    namespace_detail.go     # Detail view ✅
+    tool_permissions.go     # Permission editor modal ✅
+    server_picker.go        # Multi-select for assignment ✅
+    server_list.go          # Updated with namespace badges ✅
+internal/tui/
+    model.go                # Tab 2 wiring, handlers ✅
+    model_test.go           # Namespace tests ✅
+```
 
-cmd/mcp-studio/
-    permission_bulk.go      # enable-safe, deny-all (requires cached tools)
+### Phase 3.2 (Remaining)
+```
+internal/tui/
+    model.go                # Auto-start servers for permission editing
+    views/tool_permissions.go # Bulk actions, tooltips, search
 ```
 
 ---
 
 ## Tests
 
-### Unit Tests
-- `permissions_test.go`: Permission evaluation (allow/deny/default, no-namespace bypass)
-- `safe_tools_test.go`: Tool classification patterns (with prefix stripping)
-- `config_test.go`: Namespace CRUD helpers, name uniqueness
+### Unit Tests ✅
+- `permissions_test.go`: Permission evaluation (allow/deny/default, no-namespace bypass) ✅
+- `safe_tools_test.go`: Tool classification patterns (with prefix stripping) ✅
+- `config_test.go`: Namespace CRUD helpers, name uniqueness, UpdateNamespace duplicate check ✅
 
-### CLI Integration Tests
-- `namespace add/list/remove` workflow
-- `namespace assign/unassign` workflow
-- `permission set/unset/list` workflow
-- Duplicate namespace name rejection
+### TUI Tests ✅
+- `views/namespace_list_test.go`: Namespace list component ✅
+- `views/namespace_form_test.go`: Form show/hide, dirty checking, config building ✅
+- `views/server_picker_test.go`: Server picker show/hide, selection state ✅
+- `views/tool_permissions_test.go`: Permission editor show/hide, denyByDefault ✅
+- `model_test.go`: Namespace tab navigation, key handlers, result handlers ✅
 
-### Server Integration Tests
-- Create namespace → assign server → set permission → verify `tools/call` enforcement
-- Deny-by-default behavior blocks unconfigured tools
-- No-namespace mode allows all tools (permission check bypass)
+### Server Integration Tests ✅
+- `TestServer_NamespaceToolPermissions_EndToEnd`: Full flow with 2 servers, namespace, permissions ✅
+- Deny-by-default behavior blocks unconfigured tools ✅
+- Explicitly denied tools return ErrCodeToolDenied ✅
+- Allowed tools can be called ✅
+- No-namespace mode allows all tools (permission check bypass) ✅
 
 ---
 
@@ -259,6 +271,21 @@ cmd/mcp-studio/
 - [x] CLI can fully manage permissions (set/unset/list)
 - [x] Namespace names are unique (enforced on add)
 - [x] All changes persist to config
+
+## Success Criteria (Phase 3.1 TUI) ✅
+- [x] Tab 2 shows namespace list with indicators
+- [x] Can add/edit/delete namespaces via TUI
+- [x] Can assign/unassign servers via picker modal
+- [x] Can edit tool permissions when servers are running
+- [x] Permissions can be reverted to default
+- [x] Server list shows namespace badges
+- [x] Namespace names are unique (enforced on edit too)
+
+## Success Criteria (Phase 3.2 Remaining)
+- [ ] Permission editor auto-starts servers if not running
+- [ ] Bulk "enable safe" / "deny all" actions available
+- [ ] Tool descriptions visible in permission editor
+- [ ] Can search/filter tools by name
 
 ---
 

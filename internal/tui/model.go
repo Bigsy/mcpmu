@@ -51,29 +51,40 @@ type Model struct {
 	currentView View
 	keyContext  KeyContext
 
-	// Components
+	// Server Components
 	serverList   views.ServerListModel
 	serverDetail views.ServerDetailModel
-	logPanel     views.LogPanelModel
-	helpOverlay  views.HelpOverlayModel
 	serverForm   *views.ServerFormModel // Pointer to preserve huh form's value bindings
-	confirmDlg   views.ConfirmModel
-	toast        views.ToastModel
+
+	// Namespace Components
+	namespaceList   views.NamespaceListModel
+	namespaceDetail views.NamespaceDetailModel
+	namespaceForm   *views.NamespaceFormModel
+	serverPicker    views.ServerPickerModel
+	toolPerms       views.ToolPermissionsModel
+
+	// Shared Components
+	logPanel    views.LogPanelModel
+	helpOverlay views.HelpOverlayModel
+	confirmDlg  views.ConfirmModel
+	toast       views.ToastModel
 
 	// Server status tracking
 	serverStatuses map[string]events.ServerStatus
 	serverTools    map[string][]events.McpTool
 
 	// Detail view tracking
-	detailServerID string
+	detailServerID    string
+	detailNamespaceID string
 
 	// Confirm dialog state (legacy, for quit confirmation)
 	showConfirm    bool
 	confirmMessage string
 	confirmAction  func()
 
-	// Pending delete server ID (for delete confirmation flow)
-	pendingDeleteID string
+	// Pending delete IDs (for delete confirmation flow)
+	pendingDeleteID          string
+	pendingDeleteNamespaceID string
 
 	// Event channel for Bubble Tea integration
 	eventCh chan events.Event
@@ -87,31 +98,42 @@ func newServerFormPtr(th theme.Theme) *views.ServerFormModel {
 	return &form
 }
 
+// newNamespaceFormPtr creates a pointer to a NamespaceFormModel.
+func newNamespaceFormPtr(th theme.Theme) *views.NamespaceFormModel {
+	form := views.NewNamespaceForm(th)
+	return &form
+}
+
 // NewModel creates a new root model.
 func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bus) Model {
 	th := theme.New()
 	keys := NewKeyBindings()
 
 	m := Model{
-		cfg:            cfg,
-		supervisor:     supervisor,
-		bus:            bus,
-		ctx:            context.Background(),
-		theme:          th,
-		keys:           keys,
-		activeTab:      TabServers,
-		currentView:    ViewList,
-		keyContext:     ContextList,
-		serverList:     views.NewServerList(th),
-		serverDetail:   views.NewServerDetail(th),
-		logPanel:       views.NewLogPanel(th),
-		helpOverlay:    views.NewHelpOverlay(th),
-		serverForm:     newServerFormPtr(th),
-		confirmDlg:     views.NewConfirm(th),
-		toast:          views.NewToast(th),
-		serverStatuses: make(map[string]events.ServerStatus),
-		serverTools:    make(map[string][]events.McpTool),
-		eventCh:        make(chan events.Event, 100),
+		cfg:             cfg,
+		supervisor:      supervisor,
+		bus:             bus,
+		ctx:             context.Background(),
+		theme:           th,
+		keys:            keys,
+		activeTab:       TabServers,
+		currentView:     ViewList,
+		keyContext:      ContextList,
+		serverList:      views.NewServerList(th),
+		serverDetail:    views.NewServerDetail(th),
+		serverForm:      newServerFormPtr(th),
+		namespaceList:   views.NewNamespaceList(th),
+		namespaceDetail: views.NewNamespaceDetail(th),
+		namespaceForm:   newNamespaceFormPtr(th),
+		serverPicker:    views.NewServerPicker(th),
+		toolPerms:       views.NewToolPermissions(th),
+		logPanel:        views.NewLogPanel(th),
+		helpOverlay:     views.NewHelpOverlay(th),
+		confirmDlg:      views.NewConfirm(th),
+		toast:           views.NewToast(th),
+		serverStatuses:  make(map[string]events.ServerStatus),
+		serverTools:     make(map[string][]events.McpTool),
+		eventCh:         make(chan events.Event, 100),
 	}
 
 	// Subscribe to events
@@ -123,8 +145,9 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 		}
 	})
 
-	// Initialize server list from config
+	// Initialize lists from config
 	m.refreshServerList()
+	m.refreshNamespaceList()
 
 	return m
 }
@@ -167,48 +190,25 @@ func (m Model) waitForEvent() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	// Server form needs ALL messages (including internal huh messages like cursor blink)
-	// Handle this first, before the type switch
+	// Handle modal forms first - they need ALL messages
+	// Server form
 	if m.serverForm.IsVisible() {
-		var cmds []tea.Cmd
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			// Always handle Ctrl+C even in form
-			if key.Matches(msg, m.keys.CtrlC) {
-				return m, tea.Quit
-			}
-		case tea.WindowSizeMsg:
-			m.width = msg.Width
-			m.height = msg.Height
-			m.updateLayout()
-			m.helpOverlay.SetSize(msg.Width, msg.Height)
-			m.serverForm.SetSize(msg.Width, msg.Height)
-			m.confirmDlg.SetSize(msg.Width, msg.Height)
-			m.toast.SetSize(msg.Width, msg.Height)
-		case views.ServerFormResult:
-			return m.handleServerFormResult(msg)
-		}
-		// Pass all messages to the form (pointer receiver to preserve huh's value bindings)
-		if cmd := m.serverForm.Update(msg); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		return m.updateWithServerForm(msg)
+	}
 
-		// Keep server events flowing while the modal is open.
-		if evt, ok := msg.(events.Event); ok {
-			if cmd := m.handleEvent(evt); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			cmds = append(cmds, m.waitForEvent())
-		}
+	// Namespace form
+	if m.namespaceForm.IsVisible() {
+		return m.updateWithNamespaceForm(msg)
+	}
 
-		// Allow toast timers and key-dismiss to work while the form is visible.
-		var toastCmd tea.Cmd
-		m.toast, toastCmd = m.toast.Update(msg)
-		if toastCmd != nil {
-			cmds = append(cmds, toastCmd)
-		}
+	// Server picker modal
+	if m.serverPicker.IsVisible() {
+		return m.updateWithServerPicker(msg)
+	}
 
-		return m, tea.Batch(cmds...)
+	// Tool permissions modal
+	if m.toolPerms.IsVisible() {
+		return m.updateWithToolPerms(msg)
 	}
 
 	switch msg := msg.(type) {
@@ -264,6 +264,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case views.ServerFormResult:
 		return m.handleServerFormResult(msg)
 
+	case views.NamespaceFormResult:
+		return m.handleNamespaceFormResult(msg)
+
+	case views.ServerPickerResult:
+		return m.handleServerPickerResult(msg)
+
+	case views.ToolPermissionsResult:
+		return m.handleToolPermissionsResult(msg)
+
 	case views.ConfirmResult:
 		return m.handleConfirmResult(msg)
 
@@ -284,14 +293,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Update child components (including for unhandled keys)
-	if m.currentView == ViewList {
-		var cmd tea.Cmd
-		m.serverList, cmd = m.serverList.Update(msg)
-		cmds = append(cmds, cmd)
-	} else {
-		var cmd tea.Cmd
-		m.serverDetail, cmd = m.serverDetail.Update(msg)
-		cmds = append(cmds, cmd)
+	switch m.activeTab {
+	case TabServers:
+		if m.currentView == ViewList {
+			var cmd tea.Cmd
+			m.serverList, cmd = m.serverList.Update(msg)
+			cmds = append(cmds, cmd)
+		} else {
+			var cmd tea.Cmd
+			m.serverDetail, cmd = m.serverDetail.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+	case TabNamespaces:
+		if m.currentView == ViewList {
+			var cmd tea.Cmd
+			m.namespaceList, cmd = m.namespaceList.Update(msg)
+			cmds = append(cmds, cmd)
+		} else {
+			var cmd tea.Cmd
+			m.namespaceDetail, cmd = m.namespaceDetail.Update(msg)
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	if m.logPanel.IsVisible() {
@@ -381,22 +403,30 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Tab2):
-		// Namespaces - disabled in Phase 1
+		m.activeTab = TabNamespaces
+		m.currentView = ViewList
+		m.detailNamespaceID = ""
+		m.refreshNamespaceList()
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Tab3):
-		// Proxies - disabled in Phase 1
+		// Proxies - disabled until Phase 4
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Escape):
 		if m.currentView == ViewDetail {
 			m.currentView = ViewList
 			m.detailServerID = ""
+			m.detailNamespaceID = ""
 			return true, m, nil
 		}
 		if m.logPanel.IsFocused() {
 			m.logPanel.SetFocused(false)
-			m.serverList.SetFocused(true)
+			if m.activeTab == TabServers {
+				m.serverList.SetFocused(true)
+			} else if m.activeTab == TabNamespaces {
+				m.namespaceList.SetFocused(true)
+			}
 			return true, m, nil
 		}
 		return false, m, nil // Let child handle Esc
@@ -418,18 +448,28 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 		return true, m, nil
 	}
 
-	// View-specific keys
-	if m.currentView == ViewList {
-		return m.handleListKey(msg)
-	}
-	if m.currentView == ViewDetail {
-		return m.handleDetailKey(msg)
+	// Tab and view-specific keys
+	switch m.activeTab {
+	case TabServers:
+		if m.currentView == ViewList {
+			return m.handleServerListKey(msg)
+		}
+		if m.currentView == ViewDetail {
+			return m.handleServerDetailKey(msg)
+		}
+	case TabNamespaces:
+		if m.currentView == ViewList {
+			return m.handleNamespaceListKey(msg)
+		}
+		if m.currentView == ViewDetail {
+			return m.handleNamespaceDetailKey(msg)
+		}
 	}
 
 	return false, m, nil
 }
 
-func (m *Model) handleListKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {
+func (m *Model) handleServerListKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Enter):
 		if item := m.serverList.SelectedItem(); item != nil {
@@ -487,7 +527,7 @@ func (m *Model) handleListKey(msg tea.KeyMsg) (handled bool, model tea.Model, cm
 	return false, m, nil // Let list handle navigation keys
 }
 
-func (m *Model) handleDetailKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {
+func (m *Model) handleServerDetailKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Test):
 		if item := m.serverList.SelectedItem(); item != nil {
@@ -613,7 +653,40 @@ func (m Model) handleConfirmResult(result views.ConfirmResult) (tea.Model, tea.C
 		return m, m.toast.ShowSuccess(fmt.Sprintf("Server \"%s\" deleted", serverName))
 	}
 
+	if result.Tag == "delete-namespace" && result.Confirmed {
+		ns := m.cfg.FindNamespaceByID(m.pendingDeleteNamespaceID)
+		namespaceName := m.pendingDeleteNamespaceID
+		if ns != nil {
+			namespaceName = ns.Name
+		}
+
+		if err := m.cfg.DeleteNamespaceByID(m.pendingDeleteNamespaceID); err != nil {
+			log.Printf("Failed to delete namespace: %v", err)
+			m.pendingDeleteNamespaceID = ""
+			return m, m.toast.ShowError(fmt.Sprintf("Failed to delete namespace: %v", err))
+		}
+
+		if err := config.Save(m.cfg); err != nil {
+			log.Printf("Failed to save config: %v", err)
+			m.pendingDeleteNamespaceID = ""
+			return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
+		}
+
+		m.refreshNamespaceList()
+		m.refreshServerList() // Update server list badges
+
+		// If we were viewing the deleted namespace, go back to list
+		if m.detailNamespaceID == m.pendingDeleteNamespaceID {
+			m.currentView = ViewList
+			m.detailNamespaceID = ""
+		}
+
+		m.pendingDeleteNamespaceID = ""
+		return m, m.toast.ShowSuccess(fmt.Sprintf("Namespace \"%s\" deleted", namespaceName))
+	}
+
 	m.pendingDeleteID = ""
+	m.pendingDeleteNamespaceID = ""
 	return m, nil
 }
 
@@ -648,9 +721,22 @@ func (m *Model) refreshServerList() {
 	items := make([]views.ServerItem, len(servers))
 	for i, srv := range servers {
 		status := m.serverStatuses[srv.ID]
+
+		// Find namespaces this server belongs to
+		var namespaceNames []string
+		for _, ns := range m.cfg.Namespaces {
+			for _, sid := range ns.ServerIDs {
+				if sid == srv.ID {
+					namespaceNames = append(namespaceNames, ns.Name)
+					break
+				}
+			}
+		}
+
 		items[i] = views.ServerItem{
-			Config: srv,
-			Status: status,
+			Config:     srv,
+			Status:     status,
+			Namespaces: namespaceNames,
 		}
 	}
 	m.serverList.SetItems(items)
@@ -685,9 +771,18 @@ func (m *Model) updateLayout() {
 	// Available width: total width minus App padding (2)
 	contentWidth := m.width - 4
 
-	// Set component sizes
+	// Set component sizes - servers
 	m.serverList.SetSize(contentWidth, contentHeight)
 	m.serverDetail.SetSize(contentWidth, contentHeight)
+
+	// Set component sizes - namespaces
+	m.namespaceList.SetSize(contentWidth, contentHeight)
+	m.namespaceDetail.SetSize(contentWidth, contentHeight)
+
+	// Modal/overlay sizes
+	m.serverPicker.SetSize(m.width, m.height)
+	m.toolPerms.SetSize(m.width, m.height)
+
 	if m.logPanel.IsVisible() {
 		m.logPanel.SetSize(contentWidth, logHeight)
 	}
@@ -704,11 +799,22 @@ func (m Model) View() string {
 	// Header with tabs
 	sections = append(sections, m.renderHeader())
 
-	// Main content
-	if m.currentView == ViewList {
+	// Main content based on active tab
+	switch m.activeTab {
+	case TabServers:
+		if m.currentView == ViewList {
+			sections = append(sections, m.serverList.View())
+		} else {
+			sections = append(sections, m.serverDetail.View())
+		}
+	case TabNamespaces:
+		if m.currentView == ViewList {
+			sections = append(sections, m.namespaceList.View())
+		} else {
+			sections = append(sections, m.namespaceDetail.View())
+		}
+	default:
 		sections = append(sections, m.serverList.View())
-	} else {
-		sections = append(sections, m.serverDetail.View())
 	}
 
 	// Log panel
@@ -736,6 +842,21 @@ func (m Model) View() string {
 		content = m.serverForm.RenderOverlay(content, m.width, m.height)
 	}
 
+	// Namespace form overlay
+	if m.namespaceForm.IsVisible() {
+		content = m.namespaceForm.RenderOverlay(content, m.width, m.height)
+	}
+
+	// Server picker overlay
+	if m.serverPicker.IsVisible() {
+		content = m.serverPicker.RenderOverlay(content, m.width, m.height)
+	}
+
+	// Tool permissions overlay
+	if m.toolPerms.IsVisible() {
+		content = m.toolPerms.RenderOverlay(content, m.width, m.height)
+	}
+
 	// Confirm dialog overlay (delete, etc.)
 	if m.confirmDlg.IsVisible() {
 		content = m.confirmDlg.RenderOverlay(content, m.width, m.height)
@@ -755,7 +876,7 @@ func (m Model) renderHeader() string {
 		enabled bool
 	}{
 		{"Servers", true},
-		{"Namespaces", false}, // Phase 3
+		{"Namespaces", true},  // Phase 3 - Now enabled
 		{"Proxies", false},    // Phase 4
 	}
 
@@ -789,12 +910,23 @@ func (m Model) renderStatusBar() string {
 
 	left := fmt.Sprintf("%d/%d servers running", runningCount, totalCount)
 
-	// Show context-sensitive key hints
+	// Show context-sensitive key hints based on tab and view
 	var keys string
-	if m.currentView == ViewList {
-		keys = "t:test  E:enable  a:add  e:edit  d:delete  l:logs  ?:help"
-	} else {
-		keys = "esc:back  t:test  l:logs  ?:help"
+	switch m.activeTab {
+	case TabServers:
+		if m.currentView == ViewList {
+			keys = "t:test  E:enable  a:add  e:edit  d:delete  l:logs  ?:help"
+		} else {
+			keys = "esc:back  t:test  l:logs  ?:help"
+		}
+	case TabNamespaces:
+		if m.currentView == ViewList {
+			keys = "a:add  e:edit  d:delete  D:set-default  ?:help"
+		} else {
+			keys = "esc:back  s:assign-servers  p:permissions  D:set-default  e:edit  ?:help"
+		}
+	default:
+		keys = "?:help"
 	}
 
 	padding := m.width - lipgloss.Width(left) - lipgloss.Width(keys) - 4
@@ -828,4 +960,383 @@ func (m Model) renderConfirmOverlay(base string) string {
 		lipgloss.WithWhitespaceChars(" "),
 		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#E5E7EB", Dark: "#1F2937"}),
 	)
+}
+
+// ============================================================================
+// Modal form update handlers
+// ============================================================================
+
+func (m Model) updateWithServerForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if key.Matches(msg, m.keys.CtrlC) {
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateLayout()
+		m.helpOverlay.SetSize(msg.Width, msg.Height)
+		m.serverForm.SetSize(msg.Width, msg.Height)
+		m.confirmDlg.SetSize(msg.Width, msg.Height)
+		m.toast.SetSize(msg.Width, msg.Height)
+	case views.ServerFormResult:
+		return m.handleServerFormResult(msg)
+	}
+
+	if cmd := m.serverForm.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	if evt, ok := msg.(events.Event); ok {
+		if cmd := m.handleEvent(evt); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.waitForEvent())
+	}
+
+	var toastCmd tea.Cmd
+	m.toast, toastCmd = m.toast.Update(msg)
+	if toastCmd != nil {
+		cmds = append(cmds, toastCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) updateWithNamespaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if key.Matches(msg, m.keys.CtrlC) {
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateLayout()
+		m.namespaceForm.SetSize(msg.Width, msg.Height)
+	case views.NamespaceFormResult:
+		return m.handleNamespaceFormResult(msg)
+	}
+
+	if cmd := m.namespaceForm.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	if evt, ok := msg.(events.Event); ok {
+		if cmd := m.handleEvent(evt); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.waitForEvent())
+	}
+
+	var toastCmd tea.Cmd
+	m.toast, toastCmd = m.toast.Update(msg)
+	if toastCmd != nil {
+		cmds = append(cmds, toastCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) updateWithServerPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if key.Matches(msg, m.keys.CtrlC) {
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateLayout()
+		m.serverPicker.SetSize(msg.Width, msg.Height)
+	case views.ServerPickerResult:
+		return m.handleServerPickerResult(msg)
+	}
+
+	if cmd := m.serverPicker.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	if evt, ok := msg.(events.Event); ok {
+		if cmd := m.handleEvent(evt); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.waitForEvent())
+	}
+
+	// Keep toast timers working while modal is open
+	var toastCmd tea.Cmd
+	m.toast, toastCmd = m.toast.Update(msg)
+	if toastCmd != nil {
+		cmds = append(cmds, toastCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) updateWithToolPerms(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if key.Matches(msg, m.keys.CtrlC) {
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateLayout()
+		m.toolPerms.SetSize(msg.Width, msg.Height)
+	case views.ToolPermissionsResult:
+		return m.handleToolPermissionsResult(msg)
+	}
+
+	if cmd := m.toolPerms.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	if evt, ok := msg.(events.Event); ok {
+		if cmd := m.handleEvent(evt); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.waitForEvent())
+	}
+
+	// Keep toast timers working while modal is open
+	var toastCmd tea.Cmd
+	m.toast, toastCmd = m.toast.Update(msg)
+	if toastCmd != nil {
+		cmds = append(cmds, toastCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+// ============================================================================
+// Namespace key handlers
+// ============================================================================
+
+func (m *Model) handleNamespaceListKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Enter):
+		if item := m.namespaceList.SelectedItem(); item != nil {
+			m.currentView = ViewDetail
+			m.detailNamespaceID = item.Config.ID
+			permissions := m.cfg.GetToolPermissionsForNamespace(item.Config.ID)
+			m.namespaceDetail.SetNamespace(&item.Config, item.IsDefault, m.cfg.ServerList(), permissions)
+		}
+		return true, m, nil
+
+	case key.Matches(msg, m.keys.Add):
+		cmd := m.namespaceForm.ShowAdd()
+		return true, m, cmd
+
+	case key.Matches(msg, m.keys.Edit):
+		if item := m.namespaceList.SelectedItem(); item != nil {
+			cmd := m.namespaceForm.ShowEdit(item.Config)
+			return true, m, cmd
+		}
+		return true, m, nil
+
+	case key.Matches(msg, m.keys.Delete):
+		if item := m.namespaceList.SelectedItem(); item != nil {
+			m.pendingDeleteNamespaceID = item.Config.ID
+			m.confirmDlg.Show("Delete Namespace", fmt.Sprintf("Delete namespace \"%s\"?\nThis will also remove all associated tool permissions.", item.Config.Name), "delete-namespace")
+		}
+		return true, m, nil
+
+	case msg.String() == "D": // Set as default
+		if item := m.namespaceList.SelectedItem(); item != nil {
+			m.cfg.DefaultNamespaceID = item.Config.ID
+			if err := config.Save(m.cfg); err != nil {
+				log.Printf("Failed to save config: %v", err)
+				return true, m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
+			}
+			m.refreshNamespaceList()
+			return true, m, m.toast.ShowSuccess(fmt.Sprintf("Namespace \"%s\" set as default", item.Config.Name))
+		}
+		return true, m, nil
+	}
+
+	return false, m, nil
+}
+
+func (m *Model) handleNamespaceDetailKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {
+	ns := m.cfg.FindNamespaceByID(m.detailNamespaceID)
+	if ns == nil {
+		return false, m, nil
+	}
+
+	switch {
+	case msg.String() == "s": // Assign servers
+		m.serverPicker.Show(m.cfg.ServerList(), ns.ServerIDs)
+		return true, m, nil
+
+	case msg.String() == "p": // Edit permissions
+		// Only show tools from running servers assigned to this namespace
+		serverTools := make(map[string][]events.McpTool)
+		for _, serverID := range ns.ServerIDs {
+			if tools, ok := m.serverTools[serverID]; ok && len(tools) > 0 {
+				serverTools[serverID] = tools
+			}
+		}
+		if len(serverTools) == 0 {
+			return true, m, m.toast.ShowError("No running servers with tools. Start a server first.")
+		}
+		m.toolPerms.Show(ns.ID, serverTools, m.cfg.ServerList(), m.cfg.ToolPermissions, ns.DenyByDefault)
+		return true, m, nil
+
+	case msg.String() == "D": // Set as default
+		m.cfg.DefaultNamespaceID = ns.ID
+		if err := config.Save(m.cfg); err != nil {
+			log.Printf("Failed to save config: %v", err)
+			return true, m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
+		}
+		permissions := m.cfg.GetToolPermissionsForNamespace(ns.ID)
+		m.namespaceDetail.SetNamespace(ns, true, m.cfg.ServerList(), permissions)
+		m.refreshNamespaceList()
+		return true, m, m.toast.ShowSuccess(fmt.Sprintf("Namespace \"%s\" set as default", ns.Name))
+
+	case key.Matches(msg, m.keys.Edit):
+		cmd := m.namespaceForm.ShowEdit(*ns)
+		return true, m, cmd
+	}
+
+	return false, m, nil
+}
+
+// ============================================================================
+// Result handlers
+// ============================================================================
+
+func (m Model) handleNamespaceFormResult(result views.NamespaceFormResult) (tea.Model, tea.Cmd) {
+	if !result.Submitted {
+		return m, nil
+	}
+
+	var err error
+	if result.IsEdit {
+		err = m.cfg.UpdateNamespace(result.Namespace)
+		if err != nil {
+			log.Printf("Failed to update namespace: %v", err)
+			return m, m.toast.ShowError(fmt.Sprintf("Failed to update namespace: %v", err))
+		}
+	} else {
+		_, err = m.cfg.AddNamespace(result.Namespace)
+		if err != nil {
+			log.Printf("Failed to add namespace: %v", err)
+			return m, m.toast.ShowError(fmt.Sprintf("Failed to add namespace: %v", err))
+		}
+	}
+
+	if err := config.Save(m.cfg); err != nil {
+		log.Printf("Failed to save config: %v", err)
+		return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
+	}
+
+	m.refreshNamespaceList()
+	m.refreshServerList() // Update server list badges (namespace names may have changed)
+
+	// Update detail view if we're editing the currently displayed namespace
+	if result.IsEdit && m.currentView == ViewDetail && m.detailNamespaceID == result.Namespace.ID {
+		ns := m.cfg.FindNamespaceByID(result.Namespace.ID)
+		if ns != nil {
+			permissions := m.cfg.GetToolPermissionsForNamespace(ns.ID)
+			m.namespaceDetail.SetNamespace(ns, ns.ID == m.cfg.DefaultNamespaceID, m.cfg.ServerList(), permissions)
+		}
+	}
+
+	if result.IsEdit {
+		return m, m.toast.ShowSuccess(fmt.Sprintf("Namespace \"%s\" updated", result.Namespace.Name))
+	}
+	return m, m.toast.ShowSuccess(fmt.Sprintf("Namespace \"%s\" added", result.Namespace.Name))
+}
+
+func (m Model) handleServerPickerResult(result views.ServerPickerResult) (tea.Model, tea.Cmd) {
+	if !result.Submitted || m.detailNamespaceID == "" {
+		return m, nil
+	}
+
+	ns := m.cfg.FindNamespaceByID(m.detailNamespaceID)
+	if ns == nil {
+		return m, nil
+	}
+
+	// Update server assignments
+	ns.ServerIDs = result.SelectedIDs
+
+	if err := config.Save(m.cfg); err != nil {
+		log.Printf("Failed to save config: %v", err)
+		return m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
+	}
+
+	// Refresh detail view
+	permissions := m.cfg.GetToolPermissionsForNamespace(ns.ID)
+	m.namespaceDetail.SetNamespace(ns, ns.ID == m.cfg.DefaultNamespaceID, m.cfg.ServerList(), permissions)
+	m.refreshNamespaceList()
+	m.refreshServerList() // Update server list badges
+
+	return m, m.toast.ShowSuccess("Server assignments updated")
+}
+
+func (m Model) handleToolPermissionsResult(result views.ToolPermissionsResult) (tea.Model, tea.Cmd) {
+	if !result.Submitted || m.detailNamespaceID == "" {
+		return m, nil
+	}
+
+	// Apply permission changes
+	for key, enabled := range result.Changes {
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		serverID, toolName := parts[0], parts[1]
+		if err := m.cfg.SetToolPermission(m.detailNamespaceID, serverID, toolName, enabled); err != nil {
+			log.Printf("Failed to set permission: %v", err)
+		}
+	}
+
+	// Apply permission deletions (revert to default)
+	for _, key := range result.Deletions {
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		serverID, toolName := parts[0], parts[1]
+		if err := m.cfg.UnsetToolPermission(m.detailNamespaceID, serverID, toolName); err != nil {
+			log.Printf("Failed to unset permission: %v", err)
+		}
+	}
+
+	if err := config.Save(m.cfg); err != nil {
+		log.Printf("Failed to save config: %v", err)
+		return m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
+	}
+
+	// Refresh detail view
+	ns := m.cfg.FindNamespaceByID(m.detailNamespaceID)
+	if ns != nil {
+		permissions := m.cfg.GetToolPermissionsForNamespace(ns.ID)
+		m.namespaceDetail.SetNamespace(ns, ns.ID == m.cfg.DefaultNamespaceID, m.cfg.ServerList(), permissions)
+	}
+
+	return m, m.toast.ShowSuccess("Tool permissions updated")
+}
+
+// ============================================================================
+// Refresh helpers
+// ============================================================================
+
+func (m *Model) refreshNamespaceList() {
+	items := make([]views.NamespaceItem, len(m.cfg.Namespaces))
+	for i, ns := range m.cfg.Namespaces {
+		items[i] = views.NamespaceItem{
+			Config:    ns,
+			IsDefault: ns.ID == m.cfg.DefaultNamespaceID,
+		}
+	}
+	m.namespaceList.SetItems(items)
 }

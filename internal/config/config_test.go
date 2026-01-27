@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hedworth/mcp-studio-go/internal/testutil"
@@ -598,6 +599,88 @@ func TestConfig_DeleteNamespaceByName_NotFound(t *testing.T) {
 	cfg := NewConfig()
 
 	err := cfg.DeleteNamespaceByName("nonexistent")
+	if err == nil {
+		t.Error("expected error for non-existent namespace")
+	}
+}
+
+func TestConfig_UpdateNamespace(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "ns01", Name: "development", Description: "Dev env"},
+	}
+
+	// Update description - should succeed
+	err := cfg.UpdateNamespace(NamespaceConfig{
+		ID:          "ns01",
+		Name:        "development",
+		Description: "Updated description",
+	})
+	if err != nil {
+		t.Fatalf("UpdateNamespace failed: %v", err)
+	}
+
+	ns := cfg.FindNamespaceByID("ns01")
+	if ns.Description != "Updated description" {
+		t.Errorf("expected description 'Updated description', got %q", ns.Description)
+	}
+}
+
+func TestConfig_UpdateNamespace_DuplicateName(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "ns01", Name: "development"},
+		{ID: "ns02", Name: "production"},
+	}
+
+	// Try to rename ns01 to "production" - should fail
+	err := cfg.UpdateNamespace(NamespaceConfig{
+		ID:   "ns01",
+		Name: "production",
+	})
+	if err == nil {
+		t.Error("expected error when renaming to duplicate name")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("expected 'already exists' error, got: %v", err)
+	}
+
+	// Verify ns01 wasn't changed
+	ns := cfg.FindNamespaceByID("ns01")
+	if ns.Name != "development" {
+		t.Errorf("namespace should not have been renamed, got name %q", ns.Name)
+	}
+}
+
+func TestConfig_UpdateNamespace_SameName(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "ns01", Name: "development", Description: "Old"},
+	}
+
+	// Update with same name - should succeed
+	err := cfg.UpdateNamespace(NamespaceConfig{
+		ID:          "ns01",
+		Name:        "development",
+		Description: "New",
+	})
+	if err != nil {
+		t.Fatalf("UpdateNamespace with same name should succeed: %v", err)
+	}
+
+	ns := cfg.FindNamespaceByID("ns01")
+	if ns.Description != "New" {
+		t.Errorf("expected description 'New', got %q", ns.Description)
+	}
+}
+
+func TestConfig_UpdateNamespace_NotFound(t *testing.T) {
+	cfg := NewConfig()
+
+	err := cfg.UpdateNamespace(NamespaceConfig{
+		ID:   "nonexistent",
+		Name: "test",
+	})
 	if err == nil {
 		t.Error("expected error for non-existent namespace")
 	}
