@@ -115,8 +115,10 @@ func ClassifyTool(toolName string) ToolClassification
 
 ### 3. CLI Namespace Management
 
+All commands use namespace **name** (not ID). Names must be unique.
+
 ```bash
-# Create namespace
+# Create namespace (name must be unique)
 mcp-studio namespace add <name> [--description "..."]
 
 # List namespaces
@@ -125,7 +127,7 @@ mcp-studio namespace list [--json]
 # Remove namespace
 mcp-studio namespace remove <name> [--yes]
 
-# Assign server to namespace
+# Assign server to namespace (both by name)
 mcp-studio namespace assign <namespace-name> <server-name>
 
 # Unassign server from namespace
@@ -133,29 +135,27 @@ mcp-studio namespace unassign <namespace-name> <server-name>
 
 # Set as default namespace
 mcp-studio namespace default <name>
+
+# Set deny-by-default for namespace
+mcp-studio namespace set-deny-default <name> true|false
 ```
 
 ### 4. CLI Permission Management
 
+All commands use **names** for namespace and server.
+
 ```bash
-# Set permission for a tool
+# Set permission for a tool (tool name is unqualified, e.g., "read_file" not "fs.read_file")
 mcp-studio permission set <namespace> <server> <tool> allow|deny
 
-# Remove explicit permission (revert to default)
+# Remove explicit permission (revert to namespace default)
 mcp-studio permission unset <namespace> <server> <tool>
 
 # List permissions for namespace
 mcp-studio permission list <namespace> [--json]
-
-# Bulk: enable safe tools for a server in namespace
-mcp-studio permission enable-safe <namespace> <server>
-
-# Bulk: deny all tools for a server in namespace
-mcp-studio permission deny-all <namespace> <server>
-
-# Set namespace default behavior
-mcp-studio namespace set-default-deny <namespace> true|false
 ```
+
+**Note:** Bulk actions (`enable-safe`, `deny-all`) are deferred until cached tool lists are implemented.
 
 ---
 
@@ -194,20 +194,22 @@ mcp-studio namespace set-default-deny <namespace> true|false
 internal/
   server/
     permissions.go      # Permission evaluation logic
-    safe_tools.go       # Tool classification
+    safe_tools.go       # Tool classification (for future bulk actions)
     router.go           # Add permission check to tools/call
   config/
     schema.go           # Add DenyByDefault to NamespaceConfig
+    config.go           # Add FindNamespaceByName, AddNamespace, DeleteNamespaceByName
 
 cmd/mcp-studio/
     namespace.go        # namespace command group
-    namespace_add.go
-    namespace_list.go
-    namespace_remove.go
-    namespace_assign.go
+    namespace_add.go    # Create namespace
+    namespace_list.go   # List namespaces
+    namespace_remove.go # Remove namespace
+    namespace_assign.go # Assign/unassign server
+    namespace_default.go # Set default namespace
     permission.go       # permission command group
-    permission_set.go
-    permission_list.go
+    permission_set.go   # Set/unset permission
+    permission_list.go  # List permissions
 ```
 
 ### Deferred (Future)
@@ -220,6 +222,9 @@ internal/
     namespace_detail.go     # Detail view
     tool_permissions.go     # Permission editor modal
     server_picker.go        # Multi-select for assignment
+
+cmd/mcp-studio/
+    permission_bulk.go      # enable-safe, deny-all (requires cached tools)
 ```
 
 ---
@@ -227,39 +232,52 @@ internal/
 ## Tests
 
 ### Unit Tests
-- `permissions_test.go`: Permission evaluation (allow/deny/default paths)
-- `safe_tools_test.go`: Tool classification patterns
-- `cli_test.go`: Namespace and permission CLI commands
+- `permissions_test.go`: Permission evaluation (allow/deny/default, no-namespace bypass)
+- `safe_tools_test.go`: Tool classification patterns (with prefix stripping)
+- `config_test.go`: Namespace CRUD helpers, name uniqueness
 
-### Integration Tests
-- Create namespace → assign server → set permissions → verify `tools/call` enforcement
-- Deny-by-default behavior
-- Safe tool bulk enable
+### CLI Integration Tests
+- `namespace add/list/remove` workflow
+- `namespace assign/unassign` workflow
+- `permission set/unset/list` workflow
+- Duplicate namespace name rejection
+
+### Server Integration Tests
+- Create namespace → assign server → set permission → verify `tools/call` enforcement
+- Deny-by-default behavior blocks unconfigured tools
+- No-namespace mode allows all tools (permission check bypass)
 
 ---
 
 ## Success Criteria (Phase 3 Minimal)
-- [ ] `tools/call` respects permission settings
+- [ ] `tools/call` respects permission settings (allow/deny)
 - [ ] Denied tools return clear error message
-- [ ] `DenyByDefault` namespace setting works
-- [ ] Safe tool classification is accurate
-- [ ] CLI can fully manage namespaces and permissions
+- [ ] `DenyByDefault` namespace setting blocks unconfigured tools
+- [ ] No-namespace mode (selection=all) bypasses permission checks
+- [ ] Safe tool classification correctly categorizes common patterns
+- [ ] CLI can fully manage namespaces (add/list/remove/assign/default)
+- [ ] CLI can fully manage permissions (set/unset/list)
+- [ ] Namespace names are unique (enforced on add)
 - [ ] All changes persist to config
 
 ---
 
 ## Risks
-1. **Permission bypass:** Must ensure ALL tool calls go through permission check
-2. **Safe tool false positives:** Pattern matching may miscategorize tools; user can override
-3. **Namespace deletion:** Need to handle orphaned permissions gracefully
+1. **Permission bypass:** Must ensure ALL tool calls (including manager tools) go through permission check
+2. **Safe tool false positives:** Pattern matching may miscategorize tools; override via explicit permission
+3. **Namespace deletion:** Need to clean up orphaned permissions and server assignments
+4. **Name→ID lookup:** Must be consistent across all CLI commands and internal lookups
 
 ---
 
 ## Estimated Complexity
 - Permission evaluation: Low (~150 lines)
-- Safe tool classification: Low (~100 lines)
-- CLI commands: Medium (~400 lines)
-- Tests: Medium (~300 lines)
-- **Total: ~950 lines**
+- Safe tool classification: Low (~80 lines)
+- Config helpers (namespace CRUD): Low (~100 lines)
+- CLI namespace commands: Medium (~350 lines)
+- CLI permission commands: Medium (~200 lines)
+- Tests: Medium (~400 lines)
+- **Total: ~1280 lines**
 
 Deferred TUI work would add ~1500-2000 lines.
+Deferred bulk permission commands would add ~150 lines (after cached tools).
