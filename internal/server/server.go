@@ -332,20 +332,31 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 // resolveNamespace determines which namespace to use and which servers are active.
 func (s *Server) resolveNamespace() *RPCError {
 	cfg := s.cfg
-	namespaceID := s.opts.Namespace
+	namespaceArg := s.opts.Namespace
 
-	// Rule 1: If --namespace provided, use it
-	if namespaceID != "" {
+	// Rule 1: If --namespace provided, use it (lookup by ID or name)
+	if namespaceArg != "" {
+		// Try lookup by ID first
 		for i := range cfg.Namespaces {
-			if cfg.Namespaces[i].ID == namespaceID {
+			if cfg.Namespaces[i].ID == namespaceArg {
 				s.activeNamespace = &cfg.Namespaces[i]
 				s.activeServerIDs = cfg.Namespaces[i].ServerIDs
 				s.selectionMethod = SelectionFlag
-				log.Printf("Using namespace %q with %d servers (selection: flag)", namespaceID, len(s.activeServerIDs))
+				log.Printf("Using namespace %q with %d servers (selection: flag)", namespaceArg, len(s.activeServerIDs))
 				return nil
 			}
 		}
-		return ErrNamespaceNotFound(namespaceID)
+		// Try lookup by name
+		for i := range cfg.Namespaces {
+			if cfg.Namespaces[i].Name == namespaceArg {
+				s.activeNamespace = &cfg.Namespaces[i]
+				s.activeServerIDs = cfg.Namespaces[i].ServerIDs
+				s.selectionMethod = SelectionFlag
+				log.Printf("Using namespace %q with %d servers (selection: flag)", cfg.Namespaces[i].Name, len(s.activeServerIDs))
+				return nil
+			}
+		}
+		return ErrNamespaceNotFound(namespaceArg)
 	}
 
 	// Rule 2: If config.defaultNamespaceId is set, use it

@@ -51,9 +51,17 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 	// Parse the tool name
 	serverID, toolName, isManager := ParseToolName(qualifiedName)
 
-	// Handle manager tools
+	// Handle manager tools (always allowed, no permission check)
 	if isManager {
 		return r.handleManagerTool(ctx, qualifiedName, arguments)
+	}
+
+	// Check permission (skip if no active namespace, i.e., selection=all)
+	if r.activeNamespaceID != "" {
+		allowed, reason := IsToolAllowed(r.cfg, r.activeNamespaceID, serverID, toolName)
+		if !allowed {
+			return nil, ErrToolDenied(qualifiedName, reason)
+		}
 	}
 
 	// Validate server exists

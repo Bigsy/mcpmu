@@ -14,11 +14,11 @@ Implement namespace management and tool permission enforcement. This enables fin
 - [x] `mcp-studio.namespaces_list` tool
 - [x] Config schema for namespaces and tool permissions
 
-### 🎯 Phase 3 Scope (Minimal)
-- [ ] Permission evaluation in `tools/call`
-- [ ] Safe tool classification (pattern-based, for future bulk actions)
-- [ ] CLI namespace management (`namespace add/list/remove/assign`)
-- [ ] CLI permission management (`permission set/unset/list`)
+### ✅ Phase 3 Scope (Completed)
+- [x] Permission evaluation in `tools/call`
+- [x] Safe tool classification (pattern-based, for future bulk actions)
+- [x] CLI namespace management (`namespace add/list/remove/assign`)
+- [x] CLI permission management (`permission set/unset/list`)
 
 ### 🔮 Deferred to Future Phase
 - [ ] TUI Namespaces tab
@@ -249,16 +249,16 @@ cmd/mcp-studio/
 
 ---
 
-## Success Criteria (Phase 3 Minimal)
-- [ ] `tools/call` respects permission settings (allow/deny)
-- [ ] Denied tools return clear error message
-- [ ] `DenyByDefault` namespace setting blocks unconfigured tools
-- [ ] No-namespace mode (selection=all) bypasses permission checks
-- [ ] Safe tool classification correctly categorizes common patterns
-- [ ] CLI can fully manage namespaces (add/list/remove/assign/default)
-- [ ] CLI can fully manage permissions (set/unset/list)
-- [ ] Namespace names are unique (enforced on add)
-- [ ] All changes persist to config
+## Success Criteria (Phase 3 Minimal) ✅
+- [x] `tools/call` respects permission settings (allow/deny)
+- [x] Denied tools return clear error message
+- [x] `DenyByDefault` namespace setting blocks unconfigured tools
+- [x] No-namespace mode (selection=all) bypasses permission checks
+- [x] Safe tool classification correctly categorizes common patterns
+- [x] CLI can fully manage namespaces (add/list/remove/assign/default)
+- [x] CLI can fully manage permissions (set/unset/list)
+- [x] Namespace names are unique (enforced on add)
+- [x] All changes persist to config
 
 ---
 

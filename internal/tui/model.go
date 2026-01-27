@@ -64,6 +64,9 @@ type Model struct {
 	serverStatuses map[string]events.ServerStatus
 	serverTools    map[string][]events.McpTool
 
+	// Detail view tracking
+	detailServerID string
+
 	// Confirm dialog state (legacy, for quit confirmation)
 	showConfirm    bool
 	confirmMessage string
@@ -306,6 +309,14 @@ func (m *Model) handleEvent(e events.Event) tea.Cmd {
 		m.serverStatuses[evt.ServerID()] = evt.Status
 		m.refreshServerList()
 
+		// Refresh detail view if showing this server
+		if m.currentView == ViewDetail && m.detailServerID == evt.ServerID() {
+			if srv := m.cfg.GetServer(evt.ServerID()); srv != nil {
+				tools := m.convertTools(m.serverTools[evt.ServerID()])
+				m.serverDetail.SetServer(srv, &evt.Status, tools)
+			}
+		}
+
 		// Show toast for state changes
 		serverName := evt.ServerID()
 		if srv := m.cfg.GetServer(evt.ServerID()); srv != nil && srv.Name != "" {
@@ -331,6 +342,15 @@ func (m *Model) handleEvent(e events.Event) tea.Cmd {
 			m.serverStatuses[evt.ServerID()] = status
 		}
 		m.refreshServerList()
+
+		// Refresh detail view if showing this server
+		if m.currentView == ViewDetail && m.detailServerID == evt.ServerID() {
+			if srv := m.cfg.GetServer(evt.ServerID()); srv != nil {
+				status := m.serverStatuses[evt.ServerID()]
+				tools := m.convertTools(evt.Tools)
+				m.serverDetail.SetServer(srv, &status, tools)
+			}
+		}
 
 	case events.LogReceivedEvent:
 		m.logPanel.AppendLog(evt.ServerID(), evt.Line)
@@ -371,6 +391,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 	case key.Matches(msg, m.keys.Escape):
 		if m.currentView == ViewDetail {
 			m.currentView = ViewList
+			m.detailServerID = ""
 			return true, m, nil
 		}
 		if m.logPanel.IsFocused() {
@@ -413,6 +434,7 @@ func (m *Model) handleListKey(msg tea.KeyMsg) (handled bool, model tea.Model, cm
 	case key.Matches(msg, m.keys.Enter):
 		if item := m.serverList.SelectedItem(); item != nil {
 			m.currentView = ViewDetail
+			m.detailServerID = item.Config.ID
 			status := m.serverStatuses[item.Config.ID]
 			tools := m.convertTools(m.serverTools[item.Config.ID])
 			m.serverDetail.SetServer(&item.Config, &status, tools)

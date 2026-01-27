@@ -45,10 +45,11 @@ type ServerConfig struct {
 
 // NamespaceConfig represents a namespace that groups servers and their tool permissions.
 type NamespaceConfig struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	ServerIDs   []string `json:"serverIds"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description,omitempty"`
+	ServerIDs     []string `json:"serverIds"`
+	DenyByDefault bool     `json:"denyByDefault,omitempty"` // If true, unconfigured tools are denied
 }
 
 // ProxyConfig represents an HTTP proxy configuration (Phase 4, deferred).

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hedworth/mcp-studio-go/internal/config"
 )
 
 // buildBinary builds the mcp-studio binary for testing.
@@ -69,6 +71,20 @@ func runCLI(binary, configPath string, args ...string) (string, string, error) {
 
 	err := cmd.Run()
 	return stdout.String(), stderr.String(), err
+}
+
+func getServerIDByName(t *testing.T, configPath, name string) string {
+	t.Helper()
+
+	cfg, err := config.LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+	srv := cfg.FindServerByName(name)
+	if srv == nil {
+		t.Fatalf("server %q not found in config", name)
+	}
+	return srv.ID
 }
 
 func TestParseEnvFlags(t *testing.T) {
@@ -390,5 +406,460 @@ func TestCLI_Remove_NotFound(t *testing.T) {
 	output := stdout + stderr
 	if !strings.Contains(output, "not found") {
 		t.Errorf("expected 'not found' error, got: %s", output)
+	}
+}
+
+// ============================================================================
+// Namespace CLI Tests
+// ============================================================================
+
+func TestCLI_Namespace_Add(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "add", "dev", "--description", "Development")
+	if err != nil {
+		t.Fatalf("namespace add failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, `Added namespace "dev"`) {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
+	// Verify in config
+	data, _ := os.ReadFile(configPath)
+	var config map[string]interface{}
+	json.Unmarshal(data, &config)
+
+	namespaces := config["namespaces"].([]interface{})
+	if len(namespaces) != 1 {
+		t.Errorf("expected 1 namespace, got %d", len(namespaces))
+	}
+
+	ns := namespaces[0].(map[string]interface{})
+	if ns["name"] != "dev" {
+		t.Errorf("expected name 'dev', got %v", ns["name"])
+	}
+	if ns["description"] != "Development" {
+		t.Errorf("expected description 'Development', got %v", ns["description"])
+	}
+}
+
+func TestCLI_Namespace_Add_DuplicateName(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "namespace", "add", "dev")
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "add", "dev")
+	if err == nil {
+		t.Fatal("expected error for duplicate name")
+	}
+
+	output := stdout + stderr
+	if !strings.Contains(output, "already exists") {
+		t.Errorf("expected 'already exists' error, got: %s", output)
+	}
+}
+
+func TestCLI_Namespace_List(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "namespace", "add", "dev", "--description", "Development")
+	runCLI(binary, configPath, "namespace", "add", "prod", "--description", "Production")
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "list")
+	if err != nil {
+		t.Fatalf("namespace list failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "dev") || !strings.Contains(stdout, "prod") {
+		t.Errorf("expected both namespaces in output, got: %s", stdout)
+	}
+
+	if !strings.Contains(stdout, "NAME") || !strings.Contains(stdout, "DESCRIPTION") {
+		t.Errorf("expected table headers, got: %s", stdout)
+	}
+}
+
+func TestCLI_Namespace_List_JSON(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "namespace", "add", "dev")
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "list", "--json")
+	if err != nil {
+		t.Fatalf("namespace list --json failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	var namespaces []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &namespaces); err != nil {
+		t.Fatalf("failed to parse JSON: %v\noutput: %s", err, stdout)
+	}
+
+	if len(namespaces) != 1 {
+		t.Errorf("expected 1 namespace, got %d", len(namespaces))
+	}
+
+	if namespaces[0]["name"] != "dev" {
+		t.Errorf("expected name 'dev', got %v", namespaces[0]["name"])
+	}
+}
+
+func TestCLI_Namespace_List_Empty(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "list")
+	if err != nil {
+		t.Fatalf("namespace list failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "No namespaces configured") {
+		t.Errorf("expected 'No namespaces configured', got: %s", stdout)
+	}
+}
+
+func TestCLI_Namespace_Remove(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "namespace", "add", "dev")
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "remove", "dev", "--yes")
+	if err != nil {
+		t.Fatalf("namespace remove failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, `Removed namespace "dev"`) {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
+	// Verify namespace is gone
+	listOut, _, _ := runCLI(binary, configPath, "namespace", "list")
+	if strings.Contains(listOut, "dev") && !strings.Contains(listOut, "No namespaces") {
+		t.Error("namespace should have been removed")
+	}
+}
+
+func TestCLI_Namespace_Remove_NotFound(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "remove", "nonexistent", "--yes")
+	if err == nil {
+		t.Fatal("expected error for non-existent namespace")
+	}
+
+	output := stdout + stderr
+	if !strings.Contains(output, "not found") {
+		t.Errorf("expected 'not found' error, got: %s", output)
+	}
+}
+
+func TestCLI_Namespace_Assign(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	// Add server and namespace
+	runCLI(binary, configPath, "add", "my-server", "--", "echo", "hello")
+	runCLI(binary, configPath, "namespace", "add", "dev")
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "assign", "dev", "my-server")
+	if err != nil {
+		t.Fatalf("namespace assign failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, `Assigned server "my-server" to namespace "dev"`) {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
+	// Verify in list
+	listOut, _, _ := runCLI(binary, configPath, "namespace", "list")
+	if !strings.Contains(listOut, "1") { // 1 server assigned
+		t.Errorf("expected 1 server count, got: %s", listOut)
+	}
+}
+
+func TestCLI_Namespace_Assign_NotFound(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "namespace", "add", "dev")
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "assign", "dev", "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for non-existent server")
+	}
+
+	output := stdout + stderr
+	if !strings.Contains(output, "not found") {
+		t.Errorf("expected 'not found' error, got: %s", output)
+	}
+}
+
+func TestCLI_Namespace_Unassign(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "add", "my-server", "--", "echo", "hello")
+	runCLI(binary, configPath, "namespace", "add", "dev")
+	runCLI(binary, configPath, "namespace", "assign", "dev", "my-server")
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "unassign", "dev", "my-server")
+	if err != nil {
+		t.Fatalf("namespace unassign failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, `Unassigned server "my-server" from namespace "dev"`) {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+}
+
+func TestCLI_Namespace_Default(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "namespace", "add", "dev")
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "default", "dev")
+	if err != nil {
+		t.Fatalf("namespace default failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, `Set default namespace to "dev"`) {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
+	// Verify in list output (should show *)
+	listOut, _, _ := runCLI(binary, configPath, "namespace", "list")
+	if !strings.Contains(listOut, "*") {
+		t.Errorf("expected default indicator (*), got: %s", listOut)
+	}
+}
+
+func TestCLI_Namespace_SetDenyDefault(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "namespace", "add", "prod")
+
+	stdout, stderr, err := runCLI(binary, configPath, "namespace", "set-deny-default", "prod", "true")
+	if err != nil {
+		t.Fatalf("namespace set-deny-default failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, `Deny-by-default enabled for namespace "prod"`) {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
+	// Verify in list
+	listOut, _, _ := runCLI(binary, configPath, "namespace", "list")
+	if !strings.Contains(listOut, "yes") { // deny-default column shows "yes"
+		t.Errorf("expected deny-default 'yes', got: %s", listOut)
+	}
+}
+
+// ============================================================================
+// Permission CLI Tests
+// ============================================================================
+
+func TestCLI_Permission_Set(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	runCLI(binary, configPath, "namespace", "add", "prod")
+
+	stdout, stderr, err := runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
+	if err != nil {
+		t.Fatalf("permission set failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "denied") {
+		t.Errorf("expected 'denied' in output, got: %s", stdout)
+	}
+}
+
+func TestCLI_Permission_Set_NotFound(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "namespace", "add", "prod")
+
+	stdout, stderr, err := runCLI(binary, configPath, "permission", "set", "prod", "nonexistent", "tool", "allow")
+	if err == nil {
+		t.Fatal("expected error for non-existent server")
+	}
+
+	output := stdout + stderr
+	if !strings.Contains(output, "not found") {
+		t.Errorf("expected 'not found' error, got: %s", output)
+	}
+}
+
+func TestCLI_Permission_List(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	runCLI(binary, configPath, "namespace", "add", "prod")
+	runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
+	runCLI(binary, configPath, "permission", "set", "prod", "api-server", "read_user", "allow")
+
+	stdout, stderr, err := runCLI(binary, configPath, "permission", "list", "prod")
+	if err != nil {
+		t.Fatalf("permission list failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "create_user") || !strings.Contains(stdout, "read_user") {
+		t.Errorf("expected both permissions in output, got: %s", stdout)
+	}
+
+	if !strings.Contains(stdout, "deny") || !strings.Contains(stdout, "allow") {
+		t.Errorf("expected permission values, got: %s", stdout)
+	}
+}
+
+func TestCLI_Permission_List_JSON(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	runCLI(binary, configPath, "namespace", "add", "prod")
+	runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
+
+	stdout, stderr, err := runCLI(binary, configPath, "permission", "list", "prod", "--json")
+	if err != nil {
+		t.Fatalf("permission list --json failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("failed to parse JSON: %v\noutput: %s", err, stdout)
+	}
+
+	if result["namespace"] != "prod" {
+		t.Errorf("expected namespace 'prod', got %v", result["namespace"])
+	}
+
+	permissions := result["permissions"].([]interface{})
+	if len(permissions) != 1 {
+		t.Errorf("expected 1 permission, got %d", len(permissions))
+	}
+}
+
+func TestCLI_Permission_List_Empty(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "namespace", "add", "prod")
+
+	stdout, stderr, err := runCLI(binary, configPath, "permission", "list", "prod")
+	if err != nil {
+		t.Fatalf("permission list failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "No explicit permissions") {
+		t.Errorf("expected 'No explicit permissions', got: %s", stdout)
+	}
+}
+
+func TestCLI_Permission_Unset(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	runCLI(binary, configPath, "namespace", "add", "prod")
+	runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
+
+	stdout, stderr, err := runCLI(binary, configPath, "permission", "unset", "prod", "api-server", "create_user")
+	if err != nil {
+		t.Fatalf("permission unset failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "Removed permission") {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
+	// Verify permission is gone
+	listOut, _, _ := runCLI(binary, configPath, "permission", "list", "prod")
+	if strings.Contains(listOut, "create_user") {
+		t.Error("permission should have been removed")
+	}
+}
+
+func TestCLI_Permission_Set_NormalizesQualifiedName(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	runCLI(binary, configPath, "namespace", "add", "prod")
+
+	serverID := getServerIDByName(t, configPath, "api-server")
+
+	// Use a qualified name like "<serverID>.create_user" - should be normalized to "create_user"
+	stdout, stderr, err := runCLI(binary, configPath, "permission", "set", "prod", "api-server", serverID+".create_user", "deny")
+	if err != nil {
+		t.Fatalf("permission set failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// List should show "create_user" not "srv.create_user"
+	listOut, _, _ := runCLI(binary, configPath, "permission", "list", "prod")
+	if strings.Contains(listOut, "srv.create_user") {
+		t.Error("qualified name should have been normalized")
+	}
+	if !strings.Contains(listOut, "create_user") {
+		t.Error("expected normalized tool name 'create_user'")
+	}
+}
+
+func TestCLI_Permission_Unset_NormalizesQualifiedName(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	runCLI(binary, configPath, "namespace", "add", "prod")
+	runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
+
+	serverID := getServerIDByName(t, configPath, "api-server")
+
+	// Unset with a qualified name - should still work
+	stdout, stderr, err := runCLI(binary, configPath, "permission", "unset", "prod", "api-server", serverID+".create_user")
+	if err != nil {
+		t.Fatalf("permission unset failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "Removed permission") {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
+	// Verify permission is gone
+	listOut, _, _ := runCLI(binary, configPath, "permission", "list", "prod")
+	if strings.Contains(listOut, "create_user") {
+		t.Error("permission should have been removed")
+	}
+}
+
+func TestCLI_Permission_DoesNotStripDotsInToolNames(t *testing.T) {
+	binary := buildBinary(t)
+	configPath := setupTestConfig(t)
+
+	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	runCLI(binary, configPath, "namespace", "add", "prod")
+
+	stdout, stderr, err := runCLI(binary, configPath, "permission", "set", "prod", "api-server", "fs.read_file", "deny")
+	if err != nil {
+		t.Fatalf("permission set failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	listOut, _, _ := runCLI(binary, configPath, "permission", "list", "prod")
+	if !strings.Contains(listOut, "fs.read_file") {
+		t.Error("expected tool name with dots to be preserved")
+	}
+	if strings.Contains(stdout, "Removed permission") || strings.Contains(stderr, "invalid") {
+		t.Logf("unexpected output while setting permission: stdout=%q stderr=%q", stdout, stderr)
 	}
 }

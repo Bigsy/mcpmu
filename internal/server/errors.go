@@ -22,6 +22,7 @@ const (
 	ErrCodeServerNotRunning    = -32003
 	ErrCodeNamespaceNotFound   = -32004
 	ErrCodeToolNotFound        = -32005
+	ErrCodeToolDenied          = -32006
 )
 
 // RPCError represents a JSON-RPC 2.0 error.
@@ -93,4 +94,8 @@ func ErrNamespaceNotFound(namespaceID string) *RPCError {
 
 func ErrToolNotFound(toolName string) *RPCError {
 	return NewRPCError(ErrCodeToolNotFound, fmt.Sprintf("Tool not found: %s", toolName), map[string]string{"toolName": toolName})
+}
+
+func ErrToolDenied(toolName, reason string) *RPCError {
+	return NewRPCError(ErrCodeToolDenied, fmt.Sprintf("Tool denied: %s - %s", toolName, reason), map[string]string{"toolName": toolName, "reason": reason})
 }

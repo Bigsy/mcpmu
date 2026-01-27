@@ -487,3 +487,317 @@ func TestConfig_ServerList(t *testing.T) {
 func boolPtr(b bool) *bool {
 	return &b
 }
+
+// ============================================================================
+// Namespace Tests
+// ============================================================================
+
+func TestConfig_AddNamespace(t *testing.T) {
+	cfg := NewConfig()
+
+	ns := NamespaceConfig{
+		Name:        "development",
+		Description: "Dev environment",
+	}
+
+	id, err := cfg.AddNamespace(ns)
+	if err != nil {
+		t.Fatalf("AddNamespace failed: %v", err)
+	}
+
+	if id == "" {
+		t.Error("expected non-empty ID")
+	}
+
+	if len(cfg.Namespaces) != 1 {
+		t.Error("expected namespace to be added to config")
+	}
+}
+
+func TestConfig_AddNamespace_DuplicateName(t *testing.T) {
+	cfg := NewConfig()
+
+	ns1 := NamespaceConfig{Name: "dev"}
+	_, err := cfg.AddNamespace(ns1)
+	if err != nil {
+		t.Fatalf("first AddNamespace failed: %v", err)
+	}
+
+	ns2 := NamespaceConfig{Name: "dev"}
+	_, err = cfg.AddNamespace(ns2)
+	if err == nil {
+		t.Error("expected error for duplicate name")
+	}
+}
+
+func TestConfig_FindNamespaceByName(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "abcd", Name: "development"},
+		{ID: "efgh", Name: "production"},
+	}
+
+	ns := cfg.FindNamespaceByName("development")
+	if ns == nil {
+		t.Fatal("expected namespace to be found")
+	}
+	if ns.ID != "abcd" {
+		t.Errorf("expected ID 'abcd', got %q", ns.ID)
+	}
+
+	ns = cfg.FindNamespaceByName("nonexistent")
+	if ns != nil {
+		t.Error("expected nil for non-existent namespace")
+	}
+}
+
+func TestConfig_FindNamespaceByID(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "abcd", Name: "development"},
+	}
+
+	ns := cfg.FindNamespaceByID("abcd")
+	if ns == nil {
+		t.Fatal("expected namespace to be found")
+	}
+	if ns.Name != "development" {
+		t.Errorf("expected name 'development', got %q", ns.Name)
+	}
+}
+
+func TestConfig_DeleteNamespaceByName(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "abcd", Name: "development"},
+	}
+	cfg.ToolPermissions = []ToolPermission{
+		{NamespaceID: "abcd", ServerID: "srv1", ToolName: "tool1", Enabled: true},
+	}
+	cfg.DefaultNamespaceID = "abcd"
+
+	err := cfg.DeleteNamespaceByName("development")
+	if err != nil {
+		t.Fatalf("DeleteNamespaceByName failed: %v", err)
+	}
+
+	if len(cfg.Namespaces) != 0 {
+		t.Error("expected namespace to be deleted")
+	}
+
+	if len(cfg.ToolPermissions) != 0 {
+		t.Error("expected tool permissions to be cleaned up")
+	}
+
+	if cfg.DefaultNamespaceID != "" {
+		t.Error("expected default namespace to be cleared")
+	}
+}
+
+func TestConfig_DeleteNamespaceByName_NotFound(t *testing.T) {
+	cfg := NewConfig()
+
+	err := cfg.DeleteNamespaceByName("nonexistent")
+	if err == nil {
+		t.Error("expected error for non-existent namespace")
+	}
+}
+
+func TestConfig_AssignServerToNamespace(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "ns01", Name: "dev", ServerIDs: []string{}},
+	}
+	cfg.Servers["srv1"] = ServerConfig{ID: "srv1", Name: "Server 1"}
+
+	err := cfg.AssignServerToNamespace("ns01", "srv1")
+	if err != nil {
+		t.Fatalf("AssignServerToNamespace failed: %v", err)
+	}
+
+	ns := cfg.FindNamespaceByID("ns01")
+	if len(ns.ServerIDs) != 1 || ns.ServerIDs[0] != "srv1" {
+		t.Error("expected server to be assigned")
+	}
+
+	// Assigning again should be a no-op
+	err = cfg.AssignServerToNamespace("ns01", "srv1")
+	if err != nil {
+		t.Fatalf("second AssignServerToNamespace failed: %v", err)
+	}
+	if len(ns.ServerIDs) != 1 {
+		t.Error("expected no duplicate assignment")
+	}
+}
+
+func TestConfig_AssignServerToNamespace_Errors(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "ns01", Name: "dev", ServerIDs: []string{}},
+	}
+
+	// Non-existent namespace
+	err := cfg.AssignServerToNamespace("nonexistent", "srv1")
+	if err == nil {
+		t.Error("expected error for non-existent namespace")
+	}
+
+	// Non-existent server
+	err = cfg.AssignServerToNamespace("ns01", "nonexistent")
+	if err == nil {
+		t.Error("expected error for non-existent server")
+	}
+}
+
+func TestConfig_UnassignServerFromNamespace(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "ns01", Name: "dev", ServerIDs: []string{"srv1", "srv2"}},
+	}
+
+	err := cfg.UnassignServerFromNamespace("ns01", "srv1")
+	if err != nil {
+		t.Fatalf("UnassignServerFromNamespace failed: %v", err)
+	}
+
+	ns := cfg.FindNamespaceByID("ns01")
+	if len(ns.ServerIDs) != 1 || ns.ServerIDs[0] != "srv2" {
+		t.Error("expected server to be unassigned")
+	}
+}
+
+// ============================================================================
+// Tool Permission Tests
+// ============================================================================
+
+func TestConfig_SetToolPermission(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "ns01", Name: "dev"},
+	}
+	cfg.Servers["srv1"] = ServerConfig{ID: "srv1", Name: "Server 1"}
+
+	err := cfg.SetToolPermission("ns01", "srv1", "read_file", true)
+	if err != nil {
+		t.Fatalf("SetToolPermission failed: %v", err)
+	}
+
+	if len(cfg.ToolPermissions) != 1 {
+		t.Fatal("expected 1 permission")
+	}
+
+	tp := cfg.ToolPermissions[0]
+	if tp.NamespaceID != "ns01" || tp.ServerID != "srv1" || tp.ToolName != "read_file" || !tp.Enabled {
+		t.Error("permission not set correctly")
+	}
+
+	// Update existing permission
+	err = cfg.SetToolPermission("ns01", "srv1", "read_file", false)
+	if err != nil {
+		t.Fatalf("SetToolPermission update failed: %v", err)
+	}
+
+	if len(cfg.ToolPermissions) != 1 {
+		t.Error("expected permission to be updated, not added")
+	}
+
+	if cfg.ToolPermissions[0].Enabled != false {
+		t.Error("expected permission to be updated to false")
+	}
+}
+
+func TestConfig_SetToolPermission_Errors(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces = []NamespaceConfig{
+		{ID: "ns01", Name: "dev"},
+	}
+	cfg.Servers["srv1"] = ServerConfig{ID: "srv1", Name: "Server 1"}
+
+	// Non-existent namespace
+	err := cfg.SetToolPermission("nonexistent", "srv1", "tool", true)
+	if err == nil {
+		t.Error("expected error for non-existent namespace")
+	}
+
+	// Non-existent server
+	err = cfg.SetToolPermission("ns01", "nonexistent", "tool", true)
+	if err == nil {
+		t.Error("expected error for non-existent server")
+	}
+}
+
+func TestConfig_UnsetToolPermission(t *testing.T) {
+	cfg := NewConfig()
+	cfg.ToolPermissions = []ToolPermission{
+		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "read_file", Enabled: true},
+		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "write_file", Enabled: false},
+	}
+
+	err := cfg.UnsetToolPermission("ns01", "srv1", "read_file")
+	if err != nil {
+		t.Fatalf("UnsetToolPermission failed: %v", err)
+	}
+
+	if len(cfg.ToolPermissions) != 1 {
+		t.Error("expected 1 permission remaining")
+	}
+
+	// Unset non-existent is not an error
+	err = cfg.UnsetToolPermission("ns01", "srv1", "nonexistent")
+	if err != nil {
+		t.Error("expected no error for non-existent permission")
+	}
+}
+
+func TestConfig_GetToolPermission(t *testing.T) {
+	cfg := NewConfig()
+	cfg.ToolPermissions = []ToolPermission{
+		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "read_file", Enabled: true},
+		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "write_file", Enabled: false},
+	}
+
+	enabled, found := cfg.GetToolPermission("ns01", "srv1", "read_file")
+	if !found {
+		t.Error("expected permission to be found")
+	}
+	if !enabled {
+		t.Error("expected permission to be enabled")
+	}
+
+	enabled, found = cfg.GetToolPermission("ns01", "srv1", "write_file")
+	if !found {
+		t.Error("expected permission to be found")
+	}
+	if enabled {
+		t.Error("expected permission to be disabled")
+	}
+
+	_, found = cfg.GetToolPermission("ns01", "srv1", "nonexistent")
+	if found {
+		t.Error("expected permission not to be found")
+	}
+}
+
+func TestConfig_GetToolPermissionsForNamespace(t *testing.T) {
+	cfg := NewConfig()
+	cfg.ToolPermissions = []ToolPermission{
+		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "tool1", Enabled: true},
+		{NamespaceID: "ns01", ServerID: "srv2", ToolName: "tool2", Enabled: false},
+		{NamespaceID: "ns02", ServerID: "srv1", ToolName: "tool1", Enabled: true},
+	}
+
+	perms := cfg.GetToolPermissionsForNamespace("ns01")
+	if len(perms) != 2 {
+		t.Errorf("expected 2 permissions, got %d", len(perms))
+	}
+
+	perms = cfg.GetToolPermissionsForNamespace("ns02")
+	if len(perms) != 1 {
+		t.Errorf("expected 1 permission, got %d", len(perms))
+	}
+
+	perms = cfg.GetToolPermissionsForNamespace("nonexistent")
+	if len(perms) != 0 {
+		t.Errorf("expected 0 permissions, got %d", len(perms))
+	}
+}

@@ -241,6 +241,138 @@ func TestServer_ToolsCall_UnknownTool(t *testing.T) {
 	}
 }
 
+func TestServer_ToolsCall_PermissionDenied(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {ID: "srv1", Name: "Test Server", Kind: config.ServerKindStdio, Enabled: &enabled, Command: "echo"},
+		},
+		Namespaces: []config.NamespaceConfig{
+			{ID: "ns01", Name: "restricted", DenyByDefault: true, ServerIDs: []string{"srv1"}},
+		},
+		ToolPermissions: []config.ToolPermission{
+			{NamespaceID: "ns01", ServerID: "srv1", ToolName: "allowed_tool", Enabled: true},
+			{NamespaceID: "ns01", ServerID: "srv1", ToolName: "denied_tool", Enabled: false},
+		},
+	}
+
+	var stdout bytes.Buffer
+	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"srv1.denied_tool","arguments":{}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"srv1.unknown_tool","arguments":{}}}
+`)
+
+	srv, err := New(Options{
+		Config:          cfg,
+		Namespace:       "restricted",
+		Stdin:           stdin,
+		Stdout:          &stdout,
+		ServerName:      "mcp-studio-test",
+		ServerVersion:   "1.0.0",
+		ProtocolVersion: "2024-11-05",
+		LogLevel:        "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_ = srv.Run(ctx)
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("Expected 3 responses, got %d", len(lines))
+	}
+
+	// Check explicitly denied tool
+	var resp2 struct {
+		ID    int       `json:"id"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &resp2); err != nil {
+		t.Fatalf("Unmarshal response 2: %v", err)
+	}
+	if resp2.Error == nil {
+		t.Fatal("Expected error for explicitly denied tool")
+	}
+	if resp2.Error.Code != ErrCodeToolDenied {
+		t.Errorf("Error code = %d, want %d (tool denied)", resp2.Error.Code, ErrCodeToolDenied)
+	}
+
+	// Check tool denied by DenyByDefault
+	var resp3 struct {
+		ID    int       `json:"id"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[2]), &resp3); err != nil {
+		t.Fatalf("Unmarshal response 3: %v", err)
+	}
+	if resp3.Error == nil {
+		t.Fatal("Expected error for tool denied by DenyByDefault")
+	}
+	if resp3.Error.Code != ErrCodeToolDenied {
+		t.Errorf("Error code = %d, want %d (tool denied)", resp3.Error.Code, ErrCodeToolDenied)
+	}
+}
+
+func TestServer_ToolsCall_NoNamespace_AllowsAll(t *testing.T) {
+	// When no namespaces are configured (selection=all), permission checks are bypassed
+	enabled := true
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {ID: "srv1", Name: "Test Server", Kind: config.ServerKindStdio, Enabled: &enabled, Command: "echo"},
+		},
+		// No namespaces - should allow all tools
+	}
+
+	var stdout bytes.Buffer
+	// Call a tool - it should NOT be denied (though it may fail for other reasons like server not running)
+	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"srv1.any_tool","arguments":{}}}
+`)
+
+	srv, err := New(Options{
+		Config:          cfg,
+		Stdin:           stdin,
+		Stdout:          &stdout,
+		ServerName:      "mcp-studio-test",
+		ServerVersion:   "1.0.0",
+		ProtocolVersion: "2024-11-05",
+		LogLevel:        "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_ = srv.Run(ctx)
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("Expected 2 responses, got %d", len(lines))
+	}
+
+	var resp struct {
+		ID    int       `json:"id"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &resp); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
+
+	// Should NOT be a permission denied error
+	// (It may fail for other reasons like server not running, which is fine)
+	if resp.Error != nil && resp.Error.Code == ErrCodeToolDenied {
+		t.Error("Expected tool to NOT be denied when no namespaces configured")
+	}
+}
+
 // TestEndToEnd_WithRealBinary tests the full stdio server by spawning the actual binary.
 // This test requires building the binary first.
 func TestEndToEnd_WithRealBinary(t *testing.T) {

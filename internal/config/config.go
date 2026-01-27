@@ -258,3 +258,216 @@ func removeString(slice []string, s string) []string {
 	}
 	return result
 }
+
+// FindNamespaceByName returns the namespace with the given name, or nil if not found.
+func (c *Config) FindNamespaceByName(name string) *NamespaceConfig {
+	for i := range c.Namespaces {
+		if c.Namespaces[i].Name == name {
+			return &c.Namespaces[i]
+		}
+	}
+	return nil
+}
+
+// FindNamespaceByID returns the namespace with the given ID, or nil if not found.
+func (c *Config) FindNamespaceByID(id string) *NamespaceConfig {
+	for i := range c.Namespaces {
+		if c.Namespaces[i].ID == id {
+			return &c.Namespaces[i]
+		}
+	}
+	return nil
+}
+
+// AddNamespace adds a new namespace to the config, generating an ID if needed.
+// Returns an error if a namespace with the same name already exists.
+func (c *Config) AddNamespace(ns NamespaceConfig) (string, error) {
+	// Check for duplicate name
+	if ns.Name != "" {
+		if existing := c.FindNamespaceByName(ns.Name); existing != nil {
+			return "", fmt.Errorf("namespace with name %q already exists", ns.Name)
+		}
+	}
+
+	// Generate ID if empty
+	if ns.ID == "" {
+		for {
+			ns.ID = GenerateID()
+			if c.FindNamespaceByID(ns.ID) == nil {
+				break
+			}
+		}
+	}
+
+	// Validate ID
+	if err := ValidateID(ns.ID); err != nil {
+		return "", fmt.Errorf("invalid id: %w", err)
+	}
+
+	// Check for ID collision
+	if c.FindNamespaceByID(ns.ID) != nil {
+		return "", fmt.Errorf("namespace id %q already exists", ns.ID)
+	}
+
+	// Initialize ServerIDs if nil
+	if ns.ServerIDs == nil {
+		ns.ServerIDs = []string{}
+	}
+
+	c.Namespaces = append(c.Namespaces, ns)
+	return ns.ID, nil
+}
+
+// DeleteNamespaceByName removes a namespace by name.
+// Returns an error if no namespace with that name exists.
+// Also cleans up tool permissions and default namespace reference.
+func (c *Config) DeleteNamespaceByName(name string) error {
+	for i, ns := range c.Namespaces {
+		if ns.Name == name {
+			return c.deleteNamespace(i, ns.ID)
+		}
+	}
+	return fmt.Errorf("namespace %q not found", name)
+}
+
+// DeleteNamespaceByID removes a namespace by ID.
+func (c *Config) DeleteNamespaceByID(id string) error {
+	for i, ns := range c.Namespaces {
+		if ns.ID == id {
+			return c.deleteNamespace(i, id)
+		}
+	}
+	return fmt.Errorf("namespace %q not found", id)
+}
+
+// deleteNamespace removes namespace at index and cleans up references.
+func (c *Config) deleteNamespace(index int, id string) error {
+	// Remove from slice
+	c.Namespaces = append(c.Namespaces[:index], c.Namespaces[index+1:]...)
+
+	// Clean up tool permissions
+	filtered := make([]ToolPermission, 0, len(c.ToolPermissions))
+	for _, tp := range c.ToolPermissions {
+		if tp.NamespaceID != id {
+			filtered = append(filtered, tp)
+		}
+	}
+	c.ToolPermissions = filtered
+
+	// Clear default namespace if it was this one
+	if c.DefaultNamespaceID == id {
+		c.DefaultNamespaceID = ""
+	}
+
+	return nil
+}
+
+// UpdateNamespace updates an existing namespace configuration.
+func (c *Config) UpdateNamespace(ns NamespaceConfig) error {
+	for i := range c.Namespaces {
+		if c.Namespaces[i].ID == ns.ID {
+			c.Namespaces[i] = ns
+			return nil
+		}
+	}
+	return fmt.Errorf("namespace %q not found", ns.ID)
+}
+
+// AssignServerToNamespace adds a server to a namespace's server list.
+func (c *Config) AssignServerToNamespace(namespaceID, serverID string) error {
+	ns := c.FindNamespaceByID(namespaceID)
+	if ns == nil {
+		return fmt.Errorf("namespace %q not found", namespaceID)
+	}
+
+	// Check server exists
+	if c.GetServer(serverID) == nil {
+		return fmt.Errorf("server %q not found", serverID)
+	}
+
+	// Check if already assigned
+	for _, sid := range ns.ServerIDs {
+		if sid == serverID {
+			return nil // Already assigned, no-op
+		}
+	}
+
+	ns.ServerIDs = append(ns.ServerIDs, serverID)
+	return nil
+}
+
+// UnassignServerFromNamespace removes a server from a namespace's server list.
+func (c *Config) UnassignServerFromNamespace(namespaceID, serverID string) error {
+	ns := c.FindNamespaceByID(namespaceID)
+	if ns == nil {
+		return fmt.Errorf("namespace %q not found", namespaceID)
+	}
+
+	ns.ServerIDs = removeString(ns.ServerIDs, serverID)
+	return nil
+}
+
+// SetToolPermission sets a permission for a tool in a namespace.
+// If a permission already exists, it is updated.
+func (c *Config) SetToolPermission(namespaceID, serverID, toolName string, enabled bool) error {
+	// Validate namespace exists
+	if c.FindNamespaceByID(namespaceID) == nil {
+		return fmt.Errorf("namespace %q not found", namespaceID)
+	}
+
+	// Validate server exists
+	if c.GetServer(serverID) == nil {
+		return fmt.Errorf("server %q not found", serverID)
+	}
+
+	// Check if permission already exists
+	for i := range c.ToolPermissions {
+		tp := &c.ToolPermissions[i]
+		if tp.NamespaceID == namespaceID && tp.ServerID == serverID && tp.ToolName == toolName {
+			tp.Enabled = enabled
+			return nil
+		}
+	}
+
+	// Add new permission
+	c.ToolPermissions = append(c.ToolPermissions, ToolPermission{
+		NamespaceID: namespaceID,
+		ServerID:    serverID,
+		ToolName:    toolName,
+		Enabled:     enabled,
+	})
+	return nil
+}
+
+// UnsetToolPermission removes a permission for a tool, reverting to namespace default.
+func (c *Config) UnsetToolPermission(namespaceID, serverID, toolName string) error {
+	for i, tp := range c.ToolPermissions {
+		if tp.NamespaceID == namespaceID && tp.ServerID == serverID && tp.ToolName == toolName {
+			c.ToolPermissions = append(c.ToolPermissions[:i], c.ToolPermissions[i+1:]...)
+			return nil
+		}
+	}
+	return nil // Not found is not an error
+}
+
+// GetToolPermission returns the explicit permission for a tool, if any.
+// Returns (permission, found).
+func (c *Config) GetToolPermission(namespaceID, serverID, toolName string) (bool, bool) {
+	for _, tp := range c.ToolPermissions {
+		if tp.NamespaceID == namespaceID && tp.ServerID == serverID && tp.ToolName == toolName {
+			return tp.Enabled, true
+		}
+	}
+	return false, false
+}
+
+// GetToolPermissionsForNamespace returns all tool permissions for a namespace.
+func (c *Config) GetToolPermissionsForNamespace(namespaceID string) []ToolPermission {
+	result := []ToolPermission{}
+	for _, tp := range c.ToolPermissions {
+		if tp.NamespaceID == namespaceID {
+			result = append(result, tp)
+		}
+	}
+	return result
+}
