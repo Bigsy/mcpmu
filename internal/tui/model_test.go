@@ -56,16 +56,16 @@ func TestModel_TabSwitching(t *testing.T) {
 		t.Errorf("expected tab to be Servers after '1', got %v", m.activeTab)
 	}
 
-	// Tab2 (Namespaces) is enabled, Tab3 (Proxies) is still disabled
+	// Tab2 (Namespaces) is enabled
 	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	if m.activeTab != TabNamespaces {
 		t.Errorf("expected tab to be Namespaces after '2', got %v", m.activeTab)
 	}
 
-	// Tab3 (Proxies) is disabled, pressing '3' should not change tab
+	// Tab3 (Proxies) is a placeholder view
 	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
-	if m.activeTab != TabNamespaces {
-		t.Errorf("expected tab to stay Namespaces (Proxies disabled), got %v", m.activeTab)
+	if m.activeTab != TabProxies {
+		t.Errorf("expected tab to be Proxies after '3', got %v", m.activeTab)
 	}
 
 	// Press '1' to go back to Servers

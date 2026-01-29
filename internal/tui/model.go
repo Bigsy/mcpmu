@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,6 +64,9 @@ type Model struct {
 	namespaceForm   *views.NamespaceFormModel
 	serverPicker    views.ServerPickerModel
 	toolPerms       views.ToolPermissionsModel
+
+	// Proxies Components
+	proxies views.ProxiesModel
 
 	// Shared Components
 	logPanel    views.LogPanelModel
@@ -132,6 +136,7 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 		namespaceForm:   newNamespaceFormPtr(th),
 		serverPicker:    views.NewServerPicker(th),
 		toolPerms:       views.NewToolPermissions(th),
+		proxies:         views.NewProxies(th),
 		logPanel:        views.NewLogPanel(th),
 		helpOverlay:     views.NewHelpOverlay(th),
 		confirmDlg:      views.NewConfirm(th),
@@ -155,6 +160,33 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 	m.refreshNamespaceList()
 
 	return m
+}
+
+func (m *Model) applyFocus() {
+	// Reset everything to unfocused, then mark the active pane focused so it
+	// picks up the orange accent border.
+	m.serverList.SetFocused(false)
+	m.serverDetail.SetFocused(false)
+	m.namespaceList.SetFocused(false)
+	m.namespaceDetail.SetFocused(false)
+	m.proxies.SetFocused(false)
+
+	switch m.activeTab {
+	case TabServers:
+		if m.currentView == ViewDetail {
+			m.serverDetail.SetFocused(true)
+		} else {
+			m.serverList.SetFocused(true)
+		}
+	case TabNamespaces:
+		if m.currentView == ViewDetail {
+			m.namespaceDetail.SetFocused(true)
+		} else {
+			m.namespaceList.SetFocused(true)
+		}
+	case TabProxies:
+		m.proxies.SetFocused(true)
+	}
 }
 
 // Init implements tea.Model.
@@ -327,6 +359,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.namespaceDetail, cmd = m.namespaceDetail.Update(msg)
 			cmds = append(cmds, cmd)
 		}
+	case TabProxies:
+		var cmd tea.Cmd
+		m.proxies, cmd = m.proxies.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 
 	if m.logPanel.IsVisible() {
@@ -418,17 +454,23 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 	case key.Matches(msg, m.keys.Tab1):
 		m.activeTab = TabServers
 		m.currentView = ViewList
+		m.detailServerID = ""
+		m.detailNamespaceID = ""
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Tab2):
 		m.activeTab = TabNamespaces
 		m.currentView = ViewList
+		m.detailServerID = ""
 		m.detailNamespaceID = ""
 		m.refreshNamespaceList()
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Tab3):
-		// Proxies - disabled until Phase 5 (see plan5.md)
+		m.activeTab = TabProxies
+		m.currentView = ViewList
+		m.detailServerID = ""
+		m.detailNamespaceID = ""
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Escape):
@@ -555,6 +597,12 @@ func (m *Model) handleServerDetailKey(msg tea.KeyMsg) (handled bool, model tea.M
 			} else {
 				go m.startServer(item.Config)
 			}
+		}
+		return true, m, nil
+
+	case key.Matches(msg, m.keys.ToggleEnabled):
+		if m.detailServerID != "" {
+			m.toggleServerEnabled(m.detailServerID)
 		}
 		return true, m, nil
 	}
@@ -722,7 +770,16 @@ func (m *Model) toggleServerEnabled(id string) {
 	}
 
 	// Toggle enabled state
-	newEnabled := !srv.IsEnabled()
+	currentlyEnabled := srv.IsEnabled()
+	newEnabled := !currentlyEnabled
+
+	// Avoid a contradictory "running + disabled" state by stopping the server
+	// when disabling.
+	if currentlyEnabled && !newEnabled {
+		if status, ok := m.serverStatuses[id]; ok && status.State == events.StateRunning {
+			go m.supervisor.Stop(id)
+		}
+	}
 	srv.SetEnabled(newEnabled)
 	m.cfg.Servers[id] = *srv
 
@@ -750,6 +807,7 @@ func (m *Model) refreshServerList() {
 				}
 			}
 		}
+		sort.Strings(namespaceNames)
 
 		items[i] = views.ServerItem{
 			Config:     srv,
@@ -797,6 +855,9 @@ func (m *Model) updateLayout() {
 	m.namespaceList.SetSize(contentWidth, contentHeight)
 	m.namespaceDetail.SetSize(contentWidth, contentHeight)
 
+	// Set component sizes - proxies
+	m.proxies.SetSize(contentWidth, contentHeight)
+
 	// Modal/overlay sizes
 	m.serverPicker.SetSize(m.width, m.height)
 	m.toolPerms.SetSize(m.width, m.height)
@@ -811,6 +872,8 @@ func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "Loading..."
 	}
+
+	m.applyFocus()
 
 	var sections []string
 
@@ -831,6 +894,8 @@ func (m Model) View() string {
 		} else {
 			sections = append(sections, m.namespaceDetail.View())
 		}
+	case TabProxies:
+		sections = append(sections, m.proxies.View())
 	default:
 		sections = append(sections, m.serverList.View())
 	}
@@ -840,12 +905,8 @@ func (m Model) View() string {
 		sections = append(sections, m.logPanel.View())
 	}
 
-	// Status bar (replaced by toast when visible)
-	if m.toast.IsVisible() {
-		sections = append(sections, m.toast.View())
-	} else {
-		sections = append(sections, m.renderStatusBar())
-	}
+	// Status bar
+	sections = append(sections, m.renderStatusBar())
 
 	// Build base content
 	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
@@ -894,8 +955,8 @@ func (m Model) renderHeader() string {
 		enabled bool
 	}{
 		{"Servers", true},
-		{"Namespaces", true},  // Phase 3 - Now enabled
-		{"Proxies", false},    // Phase 5
+		{"Namespaces", true}, // Phase 3 - Now enabled
+		{"Proxies", true},    // Phase 5 (placeholder)
 	}
 
 	var tabViews []string
@@ -932,10 +993,15 @@ func (m Model) renderStatusBar() string {
 	var keys string
 	switch m.activeTab {
 	case TabServers:
+		enableHint := "E:enable"
+		if item := m.serverList.SelectedItem(); item != nil && item.Config.IsEnabled() {
+			enableHint = "E:disable"
+		}
+
 		if m.currentView == ViewList {
-			keys = "t:test  E:enable  a:add  e:edit  d:delete  l:logs  ?:help"
+			keys = "enter:view  t:test  " + enableHint + "  a:add  e:edit  d:delete  l:logs  ?:help"
 		} else {
-			keys = "esc:back  t:test  l:logs  ?:help"
+			keys = "esc:back  t:test  " + enableHint + "  l:logs  ?:help"
 		}
 	case TabNamespaces:
 		if m.currentView == ViewList {
@@ -943,8 +1009,23 @@ func (m Model) renderStatusBar() string {
 		} else {
 			keys = "esc:back  s:assign-servers  p:permissions  D:set-default  e:edit  ?:help"
 		}
+	case TabProxies:
+		keys = "1:servers  2:namespaces  ?:help"
 	default:
 		keys = "?:help"
+	}
+
+	// When a toast is visible, render it on the left but keep key hints on the
+	// right (so notifications don't hide navigation hints).
+	if m.toast.IsVisible() {
+		// Ensure the toast doesn't overflow into the key hints area.
+		available := m.width - lipgloss.Width(keys) - 4
+		if available < 10 {
+			available = 10
+		}
+		if toast := m.toast.ViewWithMaxWidth(available); toast != "" {
+			left = toast
+		}
 	}
 
 	padding := m.width - lipgloss.Width(left) - lipgloss.Width(keys) - 4

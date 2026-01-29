@@ -93,12 +93,12 @@ func (m HelpOverlayModel) helpContent() string {
 			{"k / ↑", "Move up"},
 			{"g", "Go to top"},
 			{"G", "Go to bottom"},
-			{"Enter", "View server details"},
+			{"Enter", "View details"},
 			{"Esc", "Go back / close"},
 		}),
 		m.renderSection("Server Actions", [][]string{
 			{"t", "Test server (start/stop)"},
-			{"E", "Enable/disable (for stdio mode)"},
+			{"E", "Enable/disable server"},
 			{"a", "Add new server"},
 			{"e", "Edit server"},
 			{"d", "Delete server"},
@@ -109,8 +109,8 @@ func (m HelpOverlayModel) helpContent() string {
 		}),
 		m.renderSection("Tabs", [][]string{
 			{"1", "Servers tab"},
-			{"2", "Namespaces tab (coming)"},
-			{"3", "Proxies tab (coming)"},
+			{"2", "Namespaces tab"},
+			{"3", "Proxies tab (planned)"},
 		}),
 		m.renderSection("General", [][]string{
 			{"?", "Toggle this help"},

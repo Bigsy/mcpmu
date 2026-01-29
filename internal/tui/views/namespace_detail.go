@@ -202,11 +202,6 @@ func (m *NamespaceDetailModel) updateContent() {
 		content.WriteString(permBox.Render(strings.TrimRight(permsContent.String(), "\n")))
 	}
 
-	// Help section
-	content.WriteString("\n\n")
-	content.WriteString(m.theme.Faint.Render("Keys: "))
-	content.WriteString(m.theme.Muted.Render("s=assign servers  p=edit permissions  D=set default  esc=back"))
-
 	m.viewport.SetContent(content.String())
 }
 

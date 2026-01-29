@@ -143,7 +143,7 @@ func (d namespaceDelegate) Render(w io.Writer, m list.Model, index int, item lis
 	}
 
 	if selected {
-		line1 = "> "
+		line1 = d.theme.Primary.Render(">") + " "
 	} else {
 		line1 = "  "
 	}

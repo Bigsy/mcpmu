@@ -3,6 +3,8 @@ package config
 
 import (
 	"encoding/json"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -109,6 +111,26 @@ func (c *Config) ServerList() []ServerConfig {
 	for _, s := range c.Servers {
 		servers = append(servers, s)
 	}
+
+	// Keep list ordering stable across runs (maps are randomized).
+	sort.SliceStable(servers, func(i, j int) bool {
+		key := func(s ServerConfig) string {
+			if s.Name != "" {
+				return strings.ToLower(s.Name)
+			}
+			if s.Command != "" {
+				return strings.ToLower(s.Command)
+			}
+			return strings.ToLower(s.ID)
+		}
+		ki := key(servers[i])
+		kj := key(servers[j])
+		if ki == kj {
+			return servers[i].ID < servers[j].ID
+		}
+		return ki < kj
+	})
+
 	return servers
 }
 

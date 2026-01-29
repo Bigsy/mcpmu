@@ -139,34 +139,30 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	selected := index == m.Index()
 	enabled := si.Config.IsEnabled()
 
-	// First line: icon, name, status pill
+	// First line: name, status pill
 	var line1 strings.Builder
 
-	// Status icon
-	icon := d.theme.StatusIcon(
-		si.Status.State == events.StateRunning,
-		si.Status.State == events.StateError || si.Status.State == events.StateCrashed,
-	)
-
 	name := si.Config.Name
-	if !enabled {
-		// Dim disabled servers
-		name = d.theme.Faint.Render(name)
-	} else if selected {
-		name = d.theme.ItemSelected.Render(name)
-	} else {
-		name = d.theme.Item.Render(name)
+	var styledName string
+	switch {
+	case !enabled && selected:
+		styledName = d.theme.ItemDim.Bold(true).Render(name)
+	case !enabled:
+		styledName = d.theme.ItemDim.Render(name)
+	case selected:
+		styledName = d.theme.ItemSelected.Render(name)
+	default:
+		styledName = d.theme.Item.Render(name)
 	}
 
 	if selected {
-		line1.WriteString("> ")
+		line1.WriteString(d.theme.Primary.Render(">"))
+		line1.WriteString(" ")
 	} else {
 		line1.WriteString("  ")
 	}
 
-	line1.WriteString(icon)
-	line1.WriteString(" ")
-	line1.WriteString(name)
+	line1.WriteString(styledName)
 
 	// Status pill - always show runtime state, add disabled indicator if applicable
 	statePill := d.theme.StatusPill(si.Status.State.String())
@@ -191,7 +187,7 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 
 	// Second line: command (truncated), tool count
 	var line2 strings.Builder
-	line2.WriteString("    ")
+	line2.WriteString("   ")
 
 	cmd := si.Config.Command
 	if len(si.Config.Args) > 0 {

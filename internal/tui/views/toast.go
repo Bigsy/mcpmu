@@ -141,6 +141,73 @@ func (m ToastModel) View() string {
 	return style.Render(icon + m.message)
 }
 
+// ViewWithMaxWidth renders the toast, truncating the message if needed so the
+// rendered string fits within maxWidth.
+func (m ToastModel) ViewWithMaxWidth(maxWidth int) string {
+	if !m.visible || m.message == "" {
+		return ""
+	}
+
+	var style lipgloss.Style
+	var icon string
+
+	switch m.level {
+	case ToastSuccess:
+		style = m.theme.ToastInfo // Green/success style
+		icon = "✓ "
+	case ToastWarn:
+		style = m.theme.ToastWarn
+		icon = "⚠ "
+	case ToastError:
+		style = m.theme.ToastErr
+		icon = "✖ "
+	default: // ToastInfo
+		style = m.theme.ToastInfo
+		icon = "ℹ "
+	}
+
+	// Fast path: no width constraint.
+	if maxWidth <= 0 {
+		return style.Render(icon + m.message)
+	}
+
+	// Render and check if it already fits.
+	rendered := style.Render(icon + m.message)
+	if lipgloss.Width(rendered) <= maxWidth {
+		return rendered
+	}
+
+	// The toast styles include 1-char padding on both sides.
+	// We'll conservatively reserve 2 columns for that padding.
+	availableText := maxWidth - 2
+	if availableText < 0 {
+		availableText = 0
+	}
+
+	availableMsg := availableText - lipgloss.Width(icon)
+	if availableMsg < 0 {
+		availableMsg = 0
+	}
+
+	msg := m.message
+	if lipgloss.Width(msg) > availableMsg {
+		if availableMsg <= 3 {
+			msg = msg[:min(len(msg), availableMsg)]
+		} else {
+			msg = msg[:min(len(msg), availableMsg-3)] + "..."
+		}
+	}
+
+	return style.Render(icon + msg)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // RenderOverlay renders the toast positioned above the status bar.
 func (m ToastModel) RenderOverlay(base string, width, height int) string {
 	if !m.visible {
