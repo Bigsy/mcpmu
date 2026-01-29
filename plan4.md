@@ -5,6 +5,8 @@ Add support for remote MCP servers using Streamable HTTP transport (SSE is just 
 
 **Reference:** [OpenAI Codex MCP configuration](https://developers.openai.com/codex/mcp/)
 
+source code https://github.com/openai/codex
+
 ---
 
 ## Current State
