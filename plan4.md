@@ -1,160 +1,268 @@
-# Phase 4: HTTP Proxies (DEFERRED)
+# Phase 4: Streamable HTTP Servers with OAuth
 
-> **Status: DEFERRED** - This phase is preserved for future implementation. The stdio-only approach (Phase 1.5) covers the primary use case of local Claude Code/Codex workflows. HTTP proxy adds value for web clients, remote access, and shared team servers - implement when those needs arise.
+## Objective
+Add support for remote MCP servers using Streamable HTTP transport (SSE is just the event stream), including OAuth 2.1 authentication flows for services like Atlassian, Figma, etc.
 
-## When to Revisit This Phase
-- Need to expose MCP tools to web browser clients
-- Need remote access from another machine
-- Need a shared team server with multiple concurrent clients
-- Need enterprise features (auth, audit, rate limits)
+**Reference:** [OpenAI Codex MCP configuration](https://developers.openai.com/codex/mcp/)
 
 ---
 
-## Objective
-Implement the HTTP proxy layer that exposes MCP servers to external clients. Support multiple transports (SSE and Streamable-HTTP), namespace binding, and dynamic port assignment.
+## Current State
 
-## Features
+MCP Studio currently only supports **stdio servers** (local processes). This phase adds:
+- Streamable HTTP transport (POST + GET streaming; SSE is a sub-mechanism)
+- Bearer token authentication
+- OAuth 2.1 authentication with browser-based login flow (Codex-compatible)
+- Secure credential storage
 
-### Proxy CRUD
-- [ ] Create proxy form:
-  - ID (auto-generated or user-provided)
-  - Name (display name)
-  - Path segment (URL path component)
-  - Host (default: localhost)
-  - Port (0 for auto-assign)
-  - Transport type (SSE or Streamable-HTTP)
-- [ ] Edit proxy
-- [ ] Delete proxy (with running check)
-- [ ] Proxy list view (new tab)
+---
 
-### HTTP Server Infrastructure
-- [ ] Base HTTP server using `net/http`
-- [ ] Configurable host/port binding
-- [ ] Auto-port assignment (port=0 → OS assigns)
-- [ ] Graceful shutdown
-- [ ] CORS headers: permissive (`*`), allow `mcp-session-id`
+## Design
 
-### SSE Transport
-- [ ] `GET /mcp/{path}` - SSE event stream
-- [ ] `POST /mcp/{path}/message` - JSON-RPC messages
-- [ ] Session management via query param or `mcp-session-id` header
-- [ ] Session lifecycle: create on GET, destroy on disconnect/timeout
-- [ ] Keep-alive pings
+### Server Types
 
-### Streamable-HTTP Transport
-- [ ] `POST /mcp/{path}` - JSON-RPC messages (request/response)
-- [ ] `DELETE /mcp/{path}` - Session cleanup
-- [ ] `mcp-session-id` header in responses
-- [ ] Stateless message handling with optional session context
+**Stdio Servers (existing):**
+```toml
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+```
 
-### Proxy Lifecycle
-- [ ] Start proxy (bind HTTP server)
-- [ ] Stop proxy (graceful shutdown, close sessions)
-- [ ] Proxy status tracking (running/stopped)
-- [ ] Port collision handling
+**Streamable HTTP Servers (new):**
+```toml
+[mcp_servers.figma]
+url = "https://mcp.figma.com/mcp"
+bearer_token_env_var = "FIGMA_OAUTH_TOKEN"
 
-### Tool Aggregation
-- [ ] Aggregate tools from all namespaces bound to proxy
-- [ ] Apply namespace tool permissions (filter disabled tools)
-- [ ] Prefix tool descriptions with server name: `[ServerName] Original description`
-- [ ] **Tool identity**: tools keyed by `(serverId, toolName)` to avoid collisions
-- [ ] **Collision handling**: if two servers expose same tool name, use first-match or error (configurable)
-- [ ] Handle `list_tools` MCP request
-- [ ] Route `call_tool` to correct upstream server based on tool identity
+[mcp_servers.atlassian]
+url = "https://mcp.atlassian.com/mcp"
+# OAuth is detected dynamically; login is triggered via CLI/TUI
+```
 
-### Namespace Binding
-- [ ] Assign namespaces to proxy (multi-select)
-- [ ] Proxy exposes tools from bound namespaces only
-- [ ] Live update when namespace membership changes
-- [ ] "Manage Namespaces" action from proxy detail
-- [ ] **Optional**: Direct server binding (bypass namespace) for early testing
+### Authentication Methods
 
-### Proxy Detail View
-- [ ] Show proxy metadata
-- [ ] Display bound URL (copy to clipboard)
-- [ ] List bound namespaces
-- [ ] Show upstream count and total tools
-- [ ] Session count (if tracking)
+1. **None** - No auth required (public servers)
+2. **Bearer Token** - Token from environment variable
+3. **Static Headers** - Custom HTTP headers
+4. **OAuth 2.1** - Browser-based login flow with token refresh
 
-### Proxy Analytics
-- [ ] Upstream server count
-- [ ] Total exposed tools count
-- [ ] Active session count (for SSE)
+### OAuth 2.1 Flow
 
-### TUI Enhancements
-- [ ] Proxies tab
-- [ ] Proxy status indicators (green/gray)
-- [ ] Keyboard shortcuts:
-  - Enter: view details
-  - a: add proxy
-  - e: edit proxy
-  - d: delete proxy
-  - s: start proxy (actually runs HTTP server - different from server enable/disable)
-  - x: stop proxy (shuts down HTTP server)
-  - c: copy URL to clipboard
-  - n: manage namespaces
-- [ ] Status bar: "X/Y proxies running, N tools exposed"
+Based on [MCP authorization spec](https://spec.modelcontextprotocol.io/specification/2025-03-26/basic/authorization/):
 
-> **Note**: Unlike servers (where `enable/disable` is a config flag and `t` is for testing), proxies are actual HTTP servers that mcp-studio runs. Start/stop here means binding/unbinding to a port.
+1. User initiates login (`mcp-studio mcp login <server>` or TUI button)
+2. Start local HTTP callback server on configurable port
+3. Open browser to server's authorization endpoint
+4. User authenticates with the service (e.g., Atlassian)
+5. Server redirects to callback with authorization code
+6. Exchange code for access token (and refresh token)
+7. Store tokens securely
+8. Use access token for subsequent requests
+9. Auto-refresh when token expires
 
-### Proxy Autostart
-- [ ] Persist running state to config
-- [ ] Restore running proxies on app launch
-- [ ] Handle startup failures gracefully
+### Credential Storage
+
+Three modes (matching Codex):
+- **auto** (default): Use keyring if available, fall back to file
+- **keyring**: System keychain (macOS Keychain, Linux Secret Service)
+- **file**: JSON file at `CODEX_HOME/.credentials.json` (or app equivalent)
+
+---
+
+## Config Schema Changes (Codex-compatible)
+
+```go
+type ServerConfig struct {
+    // Existing fields
+    ID        string
+    Name      string
+    Command   string            // For stdio
+    Args      []string
+    Env       map[string]string
+    Cwd       string
+    Enabled   *bool
+    Autostart bool
+
+    // New fields for Streamable HTTP servers
+    URL              string            // Streamable HTTP server URL (mutually exclusive with Command)
+    BearerTokenEnv   string            // Env var containing bearer token
+    HTTPHeaders      map[string]string // Static headers
+    EnvHTTPHeaders   map[string]string // Headers from env vars
+    Scopes           []string          // Optional OAuth scopes
+
+    // Timeouts
+    StartupTimeout   int  // seconds, default 10 (map to startup_timeout_sec)
+    ToolTimeout      int  // seconds, default 60 (map to tool_timeout_sec)
+}
+
+// Top-level config additions
+type Config struct {
+    // Existing
+    Servers            map[string]ServerConfig // maps to [mcp_servers]
+    Namespaces         []NamespaceConfig
+    // ...
+
+    // New (Codex-compatible names)
+    MCPOAuthCredentialStore string // "auto", "keyring", "file" (mcp_oauth_credentials_store)
+    MCPOAuthCallbackPort    int    // Fixed port for OAuth callback; unset = random, 0 invalid
+
+    // Studio-specific (optional)
+    StreamableHTTPIdleTimeout int  // milliseconds, default 300000
+    StreamableHTTPMaxRetries  int  // default 5
+}
+```
+
+---
+
+## Implementation Plan
+
+### 4.1 Streamable HTTP Transport (`internal/mcp/streamable_http_transport.go`)
+
+- [ ] Implement Streamable HTTP (POST + GET streaming)
+- [ ] Handle SSE framing for GET stream (do not rely on `bufio.Scanner` limits)
+- [ ] Support `Mcp-Session-Id` + `Last-Event-ID` resume
+- [ ] Implement reconnection with exponential backoff
+- [ ] Support idle timeout and max retries
+- [ ] Handle Content-Type negotiation (application/json vs text/event-stream)
+
+**Streamable HTTP (SSE stream) format:**
+```
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{...}}
+
+event: message
+data: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}
+```
+
+### 4.2 HTTP Headers & Bearer Auth
+
+- [ ] Add `Authorization: Bearer <token>` header when `BearerTokenEnv` is set
+- [ ] Add custom headers from `HTTPHeaders` and `EnvHTTPHeaders`
+- [ ] Validate token presence before connecting
+
+### 4.3 OAuth 2.1 Implementation (`internal/oauth/`)
+
+- [ ] `server.go` - Local HTTP callback server
+- [ ] `flow.go` - OAuth flow orchestration
+- [ ] `tokens.go` - Token storage and refresh
+- [ ] `keyring.go` - Keyring integration (go-keyring)
+- [ ] `discovery.go` - OAuth metadata discovery from MCP server (RFC 8414 + MCP header)
+
+**OAuth discovery:** MCP servers expose `/.well-known/oauth-authorization-server` with:
+- `authorization_endpoint`
+- `token_endpoint`
+- `registration_endpoint` (for dynamic client registration)
+
+Send `MCP-Protocol-Version: 2024-11-05` header during discovery.
+
+### 4.4 CLI Commands
+
+```bash
+# Add streamable HTTP server
+mcp-studio add figma --url https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
+
+# Add OAuth server (OAuth detected dynamically)
+mcp-studio add atlassian --url https://mcp.atlassian.com/mcp
+
+# OAuth login/logout
+mcp-studio mcp login <server-name>
+mcp-studio mcp logout <server-name>
+
+# List with auth status
+mcp-studio list
+# NAME        TYPE    AUTH         STATUS
+# context7    stdio   none         stopped
+# figma       http    bearer       ready
+# atlassian   http    oauth        logged-in
+```
+
+### 4.5 TUI Integration
+
+- [ ] Show server type indicator (stdio vs http)
+- [ ] Show auth status (none, bearer, oauth:logged-in, oauth:needs-login)
+- [ ] Add "Login" action for OAuth servers (opens browser)
+- [ ] Add "Logout" action to revoke tokens
+- [ ] Handle OAuth callback while TUI is running (notification)
+
+### 4.6 Process Supervisor Changes
+
+- [ ] `internal/process/supervisor.go` - Detect server type from config
+- [ ] For HTTP servers: create Streamable HTTP client instead of spawning process
+- [ ] Manage Streamable HTTP connection lifecycle (connect, reconnect, disconnect)
+- [ ] Emit same events (StatusChanged, ToolsUpdated, etc.)
+
+---
 
 ## Dependencies
-- Phase 3: Namespaces, tool permissions
-- See [PLAN-ui.md](PLAN-ui.md) for proxy list and detail view specs
 
-## Unknowns / Questions
-1. **Session Storage**: In-memory only or persist across restarts? (Design: in-memory)
-2. **Concurrent Sessions**: Max sessions per proxy? Memory limits?
-3. **Tool Routing**: How to handle tool name collisions across servers in same namespace?
-4. **Streamable-HTTP Spec**: Verify exact spec compliance for session handling
+```go
+// For keyring
+"github.com/zalando/go-keyring"
 
-## Risks
-1. **HTTP Server Stability**: Long-running SSE connections need proper cleanup. Connection leaks are easy to introduce.
-2. **Tool Name Collisions**: If two servers expose same tool name, routing is ambiguous. Need clear collision handling (first-match or error).
-3. **Session Memory**: Many concurrent sessions could exhaust memory. Need limits and eviction.
-4. **Port Conflicts**: Auto-assigned ports may conflict on restart. Need retry logic.
-5. **Spec/Interop Drift**: SSE/Streamable-HTTP details (framing, timeouts, error semantics) can differ by client. Isolate behind transport interface.
-6. **Security Footguns**: Aggregation can accidentally widen access. "Least privilege" harder with combined namespaces.
+// For OAuth PKCE
+"golang.org/x/oauth2"
+
+// Streamable HTTP can use standard library (net/http + bufio/reader)
+```
+
+---
+
+## Security Considerations
+
+1. **Token Storage**: Never store tokens in plain text config files
+2. **PKCE**: Use Proof Key for Code Exchange for public clients
+3. **Scopes**: Request minimal required scopes
+4. **Token Refresh**: Handle refresh before expiry
+5. **Revocation**: Support logout/token revocation
+6. **Callback Server**: Only bind to localhost, use random port by default
+
+---
+
+## Testing
+
+### Unit Tests
+- [ ] Streamable HTTP event parsing (SSE framing)
+- [ ] OAuth flow state machine
+- [ ] Token storage/retrieval
+- [ ] Header injection
+
+### Integration Tests
+- [ ] Mock Streamable HTTP server
+- [ ] Mock OAuth server
+- [ ] End-to-end OAuth flow (headless)
+
+### Manual Testing
+- [ ] Atlassian Rovo MCP server
+- [ ] Figma MCP server
+- [ ] Other OAuth-enabled MCP servers
+
+---
 
 ## Success Criteria
-- Can create/edit/delete proxies
-- Proxy starts/stops reliably
-- SSE transport works with MCP clients
-- Streamable-HTTP transport works
-- Tool aggregation respects permissions
-- URL copy-to-clipboard works
-- Autostart restores proxy state
 
-## Files to Create/Modify
-```
-internal/
-  config/
-    config.go       # Add proxy config
-  proxy/
-    proxy.go        # Proxy manager
-    server.go       # HTTP server
-    sse.go          # SSE transport handler
-    streamable.go   # Streamable-HTTP handler
-    session.go      # Session management
-    aggregator.go   # Tool aggregation
-    cors.go         # CORS middleware
-  tui/
-    model.go        # Add proxies tab
-    proxy_list.go   # Proxy list view
-    proxy_form.go   # Proxy form
-    proxy_detail.go # Proxy detail view
-    namespace_picker.go # Multi-select for namespaces
-```
+- [ ] Can add Streamable HTTP servers via CLI and config file
+- [ ] Bearer token auth works with env var
+- [ ] OAuth login flow opens browser and completes
+- [ ] Tokens stored securely in keyring or encrypted file
+- [ ] Streamable HTTP connection maintains stable streaming
+- [ ] Reconnection handles network interruptions
+- [ ] TUI shows auth status and login actions
+- [ ] Can call tools on remote Streamable HTTP servers
 
-## Estimated Complexity
-- Proxy CRUD: Low
-- HTTP server: Medium
-- SSE transport: High
-- Streamable-HTTP: Medium-High
-- Tool aggregation: Medium
-- TUI components: Medium
-- Total: ~2500-3500 lines of Go code (cumulative ~6800-9200)
+---
+
+## Out of Scope (Phase 5: Proxies)
+
+- Proxy mode (exposing aggregated servers via stdio)
+- Server-to-server authentication
+- Custom OAuth providers
+
+---
+
+## References
+
+- [OpenAI Codex MCP Docs](https://developers.openai.com/codex/mcp/)
+- [OpenAI Codex Config Reference](https://developers.openai.com/codex/config-reference/)
+- [MCP Authorization Spec](https://spec.modelcontextprotocol.io/specification/2025-03-26/basic/authorization/)
+- [Atlassian Rovo MCP Server](https://support.atlassian.com/atlassian-rovo-mcp-server/docs/authentication-and-authorization/)
+- [Atlassian MCP GitHub](https://github.com/atlassian/atlassian-mcp-server)

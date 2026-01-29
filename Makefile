@@ -1,7 +1,11 @@
-.PHONY: build test test-v test-integration lint clean run run-debug
+.PHONY: build install test test-v test-integration lint clean run run-debug
 
 build:
-	go build -o mcp-studio ./cmd/mcp-studio
+	go build -o mcp-go ./cmd/mcp-studio
+
+install: build
+	mkdir -p ~/.local/bin
+	cp mcp-go ~/.local/bin/mcp-go
 
 test:
 	go test -race ./...
@@ -16,7 +20,7 @@ lint:
 	golangci-lint run
 
 clean:
-	rm -f mcp-studio
+	rm -f mcp-go
 	go clean -testcache
 
 run:

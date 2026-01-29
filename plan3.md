@@ -29,11 +29,11 @@ Implement namespace management and tool permission enforcement. This enables fin
 - [x] Duplicate namespace name validation on edit
 - [x] Permission revert-to-default (toggle back removes explicit permission)
 
-### 📋 Remaining Work (Phase 3.2)
-- [ ] Auto-start servers in test mode when opening permission editor (currently requires manual start)
-- [ ] Bulk permission actions (`enable-safe`, `deny-all`) using safe tool classification
-- [ ] Tool description tooltips in permission editor
-- [ ] Search/filter tools by name in permission editor
+### ✅ Phase 3.2 (Completed)
+- [x] Auto-start servers in test mode when opening permission editor
+- [x] Bulk permission actions (`enable-safe`, `deny-all`) using safe tool classification
+- [x] Tool description tooltips in permission editor
+- [x] Search/filter tools by name in permission editor
 
 ---
 
@@ -161,7 +161,7 @@ mcp-studio permission unset <namespace> <server> <tool>
 mcp-studio permission list <namespace> [--json]
 ```
 
-**Note:** Bulk actions (`enable-safe`, `deny-all`) are deferred until cached tool lists are implemented.
+**Note:** CLI bulk actions (`enable-safe`, `deny-all`) are deferred until cached tool lists are implemented. TUI bulk actions are available in the permission editor modal.
 
 ---
 
@@ -181,21 +181,40 @@ mcp-studio permission list <namespace> [--json]
 - Toggle enable/disable per tool
 - Shows current state and whether explicit or default
 - Revert-to-default by toggling back to namespace default value
-- **Approach:** On-demand - starts servers in test mode to discover tools (no caching needed)
+- **Approach:** On-demand - auto-starts servers to discover tools, auto-stops on modal close (no caching needed)
 
-## Remaining Work (Phase 3.2)
+## Implementation Details (Phase 3.2) ✅
 
-### Auto-start for Permission Editing
-Currently user must manually start servers before opening permission editor. Should auto-start assigned servers in test mode when `p` is pressed, then show the permission editor once tools are discovered.
+### Auto-start for Permission Editing ✅
+Auto-starts assigned servers when `p` is pressed, then shows the permission editor once tools are discovered.
+- [x] Track which servers were auto-started for this modal, and auto-stop them on exit (pre-running servers are not stopped).
+- [x] Skip auto-start for disabled servers; show a toast explaining they must be enabled first.
+- [x] Show a "Discovering tools…" state while waiting, with 15s timeout.
+- [x] On timeout: show partial tools with warning message, or close if no tools found.
 
-### Bulk Permission Actions
-- `enable-safe` - Allow all tools classified as safe (read-only)
-- `deny-all` - Deny all tools (then selectively allow)
-- Uses existing `ClassifyTool()` from `safe_tools.go`
+### Bulk Permission Actions ✅
+- [x] `enable-safe` (`a` key) - Allow all tools classified as safe (read-only)
+- [x] `deny-all` (`d` key) - Deny all tools (then selectively allow)
+- [x] Uses existing `ClassifyTool()` from `safe_tools.go`
+- [x] Keybindings shown in footer/help.
 
-### UX Improvements
-- Tool description tooltips (show full description on hover/focus)
-- Search/filter tools by name in large lists
+**Behavior notes:**
+- Both actions **override** existing explicit permissions (not additive). User can undo with space toggle.
+- `enable-safe`: Only affects tools classified as `ToolSafe`. Unknown and unsafe tools are unchanged.
+- `deny-all`: Denies ALL tools regardless of classification.
+
+### UX Improvements ✅
+- [x] Tool description shown in modal footer (truncated if too long; "(no description)" if empty).
+- [x] Search/filter tools by name using `/` key.
+- [x] Filter can be cleared with Esc (first Esc clears filter, second closes modal).
+
+**Filter behavior:** Uses bubbles list built-in filtering (name-only match). Server headers are hidden when filtering; only matching tools are shown.
+
+### Tests (Phase 3.2) ✅
+- [x] Auto-start flow: `TestToolPermissions_ShowDiscovering`, `TestToolPermissions_FinishDiscovery`
+- [x] Bulk actions: `TestToolPermissions_BulkEnableSafe`, `TestToolPermissions_BulkDenyAll`
+- [x] Timeout handling: `TestToolPermissions_DiscoveryTimeout`
+- [x] Auto-started servers tracking: `TestToolPermissions_AutoStartedServersInResult`
 
 ---
 
@@ -229,11 +248,12 @@ internal/tui/
     model_test.go           # Namespace tests ✅
 ```
 
-### Phase 3.2 (Remaining)
+### Phase 3.2 ✅
 ```
 internal/tui/
-    model.go                # Auto-start servers for permission editing
-    views/tool_permissions.go # Bulk actions, tooltips, search
+    model.go                # Auto-start servers for permission editing ✅
+    views/tool_permissions.go # Bulk actions, tooltips, search, discovery state ✅
+    views/tool_permissions_test.go # Phase 3.2 tests ✅
 ```
 
 ---
@@ -281,11 +301,11 @@ internal/tui/
 - [x] Server list shows namespace badges
 - [x] Namespace names are unique (enforced on edit too)
 
-## Success Criteria (Phase 3.2 Remaining)
-- [ ] Permission editor auto-starts servers if not running
-- [ ] Bulk "enable safe" / "deny all" actions available
-- [ ] Tool descriptions visible in permission editor
-- [ ] Can search/filter tools by name
+## Success Criteria (Phase 3.2) ✅
+- [x] Permission editor auto-starts servers if not running
+- [x] Bulk "enable safe" / "deny all" actions available
+- [x] Tool descriptions visible in permission editor
+- [x] Can search/filter tools by name
 
 ---
 
@@ -297,14 +317,3 @@ internal/tui/
 
 ---
 
-## Estimated Complexity
-- Permission evaluation: Low (~150 lines)
-- Safe tool classification: Low (~80 lines)
-- Config helpers (namespace CRUD): Low (~100 lines)
-- CLI namespace commands: Medium (~350 lines)
-- CLI permission commands: Medium (~200 lines)
-- Tests: Medium (~400 lines)
-- **Total: ~1280 lines**
-
-Deferred TUI work would add ~1500-2000 lines.
-Deferred bulk permission commands would add ~150 lines (after cached tools).

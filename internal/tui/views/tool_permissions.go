@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hedworth/mcp-studio-go/internal/config"
 	"github.com/hedworth/mcp-studio-go/internal/events"
+	"github.com/hedworth/mcp-studio-go/internal/server"
 	"github.com/hedworth/mcp-studio-go/internal/tui/theme"
 )
 
@@ -23,6 +24,9 @@ type ToolPermissionsResult struct {
 	// Map key is "serverID:toolName"
 	Deletions []string
 	Submitted bool
+	// AutoStartedServers contains IDs of servers that were auto-started for this session
+	// The caller should stop these when the modal closes
+	AutoStartedServers []string
 }
 
 // toolPermItem represents a tool in the permission editor.
@@ -60,10 +64,17 @@ type ToolPermissionsModel struct {
 	// If true, unconfigured tools default to denied
 	denyByDefault bool
 
+	// Auto-start tracking
+	autoStartedServers []string // Servers we started for this session
+	discovering        bool     // True while waiting for tools
+	discoveryTimeout   bool     // True if discovery timed out
+
 	// Key bindings
-	escKey   key.Binding
-	enterKey key.Binding
-	spaceKey key.Binding
+	escKey        key.Binding
+	enterKey      key.Binding
+	spaceKey      key.Binding
+	enableSafeKey key.Binding
+	denyAllKey    key.Binding
 }
 
 // NewToolPermissions creates a new tool permissions editor.
@@ -72,9 +83,11 @@ func NewToolPermissions(th theme.Theme) ToolPermissionsModel {
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = "Tool Permissions"
 	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(false)
+	l.SetFilteringEnabled(true)
 	l.SetShowHelp(false)
 	l.Styles.Title = th.Title
+	l.FilterInput.PromptStyle = th.Primary
+	l.FilterInput.Cursor.Style = th.Primary
 
 	return ToolPermissionsModel{
 		theme:         th,
@@ -92,6 +105,14 @@ func NewToolPermissions(th theme.Theme) ToolPermissionsModel {
 		spaceKey: key.NewBinding(
 			key.WithKeys(" "),
 			key.WithHelp("space", "toggle"),
+		),
+		enableSafeKey: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("a", "enable-safe"),
+		),
+		denyAllKey: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "deny-all"),
 		),
 	}
 }
@@ -177,11 +198,118 @@ func (m *ToolPermissionsModel) Show(
 // Hide hides the editor.
 func (m *ToolPermissionsModel) Hide() {
 	m.visible = false
+	m.discovering = false
+	m.discoveryTimeout = false
 }
 
 // IsVisible returns whether the editor is visible.
 func (m ToolPermissionsModel) IsVisible() bool {
 	return m.visible
+}
+
+// ShowDiscovering shows the discovering tools state.
+// autoStartedServers contains IDs of servers that were started for this session.
+func (m *ToolPermissionsModel) ShowDiscovering(namespaceID string, autoStartedServers []string) {
+	m.visible = true
+	m.discovering = true
+	m.discoveryTimeout = false
+	m.namespaceID = namespaceID
+	m.autoStartedServers = autoStartedServers
+	m.originalPerms = make(map[string]bool)
+	m.currentPerms = make(map[string]bool)
+	m.list.SetItems([]list.Item{})
+}
+
+// IsDiscovering returns whether the editor is in discovery mode.
+func (m ToolPermissionsModel) IsDiscovering() bool {
+	return m.discovering
+}
+
+// SetDiscoveryTimeout marks that discovery timed out.
+func (m *ToolPermissionsModel) SetDiscoveryTimeout() {
+	m.discoveryTimeout = true
+}
+
+// GetAutoStartedServers returns the list of servers that were auto-started.
+func (m ToolPermissionsModel) GetAutoStartedServers() []string {
+	return m.autoStartedServers
+}
+
+// ClearAutoStartedServers clears the list of auto-started servers.
+func (m *ToolPermissionsModel) ClearAutoStartedServers() {
+	m.autoStartedServers = nil
+}
+
+// FinishDiscovery transitions from discovery to editing mode.
+func (m *ToolPermissionsModel) FinishDiscovery(
+	serverTools map[string][]events.McpTool,
+	servers []config.ServerConfig,
+	permissions []config.ToolPermission,
+	denyByDefault bool,
+) {
+	m.discovering = false
+	m.discoveryTimeout = false
+	m.denyByDefault = denyByDefault
+
+	// Build permission lookup
+	for _, perm := range permissions {
+		if perm.NamespaceID == m.namespaceID {
+			key := perm.ServerID + ":" + perm.ToolName
+			m.originalPerms[key] = perm.Enabled
+			m.currentPerms[key] = perm.Enabled
+		}
+	}
+
+	// Build server name lookup
+	serverNames := make(map[string]string)
+	for _, srv := range servers {
+		name := srv.Name
+		if name == "" {
+			name = srv.Command
+		}
+		serverNames[srv.ID] = name
+	}
+
+	// Build list items
+	var items []list.Item
+	for serverID, tools := range serverTools {
+		if len(tools) == 0 {
+			continue
+		}
+
+		serverName := serverNames[serverID]
+		if serverName == "" {
+			serverName = serverID
+		}
+
+		// Add server header
+		items = append(items, toolPermItem{
+			serverID:   serverID,
+			serverName: serverName,
+			isHeader:   true,
+		})
+
+		// Add tools
+		for _, tool := range tools {
+			key := serverID + ":" + tool.Name
+			enabled, hasExplicit := m.currentPerms[key]
+			if !hasExplicit {
+				enabled = !denyByDefault
+			}
+
+			items = append(items, toolPermItem{
+				serverID:    serverID,
+				serverName:  serverName,
+				toolName:    tool.Name,
+				description: tool.Description,
+				enabled:     enabled,
+				isHeader:    false,
+			})
+		}
+	}
+
+	m.list.SetItems(items)
+	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault))
 }
 
 // SetSize sets the available size.
@@ -205,16 +333,53 @@ func (m *ToolPermissionsModel) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 
+	// In discovering mode, only allow escape
+	if m.discovering {
+		if msg, ok := msg.(tea.KeyMsg); ok && key.Matches(msg, m.escKey) {
+			autoStarted := m.autoStartedServers
+			m.visible = false
+			m.discovering = false
+			m.autoStartedServers = nil
+			return func() tea.Msg {
+				return ToolPermissionsResult{
+					Submitted:          false,
+					AutoStartedServers: autoStarted,
+				}
+			}
+		}
+		return nil
+	}
+
+	// When filtering is active, let the list handle most keys
+	// Only intercept escape when not filtering to close the modal
+	if m.list.FilterState() == list.Filtering {
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, m.escKey):
+			// If filter is shown (even if not actively filtering), clear it first
+			if m.list.FilterState() == list.FilterApplied {
+				m.list.ResetFilter()
+				return nil
+			}
+			autoStarted := m.autoStartedServers
 			m.visible = false
+			m.autoStartedServers = nil
 			return func() tea.Msg {
-				return ToolPermissionsResult{Submitted: false}
+				return ToolPermissionsResult{
+					Submitted:          false,
+					AutoStartedServers: autoStarted,
+				}
 			}
 		case key.Matches(msg, m.enterKey):
+			autoStarted := m.autoStartedServers
 			m.visible = false
+			m.autoStartedServers = nil
 			// Calculate changes and deletions
 			changes := make(map[string]bool)
 			var deletions []string
@@ -236,9 +401,10 @@ func (m *ToolPermissionsModel) Update(msg tea.Msg) tea.Cmd {
 
 			return func() tea.Msg {
 				return ToolPermissionsResult{
-					Changes:   changes,
-					Deletions: deletions,
-					Submitted: true,
+					Changes:            changes,
+					Deletions:          deletions,
+					Submitted:          true,
+					AutoStartedServers: autoStarted,
 				}
 			}
 		case key.Matches(msg, m.spaceKey):
@@ -265,12 +431,73 @@ func (m *ToolPermissionsModel) Update(msg tea.Msg) tea.Cmd {
 				}
 			}
 			return nil
+		case key.Matches(msg, m.enableSafeKey):
+			// Enable all safe tools (those classified as ToolSafe)
+			m.applyBulkEnableSafe()
+			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault))
+			return nil
+		case key.Matches(msg, m.denyAllKey):
+			// Deny all tools
+			m.applyBulkDenyAll()
+			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault))
+			return nil
 		}
 	}
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return cmd
+}
+
+// applyBulkEnableSafe enables all tools classified as safe (read-only).
+// Unknown tools are left unchanged. Unsafe tools are not modified.
+func (m *ToolPermissionsModel) applyBulkEnableSafe() {
+	for _, item := range m.list.Items() {
+		ti, ok := item.(toolPermItem)
+		if !ok || ti.isHeader {
+			continue
+		}
+
+		// Only modify tools classified as safe
+		classification := server.ClassifyTool(ti.toolName)
+		if classification != server.ToolSafe {
+			continue
+		}
+
+		key := ti.serverID + ":" + ti.toolName
+		// If the default is allow (denyByDefault=false), we need to explicitly set
+		// only if it's currently denied. If default is deny, we need to explicitly allow.
+		defaultValue := !m.denyByDefault
+		if defaultValue {
+			// Default is allow - remove any explicit deny
+			delete(m.currentPerms, key)
+		} else {
+			// Default is deny - explicitly allow
+			m.currentPerms[key] = true
+		}
+	}
+}
+
+// applyBulkDenyAll denies all tools.
+func (m *ToolPermissionsModel) applyBulkDenyAll() {
+	for _, item := range m.list.Items() {
+		ti, ok := item.(toolPermItem)
+		if !ok || ti.isHeader {
+			continue
+		}
+
+		key := ti.serverID + ":" + ti.toolName
+		// If default is deny (denyByDefault=true), we can remove explicit permissions
+		// If default is allow, we need to explicitly deny
+		defaultValue := !m.denyByDefault
+		if !defaultValue {
+			// Default is deny - remove any explicit allow
+			delete(m.currentPerms, key)
+		} else {
+			// Default is allow - explicitly deny
+			m.currentPerms[key] = false
+		}
+	}
 }
 
 // View renders the editor.
@@ -292,29 +519,68 @@ func (m ToolPermissionsModel) RenderOverlay(base string, width, height int) stri
 		editorWidth = width - 10
 	}
 
-	var footer strings.Builder
-	footer.WriteString(m.theme.Faint.Render("space=toggle  enter=save  esc=cancel"))
-	if m.denyByDefault {
-		footer.WriteString("\n")
-		footer.WriteString(m.theme.Warn.Render("Namespace policy: deny unconfigured tools"))
-	} else {
-		footer.WriteString("\n")
-		footer.WriteString(m.theme.Muted.Render("Namespace policy: allow unconfigured tools"))
-	}
+	var contentStr string
 
-	content := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.Primary.GetForeground()).
-		Padding(1, 2).
-		Width(editorWidth).
-		Render(m.View() + "\n\n" + footer.String())
+	if m.discovering {
+		// Show discovering state
+		var msg string
+		if m.discoveryTimeout {
+			msg = m.theme.Warn.Render("Timeout waiting for tools.") + "\n\n" +
+				m.theme.Muted.Render("Some servers may not have responded.\nPress esc to cancel.")
+		} else {
+			msg = m.theme.Primary.Render("Discovering tools...") + "\n\n" +
+				m.theme.Muted.Render("Starting servers and waiting for tool discovery.\nThis may take a few seconds.\n\nPress esc to cancel.")
+		}
+		contentStr = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(m.theme.Primary.GetForeground()).
+			Padding(2, 4).
+			Width(editorWidth).
+			Render(m.theme.Title.Render("Tool Permissions") + "\n\n" + msg)
+	} else {
+		// Normal editing state
+		var footer strings.Builder
+
+		// Show selected tool description
+		if item := m.list.SelectedItem(); item != nil {
+			if ti, ok := item.(toolPermItem); ok && !ti.isHeader {
+				desc := ti.description
+				if desc == "" {
+					desc = "(no description)"
+				}
+				// Wrap long descriptions
+				maxDescWidth := editorWidth - 8
+				if len(desc) > maxDescWidth {
+					desc = desc[:maxDescWidth-3] + "..."
+				}
+				footer.WriteString(m.theme.Muted.Render(desc))
+				footer.WriteString("\n")
+			}
+		}
+
+		footer.WriteString(m.theme.Faint.Render("space=toggle  /=filter  a=enable-safe  d=deny-all  enter=save  esc=cancel"))
+		if m.denyByDefault {
+			footer.WriteString("\n")
+			footer.WriteString(m.theme.Warn.Render("Namespace policy: deny unconfigured tools"))
+		} else {
+			footer.WriteString("\n")
+			footer.WriteString(m.theme.Muted.Render("Namespace policy: allow unconfigured tools"))
+		}
+
+		contentStr = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(m.theme.Primary.GetForeground()).
+			Padding(1, 2).
+			Width(editorWidth).
+			Render(m.View() + "\n\n" + footer.String())
+	}
 
 	return lipgloss.Place(
 		width,
 		height,
 		lipgloss.Center,
 		lipgloss.Center,
-		content,
+		contentStr,
 		lipgloss.WithWhitespaceChars(" "),
 		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#E5E7EB", Dark: "#1F2937"}),
 	)

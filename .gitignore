@@ -1,5 +1,6 @@
 # Binaries
 mcp-studio-go
+mcp-go
 *.exe
 *.exe~
 *.dll

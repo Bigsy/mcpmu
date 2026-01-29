@@ -52,7 +52,7 @@ type NamespaceConfig struct {
 	DenyByDefault bool     `json:"denyByDefault,omitempty"` // If true, unconfigured tools are denied
 }
 
-// ProxyConfig represents an HTTP proxy configuration (Phase 4, deferred).
+// ProxyConfig represents a proxy configuration (Phase 5, deferred - see plan5.md).
 // Included in schema for forward compatibility.
 type ProxyConfig struct {
 	ID            string `json:"id"`

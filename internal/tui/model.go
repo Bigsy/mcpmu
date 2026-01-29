@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -85,6 +86,10 @@ type Model struct {
 	// Pending delete IDs (for delete confirmation flow)
 	pendingDeleteID          string
 	pendingDeleteNamespaceID string
+
+	// Tool permission discovery state
+	permDiscoveryServers  []string // Servers we're waiting for tools from
+	permDiscoveryExpected int      // Number of servers expected to report tools
 
 	// Event channel for Bubble Tea integration
 	eventCh chan events.Event
@@ -276,6 +281,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case views.ConfirmResult:
 		return m.handleConfirmResult(msg)
 
+	case permDiscoveryTimeoutMsg:
+		// Handle permission discovery timeout
+		if m.toolPerms.IsDiscovering() {
+			m.toolPerms.SetDiscoveryTimeout()
+			// Try to show whatever tools we have so far
+			m.finishPermissionDiscovery()
+		}
+
 	case events.Event:
 		cmd := m.handleEvent(msg)
 		if cmd != nil {
@@ -374,6 +387,11 @@ func (m *Model) handleEvent(e events.Event) tea.Cmd {
 			}
 		}
 
+		// Check if we're in discovery mode and this completes it
+		if m.toolPerms.IsDiscovering() {
+			m.checkPermissionDiscoveryComplete()
+		}
+
 	case events.LogReceivedEvent:
 		m.logPanel.AppendLog(evt.ServerID(), evt.Line)
 
@@ -410,7 +428,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Tab3):
-		// Proxies - disabled until Phase 4
+		// Proxies - disabled until Phase 5 (see plan5.md)
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Escape):
@@ -877,7 +895,7 @@ func (m Model) renderHeader() string {
 	}{
 		{"Servers", true},
 		{"Namespaces", true},  // Phase 3 - Now enabled
-		{"Proxies", false},    // Phase 4
+		{"Proxies", false},    // Phase 5
 	}
 
 	var tabViews []string
@@ -1176,18 +1194,7 @@ func (m *Model) handleNamespaceDetailKey(msg tea.KeyMsg) (handled bool, model te
 		return true, m, nil
 
 	case msg.String() == "p": // Edit permissions
-		// Only show tools from running servers assigned to this namespace
-		serverTools := make(map[string][]events.McpTool)
-		for _, serverID := range ns.ServerIDs {
-			if tools, ok := m.serverTools[serverID]; ok && len(tools) > 0 {
-				serverTools[serverID] = tools
-			}
-		}
-		if len(serverTools) == 0 {
-			return true, m, m.toast.ShowError("No running servers with tools. Start a server first.")
-		}
-		m.toolPerms.Show(ns.ID, serverTools, m.cfg.ServerList(), m.cfg.ToolPermissions, ns.DenyByDefault)
-		return true, m, nil
+		return m.startToolPermissionEditor(ns)
 
 	case msg.String() == "D": // Set as default
 		m.cfg.DefaultNamespaceID = ns.ID
@@ -1206,6 +1213,153 @@ func (m *Model) handleNamespaceDetailKey(msg tea.KeyMsg) (handled bool, model te
 	}
 
 	return false, m, nil
+}
+
+// startToolPermissionEditor handles the 'p' key to open the permission editor.
+// It auto-starts servers if needed and shows a discovery loading state.
+func (m *Model) startToolPermissionEditor(ns *config.NamespaceConfig) (bool, tea.Model, tea.Cmd) {
+	// Collect servers that need to be started and servers already running
+	var serversToStart []config.ServerConfig
+	var autoStartedIDs []string
+	serverTools := make(map[string][]events.McpTool)
+	hasDisabledServers := false
+
+	for _, serverID := range ns.ServerIDs {
+		srv := m.cfg.GetServer(serverID)
+		if srv == nil {
+			continue
+		}
+
+		// Check if server is disabled
+		if !srv.IsEnabled() {
+			hasDisabledServers = true
+			continue
+		}
+
+		// Check current status
+		status, hasStatus := m.serverStatuses[serverID]
+		if hasStatus && status.State == events.StateRunning {
+			// Already running - use existing tools
+			if tools, ok := m.serverTools[serverID]; ok && len(tools) > 0 {
+				serverTools[serverID] = tools
+			}
+		} else if !hasStatus || status.State == events.StateStopped || status.State == events.StateIdle {
+			// Not running - need to start
+			serversToStart = append(serversToStart, *srv)
+			autoStartedIDs = append(autoStartedIDs, serverID)
+		}
+	}
+
+	// If no servers assigned, show error
+	if len(ns.ServerIDs) == 0 {
+		return true, m, m.toast.ShowError("No servers assigned to this namespace.")
+	}
+
+	// If all servers are disabled, show error
+	if len(serversToStart) == 0 && len(serverTools) == 0 {
+		if hasDisabledServers {
+			return true, m, m.toast.ShowError("All assigned servers are disabled. Enable them first.")
+		}
+		return true, m, m.toast.ShowError("No servers available for this namespace.")
+	}
+
+	// If all running servers already have tools, show editor immediately
+	if len(serversToStart) == 0 && len(serverTools) > 0 {
+		m.toolPerms.Show(ns.ID, serverTools, m.cfg.ServerList(), m.cfg.ToolPermissions, ns.DenyByDefault)
+		return true, m, nil
+	}
+
+	// Need to start servers - show discovery state
+	m.permDiscoveryServers = autoStartedIDs
+	m.permDiscoveryExpected = len(autoStartedIDs) + len(serverTools)
+	m.toolPerms.ShowDiscovering(ns.ID, autoStartedIDs)
+
+	// Start servers in background
+	var cmds []tea.Cmd
+	for _, srv := range serversToStart {
+		srvCopy := srv
+		cmds = append(cmds, func() tea.Msg {
+			log.Printf("Auto-starting server %s for permission editor", srvCopy.ID)
+			_, err := m.supervisor.Start(m.ctx, srvCopy)
+			if err != nil {
+				log.Printf("Failed to auto-start server %s: %v", srvCopy.ID, err)
+			}
+			return nil
+		})
+	}
+
+	// Add timeout command (15 seconds)
+	cmds = append(cmds, tea.Tick(15*time.Second, func(t time.Time) tea.Msg {
+		return permDiscoveryTimeoutMsg{}
+	}))
+
+	return true, m, tea.Batch(cmds...)
+}
+
+// permDiscoveryTimeoutMsg is sent when permission discovery times out.
+type permDiscoveryTimeoutMsg struct{}
+
+// checkPermissionDiscoveryComplete checks if all servers have reported tools.
+func (m *Model) checkPermissionDiscoveryComplete() {
+	ns := m.cfg.FindNamespaceByID(m.detailNamespaceID)
+	if ns == nil {
+		return
+	}
+
+	// Count how many servers have tools
+	toolCount := 0
+	for _, serverID := range ns.ServerIDs {
+		srv := m.cfg.GetServer(serverID)
+		if srv == nil || !srv.IsEnabled() {
+			continue
+		}
+		if tools, ok := m.serverTools[serverID]; ok && len(tools) > 0 {
+			toolCount++
+		}
+	}
+
+	// If we have tools from all expected servers, finish discovery
+	if toolCount >= m.permDiscoveryExpected || toolCount > 0 {
+		m.finishPermissionDiscovery()
+	}
+}
+
+// finishPermissionDiscovery transitions from discovery to editing mode.
+func (m *Model) finishPermissionDiscovery() {
+	ns := m.cfg.FindNamespaceByID(m.detailNamespaceID)
+	if ns == nil {
+		m.toolPerms.Hide()
+		return
+	}
+
+	// Collect tools from running servers
+	serverTools := make(map[string][]events.McpTool)
+	for _, serverID := range ns.ServerIDs {
+		srv := m.cfg.GetServer(serverID)
+		if srv == nil || !srv.IsEnabled() {
+			continue
+		}
+		if tools, ok := m.serverTools[serverID]; ok && len(tools) > 0 {
+			serverTools[serverID] = tools
+		}
+	}
+
+	if len(serverTools) == 0 {
+		// No tools found - hide and show error
+		m.toolPerms.Hide()
+		// Note: toast will be shown on next tick
+		return
+	}
+
+	// Transition to editing mode
+	m.toolPerms.FinishDiscovery(
+		serverTools,
+		m.cfg.ServerList(),
+		m.cfg.ToolPermissions,
+		ns.DenyByDefault,
+	)
+	m.permDiscoveryServers = nil
+	m.permDiscoveryExpected = 0
 }
 
 // ============================================================================
@@ -1283,6 +1437,12 @@ func (m Model) handleServerPickerResult(result views.ServerPickerResult) (tea.Mo
 }
 
 func (m Model) handleToolPermissionsResult(result views.ToolPermissionsResult) (tea.Model, tea.Cmd) {
+	// Stop auto-started servers regardless of whether changes were submitted
+	for _, serverID := range result.AutoStartedServers {
+		log.Printf("Stopping auto-started server: %s", serverID)
+		go m.supervisor.Stop(serverID)
+	}
+
 	if !result.Submitted || m.detailNamespaceID == "" {
 		return m, nil
 	}

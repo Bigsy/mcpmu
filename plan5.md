@@ -1,185 +1,156 @@
-# Phase 5: SSE Client + OAuth
+# Phase 5: Proxies
 
 ## Objective
-Add SSE client transport for connecting TO remote MCP servers (not serving - that's deferred Phase 4), implement OAuth 2.1 browser-based authorization flow, and polish the application for release.
-
-> **Note**: This phase adds SSE as a CLIENT transport - mcp-studio connecting to remote MCP servers that expose SSE endpoints. This is different from Phase 4 (deferred) which would have mcp-studio SERVE via HTTP/SSE.
-
-## Features
-
-### SSE Client Transport
-- [ ] SSEClientTransport implementation
-- [ ] Connect to remote MCP servers via SSE
-- [ ] Server config fields for SSE:
-  - URL (required)
-  - Custom headers (optional)
-  - OAuth enabled flag
-- [ ] Reconnection with backoff on disconnect
-- [ ] Handle server-sent events parsing
-
-### OAuth 2.1 Flow
-- [ ] OAuth config fields per server:
-  - Client ID
-  - Client Secret (encrypted storage)
-  - Scopes
-  - Authorization URL
-  - Token URL
-- [ ] Browser-based authorization:
-  - Generate PKCE code verifier and challenge
-  - Open system browser to authorization URL
-  - Local callback server on `localhost:3333/oauth/callback`
-  - Health endpoint at `/health`
-- [ ] Token exchange after callback
-- [ ] PKCE state expiry (10 minutes)
-
-### Token Storage
-- [ ] Encrypted storage using `go-keyring` (OS keychain)
-- [ ] Fallback to AES-256-GCM encrypted file if keyring unavailable
-- [ ] Machine-derived encryption key (machine ID + app salt)
-- [ ] Store: access token, refresh token, expiry, scopes
-
-### Token Refresh
-- [ ] Monitor token expiry for connected SSE clients
-- [ ] Auto-refresh tokens before expiry (5 minute window)
-- [ ] Reconnect SSE transport after refresh
-- [ ] Emit "token refreshed" event (success/failure)
-
-### OAuth Status UI
-- [ ] Status badges in server list:
-  - Green: Authorized
-  - Amber: Expiring Soon (< 5 min)
-  - Red: Not Authorized / Expired
-- [ ] "Authorize" button for unauthorized servers
-- [ ] "Revoke" action to clear tokens
-
-### Auth Gate on Server Start
-- [ ] Check OAuth status before connecting
-- [ ] Attempt token refresh if expired
-- [ ] Fallback to full browser auth if refresh fails
-- [ ] Block server start until authorized
-
-### OAuth Server Form Fields
-- [ ] OAuth toggle (enable/disable)
-- [ ] Client ID input
-- [ ] Client Secret input (masked, stored encrypted)
-- [ ] Scopes input
-- [ ] Authorization URL input
-- [ ] Token URL input
-- [ ] Validate OAuth fields when enabled
+Implement proxy mode that exposes aggregated MCP servers via a single stdio interface, allowing MCP Studio to act as a unified gateway for multiple backend servers.
 
 ---
 
-## Polish & Future Features
+## Status
 
-### Import/Export Configuration
-- [ ] Export config as pretty-printed JSON
-- [ ] Import config from JSON file
-- [ ] Validation on import:
-  - Schema version compatibility
-  - Fix orphaned references (servers in namespaces that don't exist)
-  - Report warnings/errors
-- [ ] Auto-backup before import (keep last 10 backups)
-- [ ] Backup location: `~/.config/mcp-studio/backups/`
+**Not Started** - Deferred from original Phase 4 to prioritize SSE server support.
 
-### Autostart Queue (Enhanced)
-- [ ] Track running servers via status events (continuous queue maintenance)
-- [ ] On app exit: persist running server IDs, then stop gracefully
-- [ ] On app launch: restore servers from autostart queue
-- [ ] Handle start failures gracefully (don't block other servers)
-- [ ] **Ordering/dependencies**: optional start order for dependent servers
-- [ ] **Retry policy**: configurable retries with backoff on autostart failure
+---
 
-### Error Handling Polish
-- [ ] Consistent error messages
-- [ ] Error categorization (network, auth, config, etc.)
-- [ ] Retry suggestions where applicable
-- [ ] Error history/log viewer
+## Design Overview
 
-### Uptime Tracking
-- [ ] Track server uptime (time since last start)
-- [ ] Display in server detail view
-- [ ] Track app session uptime
+### Proxy Mode Concept
 
-### Performance Optimizations
-- [ ] Lazy tool discovery (on-demand, not on connect)
-- [ ] Tool cache invalidation strategy
-- [ ] Efficient config file writes (debounce rapid changes)
-- [ ] Memory profiling for log buffers
+MCP Studio can run as a proxy server that:
+1. Accepts MCP requests via stdio (like a normal MCP server)
+2. Routes tool calls to appropriate backend servers
+3. Aggregates tools from all enabled servers
+4. Handles namespace-based filtering and permissions
 
-### UX Polish
-- [ ] Loading indicators for async operations
-- [ ] Keyboard shortcut overlay (?-key)
-- [ ] Command palette (if feasible in TUI)
-- [ ] Theme support via terminal colors (no custom themes)
-- [ ] Mouse support for list navigation
-- [ ] Responsive layout for terminal resize
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Claude / LLM Client                                        │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ stdio (MCP)
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│  MCP Studio (Proxy Mode)                                    │
+│  - Aggregates tools from all servers                        │
+│  - Applies namespace permissions                            │
+│  - Routes calls to correct backend                          │
+└───────┬─────────────────┬─────────────────┬─────────────────┘
+        │ stdio           │ stdio           │ SSE
+        ▼                 ▼                 ▼
+   ┌─────────┐      ┌─────────┐      ┌─────────────┐
+   │ Server1 │      │ Server2 │      │ Remote SSE  │
+   │ (local) │      │ (local) │      │ Server      │
+   └─────────┘      └─────────┘      └─────────────┘
+```
 
-## Dependencies
-- Phase 3: Namespaces, tool permissions, TUI components
-- Phase 4 (HTTP Proxy) is **NOT required** - that phase is deferred
-- See [PLAN-ui.md](PLAN-ui.md) for OAuth badges, toasts, and polish specs
+### Use Cases
 
-## Unknowns / Questions
-1. **Keyring Availability**: What if keyring is unavailable (SSH, containers)? Fallback strategy?
-2. **OAuth Discovery**: Should we support OAuth server metadata discovery? (RFC 8414)
-3. **Multiple OAuth Providers**: Different servers with different OAuth configs - any shared state?
-4. **Browser Opening**: How to open browser cross-platform? `open` (mac), `xdg-open` (linux), `start` (windows)?
-5. **Headless Mode**: How to handle OAuth in SSH/tmux sessions? Fall back to manual URL copy?
+1. **Claude Desktop Integration** - Run `mcp-studio --stdio` as a single MCP server in Claude Desktop config
+2. **Tool Aggregation** - Expose tools from multiple servers under one interface
+3. **Permission Enforcement** - Apply namespace-based permissions before forwarding
+4. **Unified Logging** - Central logging for all tool calls
 
-## Risks
-1. **OAuth Complexity**: OAuth flows have many edge cases. Need thorough testing with real providers.
-2. **Keyring Compatibility**: OS keyring APIs differ. `go-keyring` may have platform-specific issues.
-3. **Browser Callback**: Firewall may block localhost callback. Need clear error messaging.
-4. **Token Security**: Encrypted storage is only as good as the key derivation. Machine ID may be predictable.
-5. **Auth UX Failures**: Headless, no keyring, revoked refresh, clock skew - need graceful fallbacks.
-6. **Config Migration**: Schema changes across phases may break imports. Version + migration strategy essential.
+---
+
+## Implementation Plan
+
+### 5.1 Stdio Server Mode (`cmd/mcp-studio/stdio.go`)
+
+- [ ] `mcp-studio --stdio` flag to run as MCP server
+- [ ] Accept JSON-RPC messages on stdin
+- [ ] Write responses to stdout
+- [ ] Log to stderr (or file when in proxy mode)
+
+### 5.2 Tool Aggregation
+
+- [ ] Collect `tools/list` from all enabled servers
+- [ ] Prefix tool names with server ID to avoid collisions: `serverid.toolname`
+- [ ] Handle `tools/list_changed` notifications from backends
+- [ ] Re-emit aggregated `tools/list_changed` to client
+
+### 5.3 Request Routing (`internal/server/router.go` enhancements)
+
+- [ ] Parse tool name to extract server ID prefix
+- [ ] Forward `tools/call` to correct backend server
+- [ ] Handle backend errors and timeouts
+- [ ] Return results to client
+
+### 5.4 Permission Integration
+
+- [ ] Apply active namespace's permissions before forwarding
+- [ ] Block denied tools with appropriate error
+- [ ] Support `--namespace` flag for proxy mode
+
+### 5.5 Lifecycle Management
+
+- [ ] Start backend servers on proxy startup
+- [ ] Handle backend server crashes (reconnect or report error)
+- [ ] Graceful shutdown of all backends
+
+### 5.6 TUI "Proxies" Tab
+
+- [ ] Enable Tab 3 (currently disabled)
+- [ ] Show proxy configurations
+- [ ] Create/edit proxy profiles (which servers to include)
+- [ ] Start/stop proxy mode from TUI
+
+---
+
+## Config Schema
+
+```go
+type ProxyConfig struct {
+    ID          string   `json:"id"`
+    Name        string   `json:"name"`
+    ServerIDs   []string `json:"serverIds"`   // Servers to aggregate
+    NamespaceID string   `json:"namespaceId"` // Permissions to apply
+    AutoStart   bool     `json:"autostart"`   // Start servers on proxy start
+}
+
+type Config struct {
+    // ... existing fields
+    Proxies []ProxyConfig `json:"proxies"`
+}
+```
+
+---
+
+## CLI Commands
+
+```bash
+# Run as stdio proxy (all enabled servers)
+mcp-studio --stdio
+
+# Run with specific namespace
+mcp-studio --stdio --namespace production
+
+# Run specific proxy profile
+mcp-studio --stdio --proxy my-proxy-profile
+
+# Manage proxy profiles
+mcp-studio proxy add <name> --servers s1,s2,s3 --namespace ns1
+mcp-studio proxy list
+mcp-studio proxy remove <name>
+```
+
+---
 
 ## Success Criteria
-- Can connect to SSE MCP servers
-- OAuth flow works end-to-end
-- Tokens persist securely
-- Token refresh works automatically
-- Import/export works correctly
-- Autostart restores previous state
-- App feels polished and responsive
 
-## Files to Create/Modify
-```
-internal/
-  mcp/
-    sse_transport.go    # SSE client transport
-  oauth/
-    oauth.go            # OAuth manager
-    callback.go         # Callback server
-    storage.go          # Token storage (keyring + file)
-    provider.go         # OAuth provider interface
-    pkce.go             # PKCE helpers
-  config/
-    import.go           # Config import logic
-    export.go           # Config export logic
-    backup.go           # Backup management
-    migration.go        # Version migration
-  tui/
-    server_form.go      # Add OAuth fields
-    oauth_badge.go      # Status badge component
-    import_export.go    # Import/export dialogs
-    loading.go          # Loading indicators
-    keyboard_help.go    # Shortcut overlay
-```
+- [ ] `mcp-studio --stdio` works as MCP server
+- [ ] Tools from multiple backends are aggregated
+- [ ] Tool calls route to correct backend
+- [ ] Namespace permissions are enforced
+- [ ] Can be used as MCP server in Claude Desktop
+- [ ] TUI Proxies tab allows profile management
 
-## Estimated Complexity
-- SSE client: Medium
-- OAuth flow: High
-- Token storage: Medium-High
-- Token refresh: Medium
-- Import/export: Medium
-- Polish items: Medium
-- Total: ~3000-4000 lines of Go code (cumulative ~7300-9700, excluding deferred Phase 4)
+---
 
-## Post-Phase 5 / Future Considerations
-- [ ] Plugin system for custom transports
-- [ ] Multiple config profiles
-- [ ] Remote config sync
-- [ ] Metrics/telemetry (opt-in)
-- [ ] Server health checks
-- [ ] Tool invocation testing UI
+## Dependencies
+
+- Phase 4 (SSE servers) - Proxy should work with both stdio and SSE backends
+
+---
+
+## References
+
+- [MCP Specification](https://spec.modelcontextprotocol.io/)
+- Current `internal/server/` router implementation
