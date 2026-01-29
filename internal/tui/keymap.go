@@ -21,6 +21,8 @@ type KeyBindings struct {
 	// Global keys (always active)
 	Quit    key.Binding
 	Help    key.Binding
+	TabNext key.Binding
+	TabPrev key.Binding
 	Tab1    key.Binding
 	Tab2    key.Binding
 	Tab3    key.Binding
@@ -59,6 +61,14 @@ func NewKeyBindings() KeyBindings {
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
+		),
+		TabNext: key.NewBinding(
+			key.WithKeys("tab"),
+			key.WithHelp("tab", "next tab"),
+		),
+		TabPrev: key.NewBinding(
+			key.WithKeys("shift+tab"),
+			key.WithHelp("shift+tab", "prev tab"),
 		),
 		Tab1: key.NewBinding(
 			key.WithKeys("1"),
@@ -155,7 +165,7 @@ func (k KeyBindings) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Top, k.Bottom, k.Enter, k.Escape},
 		{k.Test, k.ToggleEnabled, k.Add, k.Edit, k.Delete},
-		{k.ToggleLogs, k.FollowLogs, k.Tab1, k.Tab2, k.Tab3},
+		{k.ToggleLogs, k.FollowLogs, k.TabPrev, k.TabNext, k.Tab1, k.Tab2, k.Tab3},
 		{k.Help, k.Quit, k.CtrlC},
 	}
 }

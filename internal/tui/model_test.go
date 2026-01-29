@@ -75,6 +75,32 @@ func TestModel_TabSwitching(t *testing.T) {
 	}
 }
 
+func TestModel_TabCyclesWithTabAndShiftTab(t *testing.T) {
+	m := newTestModel(t)
+
+	// tab: Servers -> Namespaces -> Proxies -> Servers
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.activeTab != TabNamespaces {
+		t.Errorf("expected tab to be Namespaces after Tab, got %v", m.activeTab)
+	}
+
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.activeTab != TabProxies {
+		t.Errorf("expected tab to be Proxies after Tab, got %v", m.activeTab)
+	}
+
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.activeTab != TabServers {
+		t.Errorf("expected tab to be Servers after Tab, got %v", m.activeTab)
+	}
+
+	// shift+tab: Servers -> Proxies
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.activeTab != TabProxies {
+		t.Errorf("expected tab to be Proxies after Shift+Tab, got %v", m.activeTab)
+	}
+}
+
 func TestModel_QuitKey(t *testing.T) {
 	m := newTestModel(t)
 	m.width = 80

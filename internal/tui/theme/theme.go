@@ -100,6 +100,16 @@ func New() Theme {
 	}
 }
 
+// Warning returns the warning style (alias for Warn).
+func (t Theme) Warning() lipgloss.Style {
+	return t.Warn
+}
+
+// Error returns the error style (alias for Danger).
+func (t Theme) Error() lipgloss.Style {
+	return t.Danger
+}
+
 // StatusIcon returns the appropriate icon for a server state.
 func (t Theme) StatusIcon(running bool, hasError bool) string {
 	if hasError {

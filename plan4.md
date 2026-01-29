@@ -5,7 +5,7 @@ Add support for remote MCP servers using Streamable HTTP transport (SSE is just 
 
 **Reference:** [OpenAI Codex MCP configuration](https://developers.openai.com/codex/mcp/)
 
-source code https://github.com/openai/codex
+Source code: https://github.com/openai/codex
 
 ---
 
@@ -24,95 +24,135 @@ MCP Studio currently only supports **stdio servers** (local processes). This pha
 ### Server Types
 
 **Stdio Servers (existing):**
-```toml
-[mcp_servers.context7]
-command = "npx"
-args = ["-y", "@upstash/context7-mcp"]
+```json
+{
+  "servers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    }
+  }
+}
 ```
 
 **Streamable HTTP Servers (new):**
-```toml
-[mcp_servers.figma]
-url = "https://mcp.figma.com/mcp"
-bearer_token_env_var = "FIGMA_OAUTH_TOKEN"
-
-[mcp_servers.atlassian]
-url = "https://mcp.atlassian.com/mcp"
-# OAuth is detected dynamically; login is triggered via CLI/TUI
+```json
+{
+  "servers": {
+    "figma": {
+      "url": "https://mcp.figma.com/mcp",
+      "bearer_token_env_var": "FIGMA_OAUTH_TOKEN"
+    },
+    "atlassian": {
+      "url": "https://mcp.atlassian.com/mcp"
+    }
+  }
+}
 ```
 
-### Authentication Methods
+### Authentication Methods & Precedence
 
-1. **None** - No auth required (public servers)
-2. **Bearer Token** - Token from environment variable
-3. **Static Headers** - Custom HTTP headers
-4. **OAuth 2.1** - Browser-based login flow with token refresh
+Auth is determined in this order (Codex-compatible):
+
+1. **Bearer Token** - If `bearer_token_env_var` is set, use it. OAuth is NOT considered. Missing env var = **fail immediately** (no fallback).
+2. **Stored OAuth** - If OAuth credentials exist in credential store, use them.
+3. **OAuth Discovery** - Probe `/.well-known/oauth-authorization-server`. If supported, report "needs login".
+4. **None** - No auth required (public servers).
 
 ### OAuth 2.1 Flow
 
 Based on [MCP authorization spec](https://spec.modelcontextprotocol.io/specification/2025-03-26/basic/authorization/):
 
 1. User initiates login (`mcp-studio mcp login <server>` or TUI button)
-2. Start local HTTP callback server on configurable port
-3. Open browser to server's authorization endpoint
-4. User authenticates with the service (e.g., Atlassian)
-5. Server redirects to callback with authorization code
-6. Exchange code for access token (and refresh token)
-7. Store tokens securely
-8. Use access token for subsequent requests
-9. Auto-refresh when token expires
+2. Discover OAuth metadata via RFC 8414 (`/.well-known/oauth-authorization-server`)
+3. Start local HTTP callback server (random port by default, configurable)
+4. Perform dynamic client registration if `registration_endpoint` available
+5. Open browser to `authorization_endpoint` with PKCE
+6. User authenticates with the service (e.g., Atlassian)
+7. Server redirects to callback with authorization code
+8. Exchange code for access token (and refresh token)
+9. Store tokens + `client_id` securely (client_id from dynamic registration)
+10. Use access token for subsequent requests
+11. Auto-refresh 30 seconds before token expires
 
 ### Credential Storage
 
 Three modes (matching Codex):
 - **auto** (default): Use keyring if available, fall back to file
 - **keyring**: System keychain (macOS Keychain, Linux Secret Service)
-- **file**: JSON file at `CODEX_HOME/.credentials.json` (or app equivalent)
+- **file**: JSON file at `~/.config/mcp-studio/.credentials.json`
+
+**Credential entry format:**
+```json
+{
+  "server_name": "atlassian",
+  "server_url": "https://mcp.atlassian.com/mcp",
+  "client_id": "dynamically-registered-client-id",
+  "access_token": "...",
+  "refresh_token": "...",
+  "expires_at": 1234567890000,
+  "scopes": ["read", "write"]
+}
+```
+
+Note: `client_id` is stored because it comes from dynamic registration, not config.
 
 ---
 
 ## Config Schema Changes (Codex-compatible)
 
 ```go
+// ServerKind represents the transport type for an MCP server.
+type ServerKind string
+
+const (
+    ServerKindStdio          ServerKind = "stdio"
+    ServerKindStreamableHTTP ServerKind = "streamable_http"
+)
+
 type ServerConfig struct {
     // Existing fields
-    ID        string
-    Name      string
-    Command   string            // For stdio
-    Args      []string
-    Env       map[string]string
-    Cwd       string
-    Enabled   *bool
-    Autostart bool
+    ID        string            `json:"id"`
+    Name      string            `json:"name"`
+    Kind      ServerKind        `json:"kind"`
+    Command   string            `json:"command,omitempty"`   // stdio only
+    Args      []string          `json:"args,omitempty"`      // stdio only
+    Env       map[string]string `json:"env,omitempty"`
+    Cwd       string            `json:"cwd,omitempty"`
+    Enabled   *bool             `json:"enabled,omitempty"`
+    Autostart bool              `json:"autostart,omitempty"`
 
-    // New fields for Streamable HTTP servers
-    URL              string            // Streamable HTTP server URL (mutually exclusive with Command)
-    BearerTokenEnv   string            // Env var containing bearer token
-    HTTPHeaders      map[string]string // Static headers
-    EnvHTTPHeaders   map[string]string // Headers from env vars
-    Scopes           []string          // Optional OAuth scopes
+    // Streamable HTTP fields (mutually exclusive with Command)
+    URL               string            `json:"url,omitempty"`
+    BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty"`
+    HTTPHeaders       map[string]string `json:"http_headers,omitempty"`
+    EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`
+    Scopes            []string          `json:"scopes,omitempty"` // OAuth scopes to request
 
-    // Timeouts
-    StartupTimeout   int  // seconds, default 10 (map to startup_timeout_sec)
-    ToolTimeout      int  // seconds, default 60 (map to tool_timeout_sec)
+    // Timeouts (seconds)
+    StartupTimeoutSec int `json:"startup_timeout_sec,omitempty"` // default 10
+    ToolTimeoutSec    int `json:"tool_timeout_sec,omitempty"`    // default 60
 }
 
 // Top-level config additions
 type Config struct {
     // Existing
-    Servers            map[string]ServerConfig // maps to [mcp_servers]
-    Namespaces         []NamespaceConfig
+    SchemaVersion   int                       `json:"schemaVersion"`
+    Servers         map[string]ServerConfig   `json:"servers"`
+    Namespaces      []NamespaceConfig         `json:"namespaces,omitempty"`
     // ...
 
     // New (Codex-compatible names)
-    MCPOAuthCredentialStore string // "auto", "keyring", "file" (mcp_oauth_credentials_store)
-    MCPOAuthCallbackPort    int    // Fixed port for OAuth callback; unset = random, 0 invalid
-
-    // Studio-specific (optional)
-    StreamableHTTPIdleTimeout int  // milliseconds, default 300000
-    StreamableHTTPMaxRetries  int  // default 5
+    MCPOAuthCredentialStore string `json:"mcp_oauth_credentials_store,omitempty"` // "auto", "keyring", "file"
+    MCPOAuthCallbackPort    *int   `json:"mcp_oauth_callback_port,omitempty"`     // nil = random, 0 invalid
 }
 ```
+
+**Removed fields** (discovered dynamically via RFC 8414, not configured):
+- ~~OAuthClientID~~
+- ~~OAuthAuthURL~~
+- ~~OAuthTokenURL~~
+- ~~OAuthClientSecret~~
 
 ---
 
@@ -120,77 +160,105 @@ type Config struct {
 
 ### 4.1 Streamable HTTP Transport (`internal/mcp/streamable_http_transport.go`)
 
-- [ ] Implement Streamable HTTP (POST + GET streaming)
-- [ ] Handle SSE framing for GET stream (do not rely on `bufio.Scanner` limits)
-- [ ] Support `Mcp-Session-Id` + `Last-Event-ID` resume
-- [ ] Implement reconnection with exponential backoff
-- [ ] Support idle timeout and max retries
-- [ ] Handle Content-Type negotiation (application/json vs text/event-stream)
+- [ ] Implement Streamable HTTP (POST for requests, GET for SSE stream)
+- [ ] SSE parsing with proper handling:
+  - Comment lines (`:`) - ignore
+  - `id:` field - track for `Last-Event-ID` resume
+  - `event:` field - typically "message"
+  - `data:` field - can be multi-line (concat with `\n`)
+  - Dispatch on blank line
+  - **Do NOT use `bufio.Scanner` with default limits** - use incremental line parsing
+  - Enforce max event size to prevent unbounded buffering
+- [ ] Session resumption:
+  - Persist `Mcp-Session-Id` from server response header
+  - Send `Mcp-Session-Id` + `Last-Event-ID` on reconnect
+  - If server rejects, drop state and re-initialize fresh
+- [ ] Reconnection with exponential backoff
+- [ ] Handle Content-Type negotiation (`application/json` vs `text/event-stream`)
 
-**Streamable HTTP (SSE stream) format:**
+**SSE format:**
 ```
+id: 1
 event: message
 data: {"jsonrpc":"2.0","id":1,"result":{...}}
 
+id: 2
 event: message
 data: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}
 ```
 
 ### 4.2 HTTP Headers & Bearer Auth
 
-- [ ] Add `Authorization: Bearer <token>` header when `BearerTokenEnv` is set
-- [ ] Add custom headers from `HTTPHeaders` and `EnvHTTPHeaders`
-- [ ] Validate token presence before connecting
+- [ ] Add `Authorization: Bearer <token>` when `bearer_token_env_var` is set
+- [ ] Validate env var exists before connecting - **fail immediately if missing**
+- [ ] Add static headers from `http_headers`
+- [ ] Add headers from env vars via `env_http_headers`
 
 ### 4.3 OAuth 2.1 Implementation (`internal/oauth/`)
 
+- [ ] `discovery.go` - RFC 8414 OAuth metadata discovery
+  - Try paths: `/.well-known/oauth-authorization-server/<path>`, `/<path>/.well-known/oauth-authorization-server`, `/.well-known/oauth-authorization-server`
+  - Send `MCP-Protocol-Version: 2024-11-05` header
+  - Timeout: 5 seconds
+  - Required fields: `authorization_endpoint`, `token_endpoint`
+  - Optional: `registration_endpoint` (for dynamic client registration)
+- [ ] `registration.go` - Dynamic client registration (RFC 7591)
 - [ ] `server.go` - Local HTTP callback server
-- [ ] `flow.go` - OAuth flow orchestration
+  - Bind to `127.0.0.1:0` by default (random port)
+  - Use bound port in redirect URI
+  - Reject explicit `0` in config
+- [ ] `flow.go` - OAuth flow orchestration with PKCE
 - [ ] `tokens.go` - Token storage and refresh
-- [ ] `keyring.go` - Keyring integration (go-keyring)
-- [ ] `discovery.go` - OAuth metadata discovery from MCP server (RFC 8414 + MCP header)
-
-**OAuth discovery:** MCP servers expose `/.well-known/oauth-authorization-server` with:
-- `authorization_endpoint`
-- `token_endpoint`
-- `registration_endpoint` (for dynamic client registration)
-
-Send `MCP-Protocol-Version: 2024-11-05` header during discovery.
+  - Refresh 30 seconds before expiry
+  - Store `client_id` alongside tokens
+- [ ] `keyring.go` - Keyring integration (`github.com/zalando/go-keyring`)
+- [ ] `store.go` - Credential store abstraction (auto/keyring/file modes)
 
 ### 4.4 CLI Commands
 
 ```bash
-# Add streamable HTTP server
+# Add streamable HTTP server with bearer token
 mcp-studio add figma --url https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
 
 # Add OAuth server (OAuth detected dynamically)
 mcp-studio add atlassian --url https://mcp.atlassian.com/mcp
 
+# Add with custom scopes
+mcp-studio add atlassian --url https://mcp.atlassian.com/mcp --scopes read,write
+
 # OAuth login/logout
 mcp-studio mcp login <server-name>
+mcp-studio mcp login <server-name> --scopes read,write
 mcp-studio mcp logout <server-name>
 
 # List with auth status
 mcp-studio list
-# NAME        TYPE    AUTH         STATUS
-# context7    stdio   none         stopped
-# figma       http    bearer       ready
-# atlassian   http    oauth        logged-in
+# NAME        TYPE              AUTH              STATUS
+# context7    stdio             -                 stopped
+# figma       streamable_http   bearer            ready
+# atlassian   streamable_http   oauth:logged-in   ready
+# github      streamable_http   oauth:needs-login disconnected
 ```
 
 ### 4.5 TUI Integration
 
-- [ ] Show server type indicator (stdio vs http)
-- [ ] Show auth status (none, bearer, oauth:logged-in, oauth:needs-login)
-- [ ] Add "Login" action for OAuth servers (opens browser)
-- [ ] Add "Logout" action to revoke tokens
-- [ ] Handle OAuth callback while TUI is running (notification)
+- [ ] Show server type indicator (stdio vs streamable_http)
+- [ ] Show auth status:
+  - `-` (stdio, no auth)
+  - `bearer` (bearer token configured)
+  - `oauth:logged-in` (OAuth tokens present)
+  - `oauth:needs-login` (OAuth supported but not logged in)
+  - `oauth:expired` (refresh failed)
+- [ ] Add "Login" action (`l` key) for OAuth servers - opens browser
+- [ ] Add "Logout" action for OAuth servers
+- [ ] Handle OAuth callback notification while TUI is running
 
-### 4.6 Process Supervisor Changes
+### 4.6 Supervisor Changes (`internal/process/supervisor.go`)
 
-- [ ] `internal/process/supervisor.go` - Detect server type from config
-- [ ] For HTTP servers: create Streamable HTTP client instead of spawning process
-- [ ] Manage Streamable HTTP connection lifecycle (connect, reconnect, disconnect)
+- [ ] Detect server type from config (`url` present = streamable_http, else stdio)
+- [ ] For HTTP servers: create `StreamableHTTPTransport` instead of spawning process
+- [ ] Abstract `Handle` to work with both transport types (no PID for HTTP)
+- [ ] Manage HTTP connection lifecycle (connect, reconnect, disconnect)
 - [ ] Emit same events (StatusChanged, ToolsUpdated, etc.)
 
 ---
@@ -201,70 +269,78 @@ mcp-studio list
 // For keyring
 "github.com/zalando/go-keyring"
 
-// For OAuth PKCE
-"golang.org/x/oauth2"
-
-// Streamable HTTP can use standard library (net/http + bufio/reader)
+// Standard library for everything else
+"net/http"
+"crypto/rand" // for PKCE
+"encoding/base64"
 ```
+
+Note: Not using `golang.org/x/oauth2` - implementing PKCE flow directly for better control.
 
 ---
 
 ## Security Considerations
 
-1. **Token Storage**: Never store tokens in plain text config files
-2. **PKCE**: Use Proof Key for Code Exchange for public clients
-3. **Scopes**: Request minimal required scopes
-4. **Token Refresh**: Handle refresh before expiry
-5. **Revocation**: Support logout/token revocation
-6. **Callback Server**: Only bind to localhost, use random port by default
+1. **Token Storage**: Never store tokens in config files - use keyring or separate credentials file
+2. **PKCE**: Always use Proof Key for Code Exchange (S256 method)
+3. **Scopes**: Request only scopes specified in config, or minimal defaults
+4. **Token Refresh**: Refresh 30 seconds before expiry to avoid request failures
+5. **Callback Server**: Only bind to `127.0.0.1`, random port by default
+6. **Credential File**: Set 0600 permissions on Unix
 
 ---
 
 ## Testing
 
 ### Unit Tests
-- [ ] Streamable HTTP event parsing (SSE framing)
-- [ ] OAuth flow state machine
-- [ ] Token storage/retrieval
-- [ ] Header injection
+- [ ] SSE event parsing (multi-line data, id tracking, comments)
+- [ ] OAuth discovery path resolution
+- [ ] Token refresh timing logic
+- [ ] Auth precedence (bearer > stored OAuth > discovery)
+- [ ] Credential store (keyring mock, file)
 
 ### Integration Tests
-- [ ] Mock Streamable HTTP server
-- [ ] Mock OAuth server
-- [ ] End-to-end OAuth flow (headless)
+- [ ] Mock Streamable HTTP server with SSE
+- [ ] Mock OAuth authorization server
+- [ ] Session resumption with `Last-Event-ID`
 
 ### Manual Testing
 - [ ] Atlassian Rovo MCP server
-- [ ] Figma MCP server
-- [ ] Other OAuth-enabled MCP servers
+- [ ] Figma MCP server (if available)
+- [ ] Test bearer token + missing env var (should fail)
+- [ ] Test OAuth login → logout → login cycle
 
 ---
 
 ## Success Criteria
 
 - [ ] Can add Streamable HTTP servers via CLI and config file
-- [ ] Bearer token auth works with env var
-- [ ] OAuth login flow opens browser and completes
-- [ ] Tokens stored securely in keyring or encrypted file
-- [ ] Streamable HTTP connection maintains stable streaming
-- [ ] Reconnection handles network interruptions
-- [ ] TUI shows auth status and login actions
-- [ ] Can call tools on remote Streamable HTTP servers
+- [ ] Bearer token auth works; missing env var fails immediately
+- [ ] OAuth discovery detects supported servers
+- [ ] OAuth login flow completes with browser
+- [ ] Dynamic client registration works
+- [ ] Tokens stored securely with `client_id`
+- [ ] Token refresh happens automatically before expiry
+- [ ] Session resumption works after disconnect
+- [ ] TUI shows correct auth status
+- [ ] `mcp login`/`mcp logout` commands work
 
 ---
 
-## Out of Scope (Phase 5: Proxies)
+## Out of Scope (Future)
 
 - Proxy mode (exposing aggregated servers via stdio)
-- Server-to-server authentication
-- Custom OAuth providers
+- Pre-registered OAuth clients (config-based `client_id`)
+- Custom OAuth providers (non-MCP discovery)
+- Token revocation endpoint
 
 ---
 
 ## References
 
 - [OpenAI Codex MCP Docs](https://developers.openai.com/codex/mcp/)
-- [OpenAI Codex Config Reference](https://developers.openai.com/codex/config-reference/)
+- [OpenAI Codex Source](https://github.com/openai/codex) - specifically `codex-rs/rmcp-client/src/`
 - [MCP Authorization Spec](https://spec.modelcontextprotocol.io/specification/2025-03-26/basic/authorization/)
+- [RFC 8414 - OAuth Authorization Server Metadata](https://tools.ietf.org/html/rfc8414)
+- [RFC 7591 - Dynamic Client Registration](https://tools.ietf.org/html/rfc7591)
 - [Atlassian Rovo MCP Server](https://support.atlassian.com/atlassian-rovo-mcp-server/docs/authentication-and-authorization/)
-- [Atlassian MCP GitHub](https://github.com/atlassian/atlassian-mcp-server)

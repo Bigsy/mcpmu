@@ -15,8 +15,8 @@ const SchemaVersion = 1
 type ServerKind string
 
 const (
-	ServerKindStdio ServerKind = "stdio"
-	ServerKindSSE   ServerKind = "sse"
+	ServerKindStdio          ServerKind = "stdio"
+	ServerKindStreamableHTTP ServerKind = "streamable_http"
 )
 
 // ServerConfig represents an MCP server configuration.
@@ -32,17 +32,16 @@ type ServerConfig struct {
 	Cwd       string            `json:"cwd,omitempty"`
 	Env       map[string]string `json:"env,omitempty"`
 
-	// SSE-specific fields (Phase 5)
-	URL     string            `json:"url,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
+	// Streamable HTTP fields (mutually exclusive with Command)
+	URL               string            `json:"url,omitempty"`                 // Server URL for HTTP transport
+	BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty"` // Env var containing bearer token
+	HTTPHeaders       map[string]string `json:"http_headers,omitempty"`         // Static HTTP headers
+	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`     // HTTP headers from env vars (key=header name, value=env var name)
+	Scopes            []string          `json:"scopes,omitempty"`               // OAuth scopes to request
 
-	// OAuth fields (Phase 5)
-	OAuthEnabled      bool   `json:"oauthEnabled,omitempty"`
-	OAuthClientID     string `json:"oauthClientId,omitempty"`
-	OAuthScopes       string `json:"oauthScopes,omitempty"`
-	OAuthAuthURL      string `json:"oauthAuthUrl,omitempty"`
-	OAuthTokenURL     string `json:"oauthTokenUrl,omitempty"`
-	OAuthClientSecret string `json:"-"` // Never persisted in config, stored separately
+	// Timeouts (seconds)
+	StartupTimeoutSec int `json:"startup_timeout_sec,omitempty"` // Default 10
+	ToolTimeoutSec    int `json:"tool_timeout_sec,omitempty"`    // Default 60
 }
 
 // NamespaceConfig represents a namespace that groups servers and their tool permissions.
@@ -82,6 +81,10 @@ type Config struct {
 	Proxies            []ProxyConfig           `json:"proxies,omitempty"`
 	ToolPermissions    []ToolPermission        `json:"toolPermissions,omitempty"`
 	LastModified       time.Time               `json:"lastModified"`
+
+	// OAuth settings (Codex-compatible)
+	MCPOAuthCredentialStore string `json:"mcp_oauth_credentials_store,omitempty"` // "auto", "keyring", "file"
+	MCPOAuthCallbackPort    *int   `json:"mcp_oauth_callback_port,omitempty"`     // nil = random, 0 invalid
 }
 
 // NewConfig creates a new empty configuration with default values.
@@ -98,6 +101,39 @@ func NewConfig() *Config {
 // IsEnabled returns whether the server is enabled (nil defaults to true).
 func (s ServerConfig) IsEnabled() bool {
 	return s.Enabled == nil || *s.Enabled
+}
+
+// IsHTTP returns true if this server uses HTTP transport (has URL configured).
+func (s ServerConfig) IsHTTP() bool {
+	return s.URL != ""
+}
+
+// GetKind returns the effective kind based on configuration.
+// If URL is set, returns ServerKindStreamableHTTP regardless of Kind field.
+func (s ServerConfig) GetKind() ServerKind {
+	if s.URL != "" {
+		return ServerKindStreamableHTTP
+	}
+	if s.Kind == "" {
+		return ServerKindStdio
+	}
+	return s.Kind
+}
+
+// StartupTimeout returns the startup timeout in seconds, with a default of 10.
+func (s ServerConfig) StartupTimeout() int {
+	if s.StartupTimeoutSec <= 0 {
+		return 10
+	}
+	return s.StartupTimeoutSec
+}
+
+// ToolTimeout returns the tool call timeout in seconds, with a default of 60.
+func (s ServerConfig) ToolTimeout() int {
+	if s.ToolTimeoutSec <= 0 {
+		return 60
+	}
+	return s.ToolTimeoutSec
 }
 
 // SetEnabled sets the enabled state.

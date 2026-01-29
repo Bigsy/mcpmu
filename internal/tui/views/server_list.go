@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hedworth/mcp-studio-go/internal/config"
 	"github.com/hedworth/mcp-studio-go/internal/events"
+	"github.com/hedworth/mcp-studio-go/internal/mcp"
 	"github.com/hedworth/mcp-studio-go/internal/tui/theme"
 )
 
@@ -17,10 +18,16 @@ type ServerItem struct {
 	Config     config.ServerConfig
 	Status     events.ServerStatus
 	Namespaces []string // Names of namespaces this server belongs to
+	AuthStatus mcp.AuthStatus // Authentication status for HTTP servers
 }
 
 func (i ServerItem) Title() string       { return i.Config.Name }
-func (i ServerItem) Description() string { return i.Config.Command }
+func (i ServerItem) Description() string {
+	if i.Config.IsHTTP() {
+		return i.Config.URL
+	}
+	return i.Config.Command
+}
 func (i ServerItem) FilterValue() string { return i.Config.Name }
 
 // ServerListModel is the server list view component.
@@ -164,6 +171,12 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 
 	line1.WriteString(styledName)
 
+	// Server type indicator (http badge for HTTP servers)
+	if si.Config.IsHTTP() {
+		line1.WriteString("  ")
+		line1.WriteString(d.theme.Faint.Render("[http]"))
+	}
+
 	// Status pill - always show runtime state, add disabled indicator if applicable
 	statePill := d.theme.StatusPill(si.Status.State.String())
 	line1.WriteString("  ")
@@ -171,6 +184,13 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	if !enabled {
 		line1.WriteString(" ")
 		line1.WriteString(d.theme.Faint.Render("[disabled]"))
+	}
+
+	// Auth status for HTTP servers
+	if si.Config.IsHTTP() {
+		line1.WriteString(" ")
+		authBadge := formatAuthBadge(si, d.theme)
+		line1.WriteString(authBadge)
 	}
 
 	// Namespace badges on first line
@@ -185,19 +205,24 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		}
 	}
 
-	// Second line: command (truncated), tool count
+	// Second line: command/URL (truncated), tool count
 	var line2 strings.Builder
 	line2.WriteString("   ")
 
-	cmd := si.Config.Command
-	if len(si.Config.Args) > 0 {
-		cmd += " " + strings.Join(si.Config.Args, " ")
+	var cmdOrURL string
+	if si.Config.IsHTTP() {
+		cmdOrURL = si.Config.URL
+	} else {
+		cmdOrURL = si.Config.Command
+		if len(si.Config.Args) > 0 {
+			cmdOrURL += " " + strings.Join(si.Config.Args, " ")
+		}
 	}
 	maxCmdLen := 40
-	if len(cmd) > maxCmdLen {
-		cmd = cmd[:maxCmdLen-3] + "..."
+	if len(cmdOrURL) > maxCmdLen {
+		cmdOrURL = cmdOrURL[:maxCmdLen-3] + "..."
 	}
-	line2.WriteString(d.theme.Muted.Render(cmd))
+	line2.WriteString(d.theme.Muted.Render(cmdOrURL))
 
 	if si.Status.ToolCount > 0 {
 		line2.WriteString("  ")
@@ -205,4 +230,24 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	}
 
 	fmt.Fprint(w, line1.String()+"\n"+line2.String())
+}
+
+// formatAuthBadge returns a styled auth status badge for HTTP servers.
+func formatAuthBadge(si ServerItem, t theme.Theme) string {
+	// Check config first
+	if si.Config.BearerTokenEnvVar != "" {
+		return t.Faint.Render("[bearer]")
+	}
+
+	// Check runtime auth status
+	switch si.AuthStatus {
+	case mcp.AuthStatusOAuthOK:
+		return t.Success.Render("[oauth:ok]")
+	case mcp.AuthStatusOAuthNeeds:
+		return t.Warn.Render("[oauth:login]")
+	case mcp.AuthStatusOAuthExp:
+		return t.Danger.Render("[oauth:expired]")
+	default:
+		return t.Faint.Render("[oauth]")
+	}
 }

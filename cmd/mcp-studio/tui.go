@@ -77,8 +77,10 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		}
 	})
 
-	// Create process supervisor
-	supervisor := process.NewSupervisor(bus)
+	// Create process supervisor with config-specified credential store
+	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
+		CredentialStoreMode: cfg.MCPOAuthCredentialStore,
+	})
 
 	// Create TUI model
 	model := tui.NewModel(cfg, supervisor, bus)

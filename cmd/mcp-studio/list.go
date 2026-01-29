@@ -67,23 +67,27 @@ func outputJSON(servers []config.ServerConfig) error {
 		Kind      string            `json:"kind"`
 		Command   string            `json:"command,omitempty"`
 		Args      []string          `json:"args,omitempty"`
+		URL       string            `json:"url,omitempty"`
 		Cwd       string            `json:"cwd,omitempty"`
 		Env       map[string]string `json:"env,omitempty"`
 		Enabled   bool              `json:"enabled"`
 		Autostart bool              `json:"autostart"`
+		Auth      string            `json:"auth,omitempty"`
 	}
 
 	views := make([]serverView, len(servers))
 	for i, srv := range servers {
 		views[i] = serverView{
 			Name:      srv.Name,
-			Kind:      string(srv.Kind),
+			Kind:      string(srv.GetKind()),
 			Command:   srv.Command,
 			Args:      srv.Args,
+			URL:       srv.URL,
 			Cwd:       srv.Cwd,
 			Env:       srv.Env,
 			Enabled:   srv.IsEnabled(),
 			Autostart: srv.Autostart,
+			Auth:      getAuthType(srv),
 		}
 	}
 
@@ -95,6 +99,18 @@ func outputJSON(servers []config.ServerConfig) error {
 	return nil
 }
 
+func getAuthType(srv config.ServerConfig) string {
+	if !srv.IsHTTP() {
+		return "-"
+	}
+	if srv.BearerTokenEnvVar != "" {
+		return "bearer"
+	}
+	// For OAuth servers, we'd need to check the credential store
+	// For now, just indicate OAuth is potentially configured
+	return "oauth"
+}
+
 func outputTable(servers []config.ServerConfig) error {
 	if len(servers) == 0 {
 		fmt.Println("No servers configured")
@@ -102,30 +118,35 @@ func outputTable(servers []config.ServerConfig) error {
 	}
 
 	// Calculate column widths
-	nameWidth := 4 // "NAME"
-	cmdWidth := 7  // "COMMAND"
+	nameWidth := 4     // "NAME"
+	typeWidth := 4     // "TYPE"
+	cmdWidth := 15     // "COMMAND/URL"
 
 	for _, srv := range servers {
 		if len(srv.Name) > nameWidth {
 			nameWidth = len(srv.Name)
 		}
-		cmdStr := formatCommand(srv)
+		kindStr := formatKind(srv)
+		if len(kindStr) > typeWidth {
+			typeWidth = len(kindStr)
+		}
+		cmdStr := formatCommandOrURL(srv)
 		if len(cmdStr) > cmdWidth {
 			cmdWidth = len(cmdStr)
 		}
 	}
 
-	// Cap command width for readability
-	if cmdWidth > 40 {
-		cmdWidth = 40
+	// Cap widths for readability
+	if cmdWidth > 35 {
+		cmdWidth = 35
 	}
 
 	// Print header
-	fmt.Printf("%-*s  %-*s  %s\n", nameWidth, "NAME", cmdWidth, "COMMAND", "ENABLED")
+	fmt.Printf("%-*s  %-*s  %-*s  %-8s  %s\n", nameWidth, "NAME", typeWidth, "TYPE", cmdWidth, "COMMAND/URL", "AUTH", "ENABLED")
 
 	// Print servers
 	for _, srv := range servers {
-		cmdStr := formatCommand(srv)
+		cmdStr := formatCommandOrURL(srv)
 		if len(cmdStr) > cmdWidth {
 			cmdStr = cmdStr[:cmdWidth-3] + "..."
 		}
@@ -135,10 +156,32 @@ func outputTable(servers []config.ServerConfig) error {
 			enabled = "no"
 		}
 
-		fmt.Printf("%-*s  %-*s  %s\n", nameWidth, srv.Name, cmdWidth, cmdStr, enabled)
+		auth := getAuthType(srv)
+		kindStr := formatKind(srv)
+
+		fmt.Printf("%-*s  %-*s  %-*s  %-8s  %s\n", nameWidth, srv.Name, typeWidth, kindStr, cmdWidth, cmdStr, auth, enabled)
 	}
 
 	return nil
+}
+
+func formatKind(srv config.ServerConfig) string {
+	kind := srv.GetKind()
+	switch kind {
+	case config.ServerKindStdio:
+		return "stdio"
+	case config.ServerKindStreamableHTTP:
+		return "http"
+	default:
+		return string(kind)
+	}
+}
+
+func formatCommandOrURL(srv config.ServerConfig) string {
+	if srv.IsHTTP() {
+		return srv.URL
+	}
+	return formatCommand(srv)
 }
 
 func formatCommand(srv config.ServerConfig) string {

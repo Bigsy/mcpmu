@@ -17,6 +17,7 @@ import (
 	"github.com/hedworth/mcp-studio-go/internal/config"
 	"github.com/hedworth/mcp-studio-go/internal/events"
 	"github.com/hedworth/mcp-studio-go/internal/mcp"
+	"github.com/hedworth/mcp-studio-go/internal/oauth"
 )
 
 const (
@@ -32,15 +33,29 @@ const (
 
 // Supervisor manages MCP server process lifecycles.
 type Supervisor struct {
-	bus        *events.Bus
-	handles    map[string]*Handle
-	pidTracker *PIDTracker
-	mu         sync.RWMutex
+	bus           *events.Bus
+	handles       map[string]*Handle
+	pidTracker    *PIDTracker
+	credStore     oauth.CredentialStore
+	tokenManager  *oauth.TokenManager
+	mu            sync.RWMutex
+}
+
+// SupervisorOptions configures a Supervisor.
+type SupervisorOptions struct {
+	// CredentialStoreMode specifies the OAuth credential store mode.
+	// If empty, defaults to "auto".
+	CredentialStoreMode string
 }
 
 // NewSupervisor creates a new process supervisor.
 // It also cleans up any orphan processes from previous runs.
 func NewSupervisor(bus *events.Bus) *Supervisor {
+	return NewSupervisorWithOptions(bus, SupervisorOptions{})
+}
+
+// NewSupervisorWithOptions creates a new process supervisor with options.
+func NewSupervisorWithOptions(bus *events.Bus, opts SupervisorOptions) *Supervisor {
 	pidTracker, err := NewPIDTracker()
 	if err != nil {
 		log.Printf("Warning: failed to create PID tracker: %v", err)
@@ -51,24 +66,57 @@ func NewSupervisor(bus *events.Bus) *Supervisor {
 		}
 	}
 
+	// Determine credential store mode
+	storeMode := oauth.StoreMode(opts.CredentialStoreMode)
+	if storeMode == "" {
+		storeMode = oauth.StoreModeAuto
+	}
+
+	// Create credential store for OAuth
+	credStore, err := oauth.NewCredentialStore(storeMode)
+	if err != nil {
+		log.Printf("Warning: failed to create credential store: %v", err)
+	}
+
+	var tokenManager *oauth.TokenManager
+	if credStore != nil {
+		tokenManager = oauth.NewTokenManager(credStore)
+	}
+
 	return &Supervisor{
-		bus:        bus,
-		handles:    make(map[string]*Handle),
-		pidTracker: pidTracker,
+		bus:          bus,
+		handles:      make(map[string]*Handle),
+		pidTracker:   pidTracker,
+		credStore:    credStore,
+		tokenManager: tokenManager,
 	}
 }
 
-// Start starts an MCP server process.
+// CredentialStore returns the OAuth credential store.
+func (s *Supervisor) CredentialStore() oauth.CredentialStore {
+	return s.credStore
+}
+
+// Start starts an MCP server (stdio process or HTTP connection).
 func (s *Supervisor) Start(ctx context.Context, srv config.ServerConfig) (*Handle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	log.Printf("Starting server: id=%s cmd=%s args=%v", srv.ID, srv.Command, srv.Args)
 
 	// Check if already running
 	if h, exists := s.handles[srv.ID]; exists && h.IsRunning() {
 		return nil, fmt.Errorf("server %s is already running", srv.ID)
 	}
+
+	// Dispatch based on server type
+	if srv.IsHTTP() {
+		return s.startHTTP(ctx, srv)
+	}
+	return s.startStdio(ctx, srv)
+}
+
+// startStdio starts a stdio-based MCP server process.
+func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*Handle, error) {
+	log.Printf("Starting stdio server: id=%s cmd=%s args=%v", srv.ID, srv.Command, srv.Args)
 
 	// Emit starting event
 	s.emitStatus(srv.ID, events.StateStarting, 0, nil, "")
@@ -122,14 +170,15 @@ func (s *Supervisor) Start(ctx context.Context, srv config.ServerConfig) (*Handl
 
 	// Create handle
 	handle := &Handle{
-		id:        srv.ID,
-		cmd:       cmd,
-		client:    client,
-		transport: transport,
-		logs:      make([]string, 0, 1000),
-		bus:       s.bus,
-		startedAt: time.Now(),
-		done:      make(chan struct{}),
+		id:             srv.ID,
+		kind:           HandleKindStdio,
+		cmd:            cmd,
+		client:         client,
+		stdioTransport: transport,
+		logs:           make([]string, 0, 1000),
+		bus:            s.bus,
+		startedAt:      time.Now(),
+		done:           make(chan struct{}),
 	}
 
 	s.handles[srv.ID] = handle
@@ -188,6 +237,126 @@ func (s *Supervisor) Start(ctx context.Context, srv config.ServerConfig) (*Handl
 
 	// Emit running event
 	s.emitStatus(srv.ID, events.StateRunning, cmd.Process.Pid, nil, "")
+
+	return handle, nil
+}
+
+// startHTTP starts an HTTP-based MCP server connection.
+func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*Handle, error) {
+	log.Printf("Starting HTTP server: id=%s url=%s", srv.ID, srv.URL)
+
+	// Emit starting event
+	s.emitStatus(srv.ID, events.StateStarting, 0, nil, "")
+
+	// Determine authentication
+	var bearerToken string
+	var authStatus mcp.AuthStatus = mcp.AuthStatusNone
+
+	// Check bearer token first (highest priority)
+	if srv.BearerTokenEnvVar != "" {
+		token := os.Getenv(srv.BearerTokenEnvVar)
+		if token == "" {
+			err := fmt.Errorf("bearer token env var %s is not set", srv.BearerTokenEnvVar)
+			s.emitStatus(srv.ID, events.StateError, 0, nil, err.Error())
+			return nil, err
+		}
+		bearerToken = token
+		authStatus = mcp.AuthStatusBearer
+	} else if s.tokenManager != nil {
+		// Check for OAuth credentials
+		token, err := s.tokenManager.GetAccessToken(ctx, srv.URL)
+		if err == nil && token != "" {
+			bearerToken = token
+			authStatus = mcp.AuthStatusOAuthOK
+		} else {
+			// Try to discover OAuth support
+			metadata, _ := oauth.SupportsOAuth(ctx, srv.URL)
+			if metadata != nil {
+				authStatus = mcp.AuthStatusOAuthNeeds
+				// Don't fail - server might work without auth, or user can login later
+				log.Printf("Server %s supports OAuth but needs login", srv.ID)
+			}
+		}
+	}
+
+	// Build HTTP headers
+	headers := make(map[string]string)
+	for k, v := range srv.HTTPHeaders {
+		headers[k] = v
+	}
+	for headerName, envVarName := range srv.EnvHTTPHeaders {
+		if value := os.Getenv(envVarName); value != "" {
+			headers[headerName] = value
+		}
+	}
+
+	// Create HTTP transport
+	transportConfig := mcp.StreamableHTTPConfig{
+		URL:         srv.URL,
+		BearerToken: bearerToken,
+		HTTPHeaders: headers,
+	}
+	httpTransport := mcp.NewStreamableHTTPTransport(transportConfig)
+
+	// Connect SSE stream
+	if err := httpTransport.Connect(ctx); err != nil {
+		// Check if it's an auth error
+		if authStatus == mcp.AuthStatusOAuthNeeds {
+			log.Printf("Server %s requires OAuth login", srv.ID)
+		}
+		s.emitStatus(srv.ID, events.StateError, 0, nil, err.Error())
+		return nil, fmt.Errorf("connect HTTP transport: %w", err)
+	}
+
+	// Create client
+	client := mcp.NewClient(httpTransport)
+
+	// Create handle
+	handle := &Handle{
+		id:            srv.ID,
+		kind:          HandleKindHTTP,
+		client:        client,
+		httpTransport: httpTransport,
+		authStatus:    authStatus,
+		serverURL:     srv.URL,
+		logs:          make([]string, 0, 1000),
+		bus:           s.bus,
+		startedAt:     time.Now(),
+		done:          make(chan struct{}),
+	}
+
+	s.handles[srv.ID] = handle
+
+	// Initialize MCP connection
+	initCtx, cancel := context.WithTimeout(ctx, time.Duration(srv.StartupTimeout())*time.Second)
+	defer cancel()
+
+	if err := client.Initialize(initCtx); err != nil {
+		handle.Stop()
+		s.emitStatus(srv.ID, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
+		return nil, fmt.Errorf("initialize mcp: %w", err)
+	}
+
+	// Discover tools
+	toolsCtx, toolsCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer toolsCancel()
+	tools, err := client.ListTools(toolsCtx)
+	if err != nil {
+		s.bus.Publish(events.NewErrorEvent(srv.ID, err, "Failed to list tools"))
+	} else {
+		handle.tools = tools
+		mcpTools := make([]events.McpTool, len(tools))
+		for i, t := range tools {
+			mcpTools[i] = events.McpTool{
+				Name:        t.Name,
+				Description: t.Description,
+			}
+		}
+		s.bus.Publish(events.NewToolsUpdatedEvent(srv.ID, mcpTools))
+	}
+
+	// Emit running event
+	s.emitStatus(srv.ID, events.StateRunning, 0, nil, "")
 
 	return handle, nil
 }
@@ -321,12 +490,30 @@ func buildEnv(customEnv map[string]string) []string {
 	return env
 }
 
-// Handle represents a running server process.
+// HandleKind represents the type of server handle.
+type HandleKind int
+
+const (
+	HandleKindStdio HandleKind = iota
+	HandleKindHTTP
+)
+
+// Handle represents a running server (process or HTTP connection).
 type Handle struct {
-	id        string
-	cmd       *exec.Cmd
+	id   string
+	kind HandleKind
+
+	// Stdio-specific fields
+	cmd            *exec.Cmd
+	stdioTransport *mcp.StdioTransport
+
+	// HTTP-specific fields
+	httpTransport *mcp.StreamableHTTPTransport
+	authStatus    mcp.AuthStatus
+	serverURL     string
+
+	// Common fields
 	client    *mcp.Client
-	transport *mcp.StdioTransport
 	tools     []mcp.Tool
 	logs      []string
 	logsMu    sync.RWMutex
@@ -334,7 +521,7 @@ type Handle struct {
 	startedAt time.Time
 	stopped   bool
 	stopMu    sync.Mutex
-	done      chan struct{} // closed when process exits
+	done      chan struct{} // closed when server stops
 }
 
 // ID returns the server ID.
@@ -361,12 +548,27 @@ func (h *Handle) Logs() []string {
 	return logs
 }
 
-// PID returns the process ID.
+// PID returns the process ID (0 for HTTP handles).
 func (h *Handle) PID() int {
-	if h.cmd.Process == nil {
+	if h.kind != HandleKindStdio || h.cmd == nil || h.cmd.Process == nil {
 		return 0
 	}
 	return h.cmd.Process.Pid
+}
+
+// Kind returns the handle type (stdio or HTTP).
+func (h *Handle) Kind() HandleKind {
+	return h.kind
+}
+
+// AuthStatus returns the authentication status (for HTTP handles).
+func (h *Handle) AuthStatus() mcp.AuthStatus {
+	return h.authStatus
+}
+
+// ServerURL returns the server URL (for HTTP handles).
+func (h *Handle) ServerURL() string {
+	return h.serverURL
 }
 
 // StartedAt returns when the process started.
@@ -398,7 +600,7 @@ func (h *Handle) IsRunning() bool {
 	}
 }
 
-// Stop gracefully stops the server process.
+// Stop gracefully stops the server (process or HTTP connection).
 func (h *Handle) Stop() error {
 	h.stopMu.Lock()
 	if h.stopped {
@@ -417,19 +619,33 @@ func (h *Handle) Stop() error {
 	// Close MCP client first
 	h.client.Close()
 
-	// Send SIGTERM - watchProcess goroutine handles Wait()
-	if h.cmd.Process != nil {
-		h.cmd.Process.Signal(syscall.SIGTERM)
+	if h.kind == HandleKindStdio {
+		// Stdio: send SIGTERM to process
+		if h.cmd != nil && h.cmd.Process != nil {
+			h.cmd.Process.Signal(syscall.SIGTERM)
 
-		// Wait for watchProcess to signal completion with timeout
-		select {
-		case <-h.done:
-			// Process exited gracefully
-		case <-time.After(GracefulShutdownTimeout):
-			// Force kill
-			h.cmd.Process.Signal(syscall.SIGKILL)
-			<-h.done
+			// Wait for watchProcess to signal completion with timeout
+			select {
+			case <-h.done:
+				// Process exited gracefully
+			case <-time.After(GracefulShutdownTimeout):
+				// Force kill
+				h.cmd.Process.Signal(syscall.SIGKILL)
+				<-h.done
+			}
 		}
+	} else {
+		// HTTP: close transport
+		if h.httpTransport != nil {
+			h.httpTransport.Close()
+		}
+		// Signal done
+		close(h.done)
+
+		h.bus.Publish(events.NewStatusChangedEvent(h.id, events.StateStopping, events.StateStopped, events.ServerStatus{
+			ID:    h.id,
+			State: events.StateStopped,
+		}))
 	}
 
 	return nil

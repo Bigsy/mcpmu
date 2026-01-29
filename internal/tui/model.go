@@ -162,6 +162,23 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 	return m
 }
 
+func (m *Model) switchToTab(tab Tab) {
+	m.activeTab = tab
+	m.currentView = ViewList
+	m.detailServerID = ""
+	m.detailNamespaceID = ""
+
+	// Refresh tab-specific lists when switching.
+	switch tab {
+	case TabServers:
+		m.refreshServerList()
+	case TabNamespaces:
+		m.refreshNamespaceList()
+	case TabProxies:
+		// Placeholder view; no list to refresh.
+	}
+}
+
 func (m *Model) applyFocus() {
 	// Reset everything to unfocused, then mark the active pane focused so it
 	// picks up the orange accent border.
@@ -451,26 +468,26 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 		}
 		return true, m, tea.Quit
 
+	case key.Matches(msg, m.keys.TabNext):
+		next := Tab((int(m.activeTab) + 1) % 3)
+		m.switchToTab(next)
+		return true, m, nil
+
+	case key.Matches(msg, m.keys.TabPrev):
+		prev := Tab((int(m.activeTab) + 2) % 3) // -1 mod 3
+		m.switchToTab(prev)
+		return true, m, nil
+
 	case key.Matches(msg, m.keys.Tab1):
-		m.activeTab = TabServers
-		m.currentView = ViewList
-		m.detailServerID = ""
-		m.detailNamespaceID = ""
+		m.switchToTab(TabServers)
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Tab2):
-		m.activeTab = TabNamespaces
-		m.currentView = ViewList
-		m.detailServerID = ""
-		m.detailNamespaceID = ""
-		m.refreshNamespaceList()
+		m.switchToTab(TabNamespaces)
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Tab3):
-		m.activeTab = TabProxies
-		m.currentView = ViewList
-		m.detailServerID = ""
-		m.detailNamespaceID = ""
+		m.switchToTab(TabProxies)
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Escape):

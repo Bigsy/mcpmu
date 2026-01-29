@@ -108,6 +108,8 @@ func (m HelpOverlayModel) helpContent() string {
 			{"f", "Toggle follow mode"},
 		}),
 		m.renderSection("Tabs", [][]string{
+			{"Tab", "Next tab"},
+			{"Shift+Tab", "Previous tab"},
 			{"1", "Servers tab"},
 			{"2", "Namespaces tab"},
 			{"3", "Proxies tab (planned)"},
