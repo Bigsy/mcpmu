@@ -33,47 +33,64 @@ Keybindings:
 
 ## CLI Usage
 
+All commands support `--config` / `-c` to specify a custom config file path.
+
 ### Server management
 
-**Stdio servers:**
+**Add stdio server:**
 ```bash
 mcpmu add <name> -- <command> [args...]
 mcpmu add context7 -- npx -y @upstash/context7-mcp
 mcpmu add my-server --env FOO=bar --cwd /path -- ./server --flag
+mcpmu add auto-server --autostart -- ./server  # start on app launch
 ```
 
-**HTTP servers (Streamable HTTP / SSE):**
+**Add HTTP server (Streamable HTTP / SSE):**
 ```bash
 # With bearer token from environment variable
 mcpmu add figma --url https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
 
-# With OAuth scopes
+# With OAuth scopes (login separately with `mcp login`)
 mcpmu add atlassian --url https://mcp.atlassian.com/mcp --scopes read,write
 
 # Plain HTTP (no auth)
 mcpmu add my-api --url https://example.com/mcp
 ```
 
-**Common commands:**
+**List and remove:**
 ```bash
 mcpmu list
 mcpmu list --json
 
 mcpmu remove <name>
-mcpmu remove <name> --yes
+mcpmu remove <name> --yes  # skip confirmation
 ```
 
-Namespaces:
+### OAuth authentication
+
+```bash
+mcpmu mcp login <server>              # start OAuth flow in browser
+mcpmu mcp login atlassian --scopes read,write
+mcpmu mcp logout <server>             # remove stored credentials
+```
+
+### Namespaces
+
 ```bash
 mcpmu namespace list
+mcpmu namespace list --json
 mcpmu namespace add <name> --description "My namespace"
 mcpmu namespace remove <name>
+mcpmu namespace remove <name> --yes
+
 mcpmu namespace assign <namespace> <server>
 mcpmu namespace unassign <namespace> <server>
 mcpmu namespace default <name>
+mcpmu namespace set-deny-default <namespace> <true|false>  # deny unconfigured tools
 ```
 
-Tool permissions:
+### Tool permissions
+
 ```bash
 mcpmu permission list <namespace>
 mcpmu permission set <namespace> <server> <tool> <allow|deny>
@@ -84,8 +101,14 @@ mcpmu permission unset <namespace> <server> <tool>
 
 Run mcpmu as an MCP server so Claude/Codex can call tools from your managed servers:
 ```bash
-mcpmu serve --stdio --config ~/.config/mcpmu/config.json --namespace default
+mcpmu serve --stdio --namespace default
+mcpmu serve -n work --log-level debug --eager  # pre-start all servers
 ```
+
+**Serve flags:**
+- `-n, --namespace` - namespace to expose (default: auto-select)
+- `-l, --log-level` - log level: debug, info, warn, error (default: info)
+- `--eager` - pre-start all servers on init (default: lazy start)
 
 Example entry for Claude Code:
 ```json
