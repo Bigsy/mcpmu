@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/config"
-	"github.com/hedworth/mcp-studio-go/internal/mcptest"
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/mcptest"
 )
 
 // TestHelperProcess implements the test subprocess for fake servers.
@@ -57,14 +57,14 @@ func TestServer_ManagerTool_ServersList(t *testing.T) {
 
 	var stdout bytes.Buffer
 	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mcp-studio.servers_list","arguments":{}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mcpmu.servers_list","arguments":{}}}
 `)
 
 	srv, err := New(Options{
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -132,7 +132,7 @@ func TestServer_ManagerTool_NamespacesList(t *testing.T) {
 
 	var stdout bytes.Buffer
 	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mcp-studio.namespaces_list","arguments":{}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mcpmu.namespaces_list","arguments":{}}}
 `)
 
 	srv, err := New(Options{
@@ -140,7 +140,7 @@ func TestServer_ManagerTool_NamespacesList(t *testing.T) {
 		Namespace:       "work", // Select work namespace to pass init
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -205,7 +205,7 @@ func TestServer_ToolsCall_UnknownTool(t *testing.T) {
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -268,7 +268,7 @@ func TestServer_ToolsCall_PermissionDenied(t *testing.T) {
 		Namespace:       "restricted",
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -339,7 +339,7 @@ func TestServer_ToolsCall_NoNamespace_AllowsAll(t *testing.T) {
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -381,8 +381,8 @@ func TestEndToEnd_WithRealBinary(t *testing.T) {
 	}
 
 	// Build the binary
-	tmpBin := t.TempDir() + "/mcp-studio"
-	cmd := exec.Command("go", "build", "-o", tmpBin, "../../cmd/mcp-studio")
+	tmpBin := t.TempDir() + "/mcpmu"
+	cmd := exec.Command("go", "build", "-o", tmpBin, "../../cmd/mcpmu")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to build binary: %v\n%s", err, output)
 	}
@@ -466,8 +466,8 @@ func TestEndToEnd_WithRealBinary(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", resp.Error)
 	}
 
-	if resp.Result.ServerInfo.Name != "mcp-studio" {
-		t.Errorf("ServerInfo.Name = %q, want %q", resp.Result.ServerInfo.Name, "mcp-studio")
+	if resp.Result.ServerInfo.Name != "mcpmu" {
+		t.Errorf("ServerInfo.Name = %q, want %q", resp.Result.ServerInfo.Name, "mcpmu")
 	}
 
 	// Send tools/list request
@@ -503,14 +503,14 @@ func TestEndToEnd_WithRealBinary(t *testing.T) {
 	// Should have manager tools
 	hasServersList := false
 	for _, tool := range toolsResp.Result.Tools {
-		if tool.Name == "mcp-studio.servers_list" {
+		if tool.Name == "mcpmu.servers_list" {
 			hasServersList = true
 			break
 		}
 	}
 
 	if !hasServersList {
-		t.Error("Expected mcp-studio.servers_list tool in response")
+		t.Error("Expected mcpmu.servers_list tool in response")
 	}
 
 	t.Logf("End-to-end test passed! Found %d tools", len(toolsResp.Result.Tools))
@@ -602,7 +602,7 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 		EagerStart:      false, // Use lazy start - servers start when tools are called
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",

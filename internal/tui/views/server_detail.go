@@ -8,10 +8,10 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hedworth/mcp-studio-go/internal/config"
-	"github.com/hedworth/mcp-studio-go/internal/events"
-	"github.com/hedworth/mcp-studio-go/internal/mcp"
-	"github.com/hedworth/mcp-studio-go/internal/tui/theme"
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/events"
+	"github.com/Bigsy/mcpmu/internal/mcp"
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 // ServerDetailModel displays detailed information about a server.

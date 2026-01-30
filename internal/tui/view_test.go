@@ -5,10 +5,10 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/hedworth/mcp-studio-go/internal/config"
-	"github.com/hedworth/mcp-studio-go/internal/events"
-	"github.com/hedworth/mcp-studio-go/internal/process"
-	"github.com/hedworth/mcp-studio-go/internal/testutil"
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/events"
+	"github.com/Bigsy/mcpmu/internal/process"
+	"github.com/Bigsy/mcpmu/internal/testutil"
 )
 
 // newTestModelWithSize creates a Model with dimensions set for view testing.

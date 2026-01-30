@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/hedworth/mcp-studio-go/internal/config"
+	"github.com/Bigsy/mcpmu/internal/config"
 )
 
 // PermissionResult represents the result of a permission check.

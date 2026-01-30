@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/testutil"
+	"github.com/Bigsy/mcpmu/internal/testutil"
 )
 
 // skipIfPsUnavailable skips the test if the ps command is unavailable or blocked.

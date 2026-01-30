@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"github.com/hedworth/mcp-studio-go/internal/config"
+	"github.com/Bigsy/mcpmu/internal/config"
 )
 
 func TestPermissionResult_String(t *testing.T) {

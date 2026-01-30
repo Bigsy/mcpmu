@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hedworth/mcp-studio-go/internal/tui/theme"
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 // ToastLevel represents the severity of a toast notification.

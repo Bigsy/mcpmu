@@ -1,26 +1,23 @@
-# MCP Studio Go
+# mcpmu
 
-A TUI application and stdio MCP server for managing local MCP (Model Context Protocol) servers.
+A TUI application and MCP server for managing MCP (Model Context Protocol) servers - both local stdio processes and remote HTTP endpoints.
 
-## Status
+## Features
 
-Implemented so far:
-- Stdio MCP server management (start/stop, logs, tool discovery)
-- TUI for servers, logs, and namespaces
-- Namespace-based tool permissions
-- CLI for server CRUD + namespace/permission management
-- `serve --stdio` mode to expose an aggregated MCP toolset to Claude/Codex
-
-Planned next (Phase 4):
-- Streamable HTTP client transport
-- OAuth 2.1 login flow and token storage
+- **Multi-transport support**: Stdio processes and Streamable HTTP (SSE) servers
+- **TUI interface**: Interactive server management, logs, and namespaces
+- **Namespace-based permissions**: Group servers and control tool access per namespace
+- **MCP aggregation**: Expose all managed servers as a single MCP endpoint via `serve --stdio`
+- **Bearer token auth**: Authenticate to HTTP servers via environment variables
+- **Custom headers**: Add static or env-sourced HTTP headers
+- **OAuth scopes**: Configure OAuth scopes for servers that support it
 
 ## Build & Run
 
 ```bash
-go build -o mcp-studio ./cmd/mcp-studio
-./mcp-studio
-./mcp-studio --debug  # logs to /tmp/mcp-studio-debug.log
+go build -o mcpmu ./cmd/mcpmu
+./mcpmu
+./mcpmu --debug  # logs to /tmp/mcpmu-debug.log
 ```
 
 ## TUI Usage
@@ -36,81 +33,125 @@ Keybindings:
 
 ## CLI Usage
 
-Server management:
+### Server management
+
+**Stdio servers:**
 ```bash
-mcp-studio add <name> -- <command> [args...]
-mcp-studio add context7 -- npx -y @upstash/context7-mcp
-mcp-studio add my-server --env FOO=bar --cwd /path -- ./server --flag
+mcpmu add <name> -- <command> [args...]
+mcpmu add context7 -- npx -y @upstash/context7-mcp
+mcpmu add my-server --env FOO=bar --cwd /path -- ./server --flag
+```
 
-mcp-studio list
-mcp-studio list --json
+**HTTP servers (Streamable HTTP / SSE):**
+```bash
+# With bearer token from environment variable
+mcpmu add figma --url https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
 
-mcp-studio remove <name>
-mcp-studio remove <name> --yes
+# With OAuth scopes
+mcpmu add atlassian --url https://mcp.atlassian.com/mcp --scopes read,write
+
+# Plain HTTP (no auth)
+mcpmu add my-api --url https://example.com/mcp
+```
+
+**Common commands:**
+```bash
+mcpmu list
+mcpmu list --json
+
+mcpmu remove <name>
+mcpmu remove <name> --yes
 ```
 
 Namespaces:
 ```bash
-mcp-studio namespace list
-mcp-studio namespace add <name> --description "My namespace"
-mcp-studio namespace remove <name>
-mcp-studio namespace assign <namespace> <server>
-mcp-studio namespace unassign <namespace> <server>
-mcp-studio namespace default <name>
+mcpmu namespace list
+mcpmu namespace add <name> --description "My namespace"
+mcpmu namespace remove <name>
+mcpmu namespace assign <namespace> <server>
+mcpmu namespace unassign <namespace> <server>
+mcpmu namespace default <name>
 ```
 
 Tool permissions:
 ```bash
-mcp-studio permission list <namespace>
-mcp-studio permission set <namespace> <server> <tool> <allow|deny>
-mcp-studio permission unset <namespace> <server> <tool>
+mcpmu permission list <namespace>
+mcpmu permission set <namespace> <server> <tool> <allow|deny>
+mcpmu permission unset <namespace> <server> <tool>
 ```
 
 ## MCP Server Mode (stdio)
 
-Run mcp-studio as an MCP server so Claude/Codex can call tools from your managed servers:
+Run mcpmu as an MCP server so Claude/Codex can call tools from your managed servers:
 ```bash
-mcp-studio serve --stdio --config ~/.config/mcp-studio/config.json --namespace default
+mcpmu serve --stdio --config ~/.config/mcpmu/config.json --namespace default
 ```
 
 Example entry for Claude Code:
 ```json
 {
-  "mcp-studio": {
-    "command": "mcp-studio",
-    "args": ["serve", "--stdio", "--config", "~/.config/mcp-studio/config.json", "--namespace", "default"]
+  "mcpmu": {
+    "command": "mcpmu",
+    "args": ["serve", "--stdio", "--config", "~/.config/mcpmu/config.json", "--namespace", "default"]
   }
 }
 ```
 
 ## Configuration
 
-Default config path: `~/.config/mcp-studio/config.json`
+Default config path: `~/.config/mcpmu/config.json`
 
-Minimal example (also see `example-config.json`):
+### Stdio server
 ```json
 {
-  "schemaVersion": 1,
   "servers": {
-    "fs": {
-      "id": "fs",
+    "filesystem": {
+      "id": "filesystem",
       "name": "Filesystem",
       "kind": "stdio",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-      "cwd": ""
+      "cwd": "",
+      "env": {},
+      "autostart": false
     }
-  },
-  "namespaces": [],
-  "proxies": [],
-  "toolPermissions": []
+  }
 }
 ```
 
-## Notes
+### HTTP server (Streamable HTTP)
+```json
+{
+  "servers": {
+    "figma": {
+      "id": "figma",
+      "name": "Figma",
+      "kind": "streamable_http",
+      "url": "https://mcp.figma.com/mcp",
+      "bearer_token_env_var": "FIGMA_TOKEN",
+      "http_headers": {
+        "X-Custom-Header": "value"
+      },
+      "env_http_headers": {
+        "X-Api-Key": "MY_API_KEY_ENV"
+      },
+      "scopes": ["read", "write"]
+    }
+  }
+}
+```
 
-- Transport is stdio-only today. Streamable HTTP + OAuth is planned next.
-- Token storage and remote HTTP transport are not yet implemented.
+### Config fields for HTTP servers
+
+| Field | Description |
+|-------|-------------|
+| `url` | Server endpoint URL |
+| `bearer_token_env_var` | Env var containing bearer token |
+| `http_headers` | Static headers to include in all requests |
+| `env_http_headers` | Headers sourced from env vars (header name → env var name) |
+| `scopes` | OAuth scopes to request |
+| `startup_timeout_sec` | Connection timeout (default: 10) |
+| `tool_timeout_sec` | Tool call timeout (default: 60) |
 
 ## Testing
 

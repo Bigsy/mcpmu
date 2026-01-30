@@ -94,7 +94,7 @@ func (f *Flow) Run(ctx context.Context) error {
 		f.clientID = reg.ClientID
 	} else {
 		// Use a default client ID for servers that don't support registration
-		f.clientID = "mcp-studio"
+		f.clientID = "mcpmu"
 	}
 
 	// Step 4: Generate PKCE and state

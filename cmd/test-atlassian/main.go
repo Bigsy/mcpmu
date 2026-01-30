@@ -10,8 +10,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/mcp"
-	"github.com/hedworth/mcp-studio-go/internal/oauth"
+	"github.com/Bigsy/mcpmu/internal/mcp"
+	"github.com/Bigsy/mcpmu/internal/oauth"
 )
 
 func main() {

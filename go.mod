@@ -1,4 +1,4 @@
-module github.com/hedworth/mcp-studio-go
+module github.com/Bigsy/mcpmu
 
 go 1.24.0
 

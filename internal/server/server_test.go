@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/config"
+	"github.com/Bigsy/mcpmu/internal/config"
 )
 
 func TestServer_Initialize(t *testing.T) {
@@ -25,7 +25,7 @@ func TestServer_Initialize(t *testing.T) {
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -71,8 +71,8 @@ func TestServer_Initialize(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", resp.Error)
 	}
 
-	if resp.Result.ServerInfo.Name != "mcp-studio-test" {
-		t.Errorf("ServerInfo.Name = %q, want %q", resp.Result.ServerInfo.Name, "mcp-studio-test")
+	if resp.Result.ServerInfo.Name != "mcpmu-test" {
+		t.Errorf("ServerInfo.Name = %q, want %q", resp.Result.ServerInfo.Name, "mcpmu-test")
 	}
 
 	if resp.Result.ProtocolVersion != "2024-11-05" {
@@ -99,7 +99,7 @@ func TestServer_ToolsList_NoServers(t *testing.T) {
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -139,7 +139,7 @@ func TestServer_ToolsList_NoServers(t *testing.T) {
 	// Should have manager tools even with no servers
 	managerTools := 0
 	for _, tool := range resp.Result.Tools {
-		if strings.HasPrefix(tool.Name, "mcp-studio.") {
+		if strings.HasPrefix(tool.Name, "mcpmu.") {
 			managerTools++
 		}
 	}
@@ -164,7 +164,7 @@ func TestServer_ToolsList_NotInitialized(t *testing.T) {
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -210,7 +210,7 @@ func TestServer_MethodNotFound(t *testing.T) {
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -261,7 +261,7 @@ func TestServer_Ping(t *testing.T) {
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -318,7 +318,7 @@ func TestServer_NamespaceSelection_NoNamespaces(t *testing.T) {
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -364,7 +364,7 @@ func TestServer_NamespaceSelection_MultipleNamespacesNoDefault(t *testing.T) {
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -415,7 +415,7 @@ func TestServer_NamespaceSelection_WithDefault(t *testing.T) {
 		Config:          cfg,
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -462,7 +462,7 @@ func TestServer_NamespaceSelection_ExplicitNamespace(t *testing.T) {
 		Namespace:       "ns2", // Explicit selection
 		Stdin:           stdin,
 		Stdout:          &stdout,
-		ServerName:      "mcp-studio-test",
+		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
 		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
@@ -498,7 +498,7 @@ func TestParseToolName(t *testing.T) {
 		wantTool   string
 		wantMgr    bool
 	}{
-		{"manager tool", "mcp-studio.servers_list", "", "mcp-studio.servers_list", true},
+		{"manager tool", "mcpmu.servers_list", "", "mcpmu.servers_list", true},
 		{"regular tool", "filesystem.read_file", "filesystem", "read_file", false},
 		{"no dot", "tool_name", "", "tool_name", false},
 		{"empty", "", "", "", false},

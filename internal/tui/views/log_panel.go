@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/hedworth/mcp-studio-go/internal/tui/theme"
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 // LogEntry represents a single log line.

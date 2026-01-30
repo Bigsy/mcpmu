@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/config"
-	"github.com/hedworth/mcp-studio-go/internal/events"
-	"github.com/hedworth/mcp-studio-go/internal/process"
-	"github.com/hedworth/mcp-studio-go/internal/testutil"
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/events"
+	"github.com/Bigsy/mcpmu/internal/process"
+	"github.com/Bigsy/mcpmu/internal/testutil"
 )
 
 // serverConfig creates a minimal server config for testing.

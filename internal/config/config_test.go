@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hedworth/mcp-studio-go/internal/testutil"
+	"github.com/Bigsy/mcpmu/internal/testutil"
 )
 
 func TestLoad_NonExistentFile(t *testing.T) {
@@ -48,7 +48,7 @@ func TestLoad_ValidConfig(t *testing.T) {
 		"proxies": []
 	}`
 
-	configPath := filepath.Join(home, ".config", "mcp-studio", "config.json")
+	configPath := filepath.Join(home, ".config", "mcpmu", "config.json")
 	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestLoad_ValidConfig(t *testing.T) {
 func TestLoad_InvalidJSON(t *testing.T) {
 	home := testutil.SetupTestHome(t)
 
-	configPath := filepath.Join(home, ".config", "mcp-studio", "config.json")
+	configPath := filepath.Join(home, ".config", "mcpmu", "config.json")
 	if err := os.WriteFile(configPath, []byte("not valid json"), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestLoad_BackfillsServerID(t *testing.T) {
 		}
 	}`
 
-	configPath := filepath.Join(home, ".config", "mcp-studio", "config.json")
+	configPath := filepath.Join(home, ".config", "mcpmu", "config.json")
 	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

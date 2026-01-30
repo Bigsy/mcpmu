@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/mcptest/fakeserver"
+	"github.com/Bigsy/mcpmu/internal/mcptest/fakeserver"
 )
 
 // FakeServerConfig is an alias for fakeserver.Config for convenience.

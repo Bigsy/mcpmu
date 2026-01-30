@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/config"
-	"github.com/hedworth/mcp-studio-go/internal/process"
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/process"
 )
 
 const (
@@ -114,20 +114,20 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 	}, nil
 }
 
-// handleManagerTool handles mcp-studio.* meta-tools.
+// handleManagerTool handles mcpmu.* meta-tools.
 func (r *Router) handleManagerTool(ctx context.Context, toolName string, arguments json.RawMessage) (*ToolCallResult, *RPCError) {
 	switch toolName {
-	case "mcp-studio.servers_list":
+	case "mcpmu.servers_list":
 		return r.handleServersList(ctx)
-	case "mcp-studio.servers_start":
+	case "mcpmu.servers_start":
 		return r.handleServersStart(ctx, arguments)
-	case "mcp-studio.servers_stop":
+	case "mcpmu.servers_stop":
 		return r.handleServersStop(ctx, arguments)
-	case "mcp-studio.servers_restart":
+	case "mcpmu.servers_restart":
 		return r.handleServersRestart(ctx, arguments)
-	case "mcp-studio.server_logs":
+	case "mcpmu.server_logs":
 		return r.handleServerLogs(ctx, arguments)
-	case "mcp-studio.namespaces_list":
+	case "mcpmu.namespaces_list":
 		return r.handleNamespacesList(ctx)
 	default:
 		return nil, ErrToolNotFound(toolName)

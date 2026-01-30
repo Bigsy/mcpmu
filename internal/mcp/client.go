@@ -97,7 +97,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 		ProtocolVersion: "2024-11-05",
 		Capabilities:    map[string]any{},
 		ClientInfo: clientInfo{
-			Name:    "mcp-studio-go",
+			Name:    "mcpmu-go",
 			Version: "0.1.0",
 		},
 	}

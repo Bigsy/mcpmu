@@ -10,9 +10,9 @@ import (
 	"log"
 	"sync"
 
-	"github.com/hedworth/mcp-studio-go/internal/config"
-	"github.com/hedworth/mcp-studio-go/internal/events"
-	"github.com/hedworth/mcp-studio-go/internal/process"
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/events"
+	"github.com/Bigsy/mcpmu/internal/process"
 )
 
 // Options configures the MCP server.

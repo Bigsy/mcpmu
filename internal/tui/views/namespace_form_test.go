@@ -3,8 +3,8 @@ package views
 import (
 	"testing"
 
-	"github.com/hedworth/mcp-studio-go/internal/config"
-	"github.com/hedworth/mcp-studio-go/internal/tui/theme"
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 func TestNamespaceForm_ShowAdd(t *testing.T) {

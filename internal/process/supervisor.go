@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/config"
-	"github.com/hedworth/mcp-studio-go/internal/events"
-	"github.com/hedworth/mcp-studio-go/internal/mcp"
-	"github.com/hedworth/mcp-studio-go/internal/oauth"
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/events"
+	"github.com/Bigsy/mcpmu/internal/mcp"
+	"github.com/Bigsy/mcpmu/internal/oauth"
 )
 
 const (

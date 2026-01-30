@@ -48,7 +48,7 @@ func NewPIDTracker() (*PIDTracker, error) {
 		return nil, err
 	}
 
-	path := filepath.Join(home, ".config", "mcp-studio", pidsFile)
+	path := filepath.Join(home, ".config", "mcpmu", pidsFile)
 	pt := &PIDTracker{
 		path: path,
 		pids: make(map[string]pidEntry),

@@ -4,7 +4,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hedworth/mcp-studio-go/internal/tui/theme"
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 // ConfirmResult is sent when the user responds to the confirmation dialog.

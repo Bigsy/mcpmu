@@ -11,7 +11,7 @@ import (
 
 const (
 	// keyringService is the service name used in the system keychain.
-	keyringService = "mcp-studio"
+	keyringService = "mcpmu"
 
 	// keyringIndexKey is the key used to store the list of server URLs.
 	keyringIndexKey = "_index"

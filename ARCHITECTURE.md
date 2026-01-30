@@ -1,8 +1,8 @@
-# mcp-studio Architecture
+# mcpmu Architecture
 
 ## Overview
 
-mcp-studio is an MCP server aggregator that manages multiple MCP servers and exposes their tools through a unified interface.
+mcpmu is an MCP server aggregator that manages multiple MCP servers and exposes their tools through a unified interface.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -12,7 +12,7 @@ mcp-studio is an MCP server aggregator that manages multiple MCP servers and exp
                               │ spawns via stdin/stdout
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                        mcp-studio                            │
+│                        mcpmu                            │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │                    stdio Server                       │   │
@@ -32,7 +32,7 @@ mcp-studio is an MCP server aggregator that manages multiple MCP servers and exp
 │                              │                               │
 │  ┌──────────────────────────┴───────────────────────────┐   │
 │  │                      Config                           │   │
-│  │            (~/.config/mcp-studio/config.json)         │   │
+│  │            (~/.config/mcpmu/config.json)         │   │
 │  └──────────────────────────────────────────────────────┘   │
 └─────────────────────────────┬───────────────────────────────┘
                               │ spawns & manages
@@ -49,48 +49,48 @@ mcp-studio is an MCP server aggregator that manages multiple MCP servers and exp
 
 ## Primary Usage: stdio Mode
 
-Claude Code/Codex spawns mcp-studio as a subprocess. No daemons, no manual startup.
+Claude Code/Codex spawns mcpmu as a subprocess. No daemons, no manual startup.
 
 ```json
 // ~/.claude/mcp_servers.json
 {
-  "mcp-studio": {
-    "command": "mcp-studio",
-    "args": ["serve", "--stdio", "--config", "~/.config/mcp-studio/config.json", "--namespace", "default"]
+  "mcpmu": {
+    "command": "mcpmu",
+    "args": ["serve", "--stdio", "--config", "~/.config/mcpmu/config.json", "--namespace", "default"]
   }
 }
 ```
 
 ### Config Compatibility (mcpServers-style)
 
-The mcp-studio config is designed so server entries remain compatible with the common `mcpServers` object shape used by MCP clients. In practice that means the server config uses the familiar field names:
+The mcpmu config is designed so server entries remain compatible with the common `mcpServers` object shape used by MCP clients. In practice that means the server config uses the familiar field names:
 - `command`
 - `args`
 - `cwd`
 - `env`
 
-This keeps manual editing easy (copy/paste a server definition from a client config into mcp-studio, then add the namespace assignments/permissions as needed).
+This keeps manual editing easy (copy/paste a server definition from a client config into mcpmu, then add the namespace assignments/permissions as needed).
 
 ### Multiple Toolsets (Namespaces) for Different Contexts
 
 The stdio server exposes a *single toolset* per process, selected by namespace at startup. Configure multiple MCP entries that run the same binary with different `--namespace` values.
 
-If multiple namespaces exist and none is selected (and no default is set), mcp-studio fails `initialize` with an actionable error rather than accidentally exposing all tools.
+If multiple namespaces exist and none is selected (and no default is set), mcpmu fails `initialize` with an actionable error rather than accidentally exposing all tools.
 
 ```json
 // Work context
 {
-  "mcp-studio-work": {
-    "command": "mcp-studio",
-    "args": ["serve", "--stdio", "--config", "~/.config/mcp-studio/config.json", "--namespace", "work"]
+  "mcpmu-work": {
+    "command": "mcpmu",
+    "args": ["serve", "--stdio", "--config", "~/.config/mcpmu/config.json", "--namespace", "work"]
   }
 }
 
 // Personal context
 {
-  "mcp-studio-personal": {
-    "command": "mcp-studio",
-    "args": ["serve", "--stdio", "--config", "~/.config/mcp-studio/config.json", "--namespace", "personal"]
+  "mcpmu-personal": {
+    "command": "mcpmu",
+    "args": ["serve", "--stdio", "--config", "~/.config/mcpmu/config.json", "--namespace", "personal"]
   }
 }
 ```
@@ -101,9 +101,9 @@ Namespaces are the preferred mechanism for selecting toolsets, but separate conf
 
 ```json
 {
-  "mcp-studio-project-x": {
-    "command": "mcp-studio",
-    "args": ["serve", "--stdio", "--config", "~/.config/mcp-studio/project-x.json", "--namespace", "default"]
+  "mcpmu-project-x": {
+    "command": "mcpmu",
+    "args": ["serve", "--stdio", "--config", "~/.config/mcpmu/project-x.json", "--namespace", "default"]
   }
 }
 ```
@@ -117,10 +117,10 @@ filesystem.read_file
 filesystem.write_file
 github.create_issue
 github.list_repos
-mcp-studio.servers_list    # Manager tools
-mcp-studio.servers_start
-mcp-studio.servers_stop
-mcp-studio.namespaces_list
+mcpmu.servers_list    # Manager tools
+mcpmu.servers_start
+mcpmu.servers_stop
+mcpmu.namespaces_list
 ```
 
 `serverId` is a stable internal identifier (auto-generated short `[a-z0-9]`, no `.`), not the human display name.

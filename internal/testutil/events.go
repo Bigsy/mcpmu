@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/events"
+	"github.com/Bigsy/mcpmu/internal/events"
 )
 
 // EventCollector is a thread-safe event collector for test assertions.

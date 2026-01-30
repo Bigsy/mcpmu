@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/mcptest/fakeserver"
+	"github.com/Bigsy/mcpmu/internal/mcptest/fakeserver"
 )
 
 // testPipe creates a pair of connected pipes that can be used for testing.

@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/hedworth/mcp-studio-go/internal/mcptest/fakeserver"
+	"github.com/Bigsy/mcpmu/internal/mcptest/fakeserver"
 )
 
 // TestHelperProcess is the entry point for the fake server subprocess.

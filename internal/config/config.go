@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	configDir  = ".config/mcp-studio"
+	configDir  = ".config/mcpmu"
 	configFile = "config.json"
 )
 

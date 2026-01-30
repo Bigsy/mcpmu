@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	credentialsDir  = ".config/mcp-studio"
+	credentialsDir  = ".config/mcpmu"
 	credentialsFile = ".credentials.json"
 )
 

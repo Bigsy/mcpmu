@@ -7,12 +7,12 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/hedworth/mcp-studio-go/internal/config"
-	"github.com/hedworth/mcp-studio-go/internal/events"
-	"github.com/hedworth/mcp-studio-go/internal/mcptest"
-	"github.com/hedworth/mcp-studio-go/internal/process"
-	"github.com/hedworth/mcp-studio-go/internal/testutil"
-	"github.com/hedworth/mcp-studio-go/internal/tui/views"
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/events"
+	"github.com/Bigsy/mcpmu/internal/mcptest"
+	"github.com/Bigsy/mcpmu/internal/process"
+	"github.com/Bigsy/mcpmu/internal/testutil"
+	"github.com/Bigsy/mcpmu/internal/tui/views"
 )
 
 // newTestModel creates a Model with minimal dependencies for testing.

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hedworth/mcp-studio-go/internal/config"
-	"github.com/hedworth/mcp-studio-go/internal/process"
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/process"
 )
 
 const (
@@ -186,8 +186,8 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverID string) (
 
 // ParseToolName extracts serverID and tool name from a qualified tool name.
 func ParseToolName(qualifiedName string) (serverID, toolName string, isManager bool) {
-	// Manager tools have "mcp-studio." prefix
-	if strings.HasPrefix(qualifiedName, "mcp-studio.") {
+	// Manager tools have "mcpmu." prefix
+	if strings.HasPrefix(qualifiedName, "mcpmu.") {
 		return "", qualifiedName, true
 	}
 
@@ -199,36 +199,36 @@ func ParseToolName(qualifiedName string) (serverID, toolName string, isManager b
 	return parts[0], parts[1], false
 }
 
-// buildManagerTools creates the mcp-studio.* meta-tools.
+// buildManagerTools creates the mcpmu.* meta-tools.
 func (a *Aggregator) buildManagerTools() []AggregatedTool {
 	return []AggregatedTool{
 		{
-			Name:        "mcp-studio.servers_list",
+			Name:        "mcpmu.servers_list",
 			Description: "List all configured MCP servers and their status",
 			InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
 		},
 		{
-			Name:        "mcp-studio.servers_start",
+			Name:        "mcpmu.servers_start",
 			Description: "Start a specific MCP server by ID",
 			InputSchema: json.RawMessage(`{"type": "object", "properties": {"server_id": {"type": "string", "description": "The ID of the server to start"}}, "required": ["server_id"]}`),
 		},
 		{
-			Name:        "mcp-studio.servers_stop",
+			Name:        "mcpmu.servers_stop",
 			Description: "Stop a specific MCP server by ID",
 			InputSchema: json.RawMessage(`{"type": "object", "properties": {"server_id": {"type": "string", "description": "The ID of the server to stop"}}, "required": ["server_id"]}`),
 		},
 		{
-			Name:        "mcp-studio.servers_restart",
+			Name:        "mcpmu.servers_restart",
 			Description: "Restart a specific MCP server by ID",
 			InputSchema: json.RawMessage(`{"type": "object", "properties": {"server_id": {"type": "string", "description": "The ID of the server to restart"}}, "required": ["server_id"]}`),
 		},
 		{
-			Name:        "mcp-studio.server_logs",
+			Name:        "mcpmu.server_logs",
 			Description: "Get recent log lines from a server's stderr",
 			InputSchema: json.RawMessage(`{"type": "object", "properties": {"server_id": {"type": "string", "description": "The ID of the server"}, "lines": {"type": "integer", "description": "Number of lines to return (default: 50)", "default": 50}}, "required": ["server_id"]}`),
 		},
 		{
-			Name:        "mcp-studio.namespaces_list",
+			Name:        "mcpmu.namespaces_list",
 			Description: "List all namespaces and show which is active",
 			InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
 		},
