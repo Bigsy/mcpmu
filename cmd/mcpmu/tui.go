@@ -110,10 +110,9 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	log.Println("Stopping all servers...")
 	supervisor.StopAll()
 
-	// Save config
-	if err := config.Save(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to save config: %v\n", err)
-	}
+	// Note: We intentionally do NOT save config on close.
+	// All config changes are saved immediately when made (in model.go).
+	// Saving on close would risk a stale TUI overwriting changes made elsewhere.
 
 	log.Println("=== mcpmu TUI exiting ===")
 	return nil
