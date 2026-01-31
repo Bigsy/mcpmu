@@ -18,7 +18,6 @@ type MockMCPServer struct {
 	server        *httptest.Server
 	sessionID     string
 	lastEventID   string
-	events        []string
 	mu            sync.Mutex
 	initResponse  json.RawMessage
 	toolsResponse json.RawMessage
@@ -129,18 +128,18 @@ func (m *MockMCPServer) handlePost(w http.ResponseWriter, r *http.Request) {
 	case "initialize":
 		// Update ID in response
 		resp := make(map[string]interface{})
-		json.Unmarshal(m.initResponse, &resp)
+		_ = json.Unmarshal(m.initResponse, &resp)
 		resp["id"] = req.ID
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 
 	case "tools/list":
 		resp := make(map[string]interface{})
-		json.Unmarshal(m.toolsResponse, &resp)
+		_ = json.Unmarshal(m.toolsResponse, &resp)
 		resp["id"] = req.ID
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 
 	default:
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
 			"error": map[string]interface{}{
@@ -282,7 +281,7 @@ func TestStreamableHTTPTransport_MCPProtocolVersion(t *testing.T) {
 	transport := NewStreamableHTTPTransport(config)
 
 	ctx := context.Background()
-	transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`))
+	_ = transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`))
 
 	if receivedVersion != MCPProtocolVersion {
 		t.Errorf("expected MCP-Protocol-Version %q, got %q", MCPProtocolVersion, receivedVersion)
@@ -517,7 +516,7 @@ func (m *LegacySSEMockServer) handlePost(w http.ResponseWriter, r *http.Request)
 
 	switch req.Method {
 	case "initialize":
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
 			"result": map[string]interface{}{
@@ -535,7 +534,7 @@ func (m *LegacySSEMockServer) handlePost(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusAccepted)
 
 	case "tools/list":
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
 			"result": map[string]interface{}{
@@ -550,7 +549,7 @@ func (m *LegacySSEMockServer) handlePost(w http.ResponseWriter, r *http.Request)
 		m.toolCallCount++
 		m.mu.Unlock()
 
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
 			"result": map[string]interface{}{
@@ -562,7 +561,7 @@ func (m *LegacySSEMockServer) handlePost(w http.ResponseWriter, r *http.Request)
 		})
 
 	default:
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
 			"error": map[string]interface{}{

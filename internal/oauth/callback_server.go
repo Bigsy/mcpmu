@@ -84,7 +84,7 @@ func (s *CallbackServer) Start() error {
 	s.started = true
 	s.mu.Unlock()
 
-	go s.server.Serve(s.listener)
+	go func() { _ = s.server.Serve(s.listener) }()
 	return nil
 }
 

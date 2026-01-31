@@ -212,7 +212,7 @@ func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*
 	}
 
 	if initErr != nil {
-		handle.Stop()
+		_ = handle.Stop()
 		s.emitStatus(srv.ID, events.StateError, cmd.Process.Pid, nil, fmt.Sprintf("MCP init failed after %d attempts: %v", MaxInitRetries, initErr))
 		return nil, fmt.Errorf("initialize mcp: %w", initErr)
 	}
@@ -339,7 +339,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 	defer cancel()
 
 	if err := client.Initialize(initCtx); err != nil {
-		handle.Stop()
+		_ = handle.Stop()
 		s.emitStatus(srv.ID, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
 		return nil, fmt.Errorf("initialize mcp: %w", err)
 	}
@@ -414,7 +414,7 @@ func (s *Supervisor) StopAll() {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			s.Stop(id)
+			_ = s.Stop(id)
 		}(id)
 	}
 	wg.Wait()
@@ -666,7 +666,7 @@ func (h *Handle) Stop() error {
 	if h.kind == HandleKindStdio {
 		// Stdio: send SIGTERM to process
 		if h.cmd != nil && h.cmd.Process != nil {
-			h.cmd.Process.Signal(syscall.SIGTERM)
+			_ = h.cmd.Process.Signal(syscall.SIGTERM)
 
 			// Wait for watchProcess to signal completion with timeout
 			select {
@@ -674,7 +674,7 @@ func (h *Handle) Stop() error {
 				// Process exited gracefully
 			case <-time.After(GracefulShutdownTimeout):
 				// Force kill
-				h.cmd.Process.Signal(syscall.SIGKILL)
+				_ = h.cmd.Process.Signal(syscall.SIGKILL)
 				<-h.done
 			}
 		}

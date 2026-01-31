@@ -60,7 +60,7 @@ func StartFakeServer(t *testing.T, cfg FakeServerConfig) (stdin io.WriteCloser, 
 	}
 
 	// Drain stderr to prevent deadlock
-	go io.Copy(io.Discard, stderr)
+	go func() { _, _ = io.Copy(io.Discard, stderr) }()
 
 	stop = func() {
 		// Close stdin to signal graceful shutdown

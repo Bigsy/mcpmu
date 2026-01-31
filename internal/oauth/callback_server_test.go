@@ -12,7 +12,7 @@ func TestCallbackServer_RandomPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCallbackServer failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if server.Port() == 0 {
 		t.Error("Port should not be 0")
@@ -30,7 +30,7 @@ func TestCallbackServer_SpecificPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCallbackServer failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if server.Port() != port {
 		t.Errorf("Port: got %d, want %d", server.Port(), port)
@@ -48,7 +48,7 @@ func TestCallbackServer_ZeroPortRandom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCallbackServer failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if server.Port() == 0 {
 		t.Error("Port should not be 0")
@@ -60,7 +60,7 @@ func TestCallbackServer_Callback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCallbackServer failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if err := server.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -99,7 +99,7 @@ func TestCallbackServer_ErrorCallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCallbackServer failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if err := server.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -138,7 +138,7 @@ func TestCallbackServer_Timeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCallbackServer failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if err := server.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)

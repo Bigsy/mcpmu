@@ -418,16 +418,16 @@ func TestEndToEnd_WithRealBinary(t *testing.T) {
 	}
 
 	// Drain stderr
-	go io.Copy(io.Discard, stderr)
+	go func() { _, _ = io.Copy(io.Discard, stderr) }()
 
 	if err := serverCmd.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
 	t.Cleanup(func() {
-		stdin.Close()
-		serverCmd.Process.Kill()
-		serverCmd.Wait()
+		_ = stdin.Close()
+		_ = serverCmd.Process.Kill()
+		_ = serverCmd.Wait()
 	})
 
 	// Use a buffered reader for proper NDJSON handling

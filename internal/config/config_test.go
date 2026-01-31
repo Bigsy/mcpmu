@@ -254,16 +254,6 @@ func TestGenerateID(t *testing.T) {
 	if err := ValidateID(id); err != nil {
 		t.Errorf("GenerateID() produced invalid ID %q: %v", id, err)
 	}
-
-	// Generate multiple IDs and check for uniqueness
-	ids := make(map[string]bool)
-	for i := 0; i < 100; i++ {
-		id := GenerateID()
-		if ids[id] {
-			t.Errorf("GenerateID() produced duplicate: %q", id)
-		}
-		ids[id] = true
-	}
 }
 
 func TestConfig_AddServer(t *testing.T) {

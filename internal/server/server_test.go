@@ -244,7 +244,7 @@ func TestServer_ToolsList_NotInitialized(t *testing.T) {
 		Error *RPCError `json:"error"`
 	}
 
-	if err := json.Unmarshal([]byte(stdout.String()), &resp); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("Unmarshal response: %v", err)
 	}
 
@@ -398,7 +398,7 @@ func TestServer_NamespaceSelection_NoNamespaces(t *testing.T) {
 		Error *RPCError `json:"error"`
 	}
 
-	if err := json.Unmarshal([]byte(stdout.String()), &resp); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("Unmarshal response: %v", err)
 	}
 
@@ -444,7 +444,7 @@ func TestServer_NamespaceSelection_MultipleNamespacesNoDefault(t *testing.T) {
 		Error *RPCError `json:"error"`
 	}
 
-	if err := json.Unmarshal([]byte(stdout.String()), &resp); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("Unmarshal response: %v", err)
 	}
 
@@ -495,7 +495,7 @@ func TestServer_NamespaceSelection_WithDefault(t *testing.T) {
 		Error *RPCError `json:"error"`
 	}
 
-	if err := json.Unmarshal([]byte(stdout.String()), &resp); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("Unmarshal response: %v", err)
 	}
 
@@ -542,7 +542,7 @@ func TestServer_NamespaceSelection_ExplicitNamespace(t *testing.T) {
 		Error *RPCError `json:"error"`
 	}
 
-	if err := json.Unmarshal([]byte(stdout.String()), &resp); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("Unmarshal response: %v", err)
 	}
 

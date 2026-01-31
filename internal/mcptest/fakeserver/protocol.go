@@ -132,8 +132,8 @@ func writeResponse(out io.Writer, id json.RawMessage, result any, cfg Config) er
 	if cfg.SendNotificationBeforeResponse {
 		notification := rpcNotification{JSONRPC: "2.0", Method: "test/noise"}
 		data, _ := json.Marshal(notification)
-		out.Write(data)
-		out.Write([]byte("\n"))
+		_, _ = out.Write(data)
+		_, _ = out.Write([]byte("\n"))
 	}
 
 	// Stream realism: send mismatched ID first if configured
@@ -141,8 +141,8 @@ func writeResponse(out io.Writer, id json.RawMessage, result any, cfg Config) er
 		// Create a fake ID by appending "999" to simulate wrong ID
 		fakeResp := rpcResponse{JSONRPC: "2.0", ID: json.RawMessage(`99999`), Result: json.RawMessage(`{}`)}
 		data, _ := json.Marshal(fakeResp)
-		out.Write(data)
-		out.Write([]byte("\n"))
+		_, _ = out.Write(data)
+		_, _ = out.Write([]byte("\n"))
 	}
 
 	// Actual response (NDJSON)
@@ -156,8 +156,8 @@ func writeResponse(out io.Writer, id json.RawMessage, result any, cfg Config) er
 	if err != nil {
 		return err
 	}
-	out.Write(data)
-	out.Write([]byte("\n"))
+	_, _ = out.Write(data)
+	_, _ = out.Write([]byte("\n"))
 	return nil
 }
 
@@ -167,15 +167,15 @@ func writeErrorResponse(out io.Writer, id json.RawMessage, rpcErr JSONRPCError, 
 	if cfg.SendNotificationBeforeResponse {
 		notification := rpcNotification{JSONRPC: "2.0", Method: "test/noise"}
 		data, _ := json.Marshal(notification)
-		out.Write(data)
-		out.Write([]byte("\n"))
+		_, _ = out.Write(data)
+		_, _ = out.Write([]byte("\n"))
 	}
 
 	if cfg.SendMismatchedIDFirst {
 		fakeResp := rpcResponse{JSONRPC: "2.0", ID: json.RawMessage(`99999`), Error: &JSONRPCError{Code: -1, Message: "wrong"}}
 		data, _ := json.Marshal(fakeResp)
-		out.Write(data)
-		out.Write([]byte("\n"))
+		_, _ = out.Write(data)
+		_, _ = out.Write([]byte("\n"))
 	}
 
 	resp := rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcErr}
@@ -183,7 +183,7 @@ func writeErrorResponse(out io.Writer, id json.RawMessage, rpcErr JSONRPCError, 
 	if err != nil {
 		return err
 	}
-	out.Write(data)
-	out.Write([]byte("\n"))
+	_, _ = out.Write(data)
+	_, _ = out.Write([]byte("\n"))
 	return nil
 }

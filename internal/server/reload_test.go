@@ -579,16 +579,16 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 
 	// Capture stderr for debugging
 	stderrBuf := &bytes.Buffer{}
-	go io.Copy(stderrBuf, stderr)
+	go func() { _, _ = io.Copy(stderrBuf, stderr) }()
 
 	if err := serverCmd.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
 	t.Cleanup(func() {
-		stdin.Close()
-		serverCmd.Process.Kill()
-		serverCmd.Wait()
+		_ = stdin.Close()
+		_ = serverCmd.Process.Kill()
+		_ = serverCmd.Wait()
 		if t.Failed() {
 			t.Logf("Server stderr:\n%s", stderrBuf.String())
 		}

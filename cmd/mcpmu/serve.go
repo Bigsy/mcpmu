@@ -48,7 +48,7 @@ callable. Use --expose-manager-tools to include them in tools/list.`,
 func init() {
 	// --stdio is a no-op flag for compatibility (stdio is the only transport for now)
 	serveCmd.Flags().Bool("stdio", false, "Use stdio transport (default, always enabled)")
-	serveCmd.Flags().MarkHidden("stdio")
+	_ = serveCmd.Flags().MarkHidden("stdio")
 
 	serveCmd.Flags().StringVarP(&serveConfigPath, "config", "c", "", "Path to config file (default: ~/.config/mcpmu/config.json)")
 	serveCmd.Flags().StringVarP(&serveNamespace, "namespace", "n", "", "Namespace to expose (default: auto-select)")

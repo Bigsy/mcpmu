@@ -447,7 +447,7 @@ func TestModel_RefreshServerList_IncludesNamespaces(t *testing.T) {
 	srv1 := config.ServerConfig{Name: "Server 1", Kind: config.ServerKindStdio, Command: "test1"}
 	srv2 := config.ServerConfig{Name: "Server 2", Kind: config.ServerKindStdio, Command: "test2"}
 	srv1ID, _ := m.cfg.AddServer(srv1)
-	m.cfg.AddServer(srv2)
+	_, _ = m.cfg.AddServer(srv2)
 
 	// Add namespace with srv1 assigned
 	ns := config.NamespaceConfig{Name: "Production", ServerIDs: []string{srv1ID}}

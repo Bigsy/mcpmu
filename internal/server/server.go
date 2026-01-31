@@ -689,8 +689,8 @@ func (s *Server) send(msg any) {
 
 	log.Printf("Send: %s", string(data))
 
-	s.writer.Write(data)
-	s.writer.Write([]byte("\n"))
+	_, _ = s.writer.Write(data)
+	_, _ = s.writer.Write([]byte("\n"))
 }
 
 // JSON-RPC message types

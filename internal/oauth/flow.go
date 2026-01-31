@@ -81,7 +81,7 @@ func (f *Flow) Run(ctx context.Context) error {
 	if err := f.callback.Start(); err != nil {
 		return fmt.Errorf("start callback server: %w", err)
 	}
-	defer f.callback.Stop()
+	defer func() { _ = f.callback.Stop() }()
 
 	redirectURI := f.callback.RedirectURI()
 

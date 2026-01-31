@@ -219,7 +219,7 @@ func TestCLI_Add_WithEnv(t *testing.T) {
 	// Verify env in config
 	data, _ := os.ReadFile(configPath)
 	var config map[string]interface{}
-	json.Unmarshal(data, &config)
+	_ = json.Unmarshal(data, &config)
 
 	servers := config["servers"].(map[string]interface{})
 	var srv map[string]interface{}
@@ -364,7 +364,7 @@ func TestCLI_Add_HTTP_PositionalURL_WithBearerEnv(t *testing.T) {
 	// Verify bearer env in config
 	data, _ := os.ReadFile(configPath)
 	var cfg map[string]interface{}
-	json.Unmarshal(data, &cfg)
+	_ = json.Unmarshal(data, &cfg)
 
 	servers := cfg["servers"].(map[string]interface{})
 	var srv map[string]interface{}
@@ -383,8 +383,8 @@ func TestCLI_List(t *testing.T) {
 	configPath := setupTestConfig(t)
 
 	// Add servers
-	runCLI(binary, configPath, "add", "alpha", "--", "echo", "a")
-	runCLI(binary, configPath, "add", "beta", "--", "echo", "b")
+	_, _, _ = runCLI(binary, configPath, "add", "alpha", "--", "echo", "a")
+	_, _, _ = runCLI(binary, configPath, "add", "beta", "--", "echo", "b")
 
 	// List
 	stdout, stderr, err := runCLI(binary, configPath, "list")
@@ -406,7 +406,7 @@ func TestCLI_List_JSON(t *testing.T) {
 	configPath := setupTestConfig(t)
 
 	// Add a server
-	runCLI(binary, configPath, "add", "my-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "add", "my-server", "--", "echo", "hello")
 
 	// List as JSON
 	stdout, stderr, err := runCLI(binary, configPath, "list", "--json")
@@ -452,7 +452,7 @@ func TestCLI_Remove(t *testing.T) {
 	configPath := setupTestConfig(t)
 
 	// Add a server
-	runCLI(binary, configPath, "add", "my-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "add", "my-server", "--", "echo", "hello")
 
 	// Remove with --yes
 	stdout, stderr, err := runCLI(binary, configPath, "remove", "my-server", "--yes")
@@ -506,7 +506,7 @@ func TestCLI_Namespace_Add(t *testing.T) {
 	// Verify in config
 	data, _ := os.ReadFile(configPath)
 	var config map[string]interface{}
-	json.Unmarshal(data, &config)
+	_ = json.Unmarshal(data, &config)
 
 	namespaces := config["namespaces"].([]interface{})
 	if len(namespaces) != 1 {
@@ -526,7 +526,7 @@ func TestCLI_Namespace_Add_DuplicateName(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "namespace", "add", "dev")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "dev")
 
 	stdout, stderr, err := runCLI(binary, configPath, "namespace", "add", "dev")
 	if err == nil {
@@ -543,8 +543,8 @@ func TestCLI_Namespace_List(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "namespace", "add", "dev", "--description", "Development")
-	runCLI(binary, configPath, "namespace", "add", "prod", "--description", "Production")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "dev", "--description", "Development")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod", "--description", "Production")
 
 	stdout, stderr, err := runCLI(binary, configPath, "namespace", "list")
 	if err != nil {
@@ -564,7 +564,7 @@ func TestCLI_Namespace_List_JSON(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "namespace", "add", "dev")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "dev")
 
 	stdout, stderr, err := runCLI(binary, configPath, "namespace", "list", "--json")
 	if err != nil {
@@ -603,7 +603,7 @@ func TestCLI_Namespace_Remove(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "namespace", "add", "dev")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "dev")
 
 	stdout, stderr, err := runCLI(binary, configPath, "namespace", "remove", "dev", "--yes")
 	if err != nil {
@@ -641,8 +641,8 @@ func TestCLI_Namespace_Assign(t *testing.T) {
 	configPath := setupTestConfig(t)
 
 	// Add server and namespace
-	runCLI(binary, configPath, "add", "my-server", "--", "echo", "hello")
-	runCLI(binary, configPath, "namespace", "add", "dev")
+	_, _, _ = runCLI(binary, configPath, "add", "my-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "dev")
 
 	stdout, stderr, err := runCLI(binary, configPath, "namespace", "assign", "dev", "my-server")
 	if err != nil {
@@ -664,7 +664,7 @@ func TestCLI_Namespace_Assign_NotFound(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "namespace", "add", "dev")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "dev")
 
 	stdout, stderr, err := runCLI(binary, configPath, "namespace", "assign", "dev", "nonexistent")
 	if err == nil {
@@ -681,9 +681,9 @@ func TestCLI_Namespace_Unassign(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "add", "my-server", "--", "echo", "hello")
-	runCLI(binary, configPath, "namespace", "add", "dev")
-	runCLI(binary, configPath, "namespace", "assign", "dev", "my-server")
+	_, _, _ = runCLI(binary, configPath, "add", "my-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "dev")
+	_, _, _ = runCLI(binary, configPath, "namespace", "assign", "dev", "my-server")
 
 	stdout, stderr, err := runCLI(binary, configPath, "namespace", "unassign", "dev", "my-server")
 	if err != nil {
@@ -699,7 +699,7 @@ func TestCLI_Namespace_Default(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "namespace", "add", "dev")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "dev")
 
 	stdout, stderr, err := runCLI(binary, configPath, "namespace", "default", "dev")
 	if err != nil {
@@ -721,7 +721,7 @@ func TestCLI_Namespace_SetDenyDefault(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "namespace", "add", "prod")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
 
 	stdout, stderr, err := runCLI(binary, configPath, "namespace", "set-deny-default", "prod", "true")
 	if err != nil {
@@ -747,8 +747,8 @@ func TestCLI_Permission_Set(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
-	runCLI(binary, configPath, "namespace", "add", "prod")
+	_, _, _ = runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
 
 	stdout, stderr, err := runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
 	if err != nil {
@@ -764,7 +764,7 @@ func TestCLI_Permission_Set_NotFound(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "namespace", "add", "prod")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
 
 	stdout, stderr, err := runCLI(binary, configPath, "permission", "set", "prod", "nonexistent", "tool", "allow")
 	if err == nil {
@@ -781,10 +781,10 @@ func TestCLI_Permission_List(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
-	runCLI(binary, configPath, "namespace", "add", "prod")
-	runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
-	runCLI(binary, configPath, "permission", "set", "prod", "api-server", "read_user", "allow")
+	_, _, _ = runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
+	_, _, _ = runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
+	_, _, _ = runCLI(binary, configPath, "permission", "set", "prod", "api-server", "read_user", "allow")
 
 	stdout, stderr, err := runCLI(binary, configPath, "permission", "list", "prod")
 	if err != nil {
@@ -804,9 +804,9 @@ func TestCLI_Permission_List_JSON(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
-	runCLI(binary, configPath, "namespace", "add", "prod")
-	runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
+	_, _, _ = runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
+	_, _, _ = runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
 
 	stdout, stderr, err := runCLI(binary, configPath, "permission", "list", "prod", "--json")
 	if err != nil {
@@ -832,7 +832,7 @@ func TestCLI_Permission_List_Empty(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "namespace", "add", "prod")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
 
 	stdout, stderr, err := runCLI(binary, configPath, "permission", "list", "prod")
 	if err != nil {
@@ -848,9 +848,9 @@ func TestCLI_Permission_Unset(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
-	runCLI(binary, configPath, "namespace", "add", "prod")
-	runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
+	_, _, _ = runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
+	_, _, _ = runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
 
 	stdout, stderr, err := runCLI(binary, configPath, "permission", "unset", "prod", "api-server", "create_user")
 	if err != nil {
@@ -872,8 +872,8 @@ func TestCLI_Permission_Set_NormalizesQualifiedName(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
-	runCLI(binary, configPath, "namespace", "add", "prod")
+	_, _, _ = runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
 
 	serverID := getServerIDByName(t, configPath, "api-server")
 
@@ -897,9 +897,9 @@ func TestCLI_Permission_Unset_NormalizesQualifiedName(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
-	runCLI(binary, configPath, "namespace", "add", "prod")
-	runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
+	_, _, _ = runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
+	_, _, _ = runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
 
 	serverID := getServerIDByName(t, configPath, "api-server")
 
@@ -924,8 +924,8 @@ func TestCLI_Permission_DoesNotStripDotsInToolNames(t *testing.T) {
 	binary := buildBinary(t)
 	configPath := setupTestConfig(t)
 
-	runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
-	runCLI(binary, configPath, "namespace", "add", "prod")
+	_, _, _ = runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
+	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
 
 	stdout, stderr, err := runCLI(binary, configPath, "permission", "set", "prod", "api-server", "fs.read_file", "deny")
 	if err != nil {

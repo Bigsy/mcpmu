@@ -546,7 +546,7 @@ func (m *Model) handleServerListKey(msg tea.KeyMsg) (handled bool, model tea.Mod
 			// Toggle: if running, stop; otherwise start
 			if item.Status.State == events.StateRunning {
 				log.Printf("Stopping server: %s", item.Config.ID)
-				go m.supervisor.Stop(item.Config.ID)
+				go func() { _ = m.supervisor.Stop(item.Config.ID) }()
 			} else {
 				log.Printf("Starting server: %s", item.Config.ID)
 				go m.startServer(item.Config)
@@ -592,7 +592,7 @@ func (m *Model) handleServerDetailKey(msg tea.KeyMsg) (handled bool, model tea.M
 		if item := m.serverList.SelectedItem(); item != nil {
 			// Toggle: if running, stop; otherwise start
 			if item.Status.State == events.StateRunning {
-				go m.supervisor.Stop(item.Config.ID)
+				go func() { _ = m.supervisor.Stop(item.Config.ID) }()
 			} else {
 				go m.startServer(item.Config)
 			}
@@ -689,7 +689,7 @@ func (m Model) handleConfirmResult(result views.ConfirmResult) (tea.Model, tea.C
 		// Stop server if running
 		if status, ok := m.serverStatuses[m.pendingDeleteID]; ok {
 			if status.State == events.StateRunning || status.State == events.StateStarting {
-				m.supervisor.Stop(m.pendingDeleteID)
+				_ = m.supervisor.Stop(m.pendingDeleteID)
 			}
 		}
 
@@ -756,10 +756,8 @@ func (m Model) handleConfirmResult(result views.ConfirmResult) (tea.Model, tea.C
 }
 
 func (m *Model) startServer(srv config.ServerConfig) {
-	_, err := m.supervisor.Start(m.ctx, srv)
-	if err != nil {
-		// Error will be emitted via event bus
-	}
+	// Error will be emitted via event bus, no need to handle here
+	_, _ = m.supervisor.Start(m.ctx, srv)
 }
 
 func (m *Model) toggleServerEnabled(id string) {
@@ -776,7 +774,7 @@ func (m *Model) toggleServerEnabled(id string) {
 	// when disabling.
 	if currentlyEnabled && !newEnabled {
 		if status, ok := m.serverStatuses[id]; ok && status.State == events.StateRunning {
-			go m.supervisor.Stop(id)
+			go func() { _ = m.supervisor.Stop(id) }()
 		}
 	}
 	srv.SetEnabled(newEnabled)
@@ -1512,7 +1510,7 @@ func (m Model) handleToolPermissionsResult(result views.ToolPermissionsResult) (
 	// Stop auto-started servers regardless of whether changes were submitted
 	for _, serverID := range result.AutoStartedServers {
 		log.Printf("Stopping auto-started server: %s", serverID)
-		go m.supervisor.Stop(serverID)
+		go func(id string) { _ = m.supervisor.Stop(id) }(serverID)
 	}
 
 	if !result.Submitted || m.detailNamespaceID == "" {

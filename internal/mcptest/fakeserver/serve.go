@@ -56,14 +56,14 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 
 		// Check for Malformed response mode
 		if cfg.Malformed {
-			out.Write([]byte("this is not valid json\n"))
+			_, _ = out.Write([]byte("this is not valid json\n"))
 			continue
 		}
 
 		// Check for FailOnAttempt (for retry testing)
 		if failAttempt, ok := cfg.FailOnAttempt[req.Method]; ok {
 			if methodAttempts[req.Method] == failAttempt {
-				writeErrorResponse(out, req.ID, JSONRPCError{
+				_ = writeErrorResponse(out, req.ID, JSONRPCError{
 					Code: -32603, Message: "Simulated failure on attempt",
 				}, cfg)
 				continue
@@ -72,14 +72,14 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 
 		// Check for forced error
 		if rpcErr, ok := cfg.Errors[req.Method]; ok {
-			writeErrorResponse(out, req.ID, rpcErr, cfg)
+			_ = writeErrorResponse(out, req.ID, rpcErr, cfg)
 			continue
 		}
 
 		// Handle methods
 		switch req.Method {
 		case "initialize":
-			writeResponse(out, req.ID, InitializeResult{
+			_ = writeResponse(out, req.ID, InitializeResult{
 				ProtocolVersion: "2024-11-05",
 				ServerInfo:      ServerInfo{Name: "fake-server", Version: "1.0.0"},
 				Capabilities:    Capabilities{Tools: &ToolsCapability{}},
@@ -90,12 +90,12 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			if tools == nil {
 				tools = []Tool{}
 			}
-			writeResponse(out, req.ID, ToolsListResult{Tools: tools}, cfg)
+			_ = writeResponse(out, req.ID, ToolsListResult{Tools: tools}, cfg)
 
 		case "tools/call":
 			var params ToolCallParams
 			if err := json.Unmarshal(req.Params, &params); err != nil {
-				writeErrorResponse(out, req.ID, JSONRPCError{
+				_ = writeErrorResponse(out, req.ID, JSONRPCError{
 					Code: -32602, Message: "Invalid params: " + err.Error(),
 				}, cfg)
 				continue
@@ -105,12 +105,12 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			if cfg.ToolHandler != nil {
 				content, isError, err := cfg.ToolHandler(params.Name, params.Arguments)
 				if err != nil {
-					writeErrorResponse(out, req.ID, JSONRPCError{
+					_ = writeErrorResponse(out, req.ID, JSONRPCError{
 						Code: -32603, Message: err.Error(),
 					}, cfg)
 					continue
 				}
-				writeResponse(out, req.ID, ToolCallResult{
+				_ = writeResponse(out, req.ID, ToolCallResult{
 					Content: content,
 					IsError: isError,
 				}, cfg)
@@ -123,14 +123,14 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				if params.Arguments != nil {
 					text += "\nArguments: " + string(params.Arguments)
 				}
-				writeResponse(out, req.ID, ToolCallResult{
+				_ = writeResponse(out, req.ID, ToolCallResult{
 					Content: []ContentBlock{{Type: "text", Text: text}},
 				}, cfg)
 				continue
 			}
 
 			// If no handler and no echo, return success with tool name
-			writeResponse(out, req.ID, ToolCallResult{
+			_ = writeResponse(out, req.ID, ToolCallResult{
 				Content: []ContentBlock{{Type: "text", Text: "Tool executed: " + params.Name}},
 			}, cfg)
 
@@ -138,7 +138,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			// No response needed for notifications
 
 		default:
-			writeErrorResponse(out, req.ID, JSONRPCError{
+			_ = writeErrorResponse(out, req.ID, JSONRPCError{
 				Code: -32601, Message: "Method not found",
 			}, cfg)
 		}
