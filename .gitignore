@@ -1,5 +1,5 @@
 # Binaries
-mcpmu
+/mcpmu
 *.exe
 *.exe~
 *.dll
