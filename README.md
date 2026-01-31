@@ -1,16 +1,21 @@
-# mcpmu
+# mcpmu (μ)
 
-A TUI application and MCP server for managing MCP (Model Context Protocol) servers - both local stdio processes and remote HTTP endpoints.
+**A multiplexing MCP server that aggregates multiple MCP servers behind a single endpoint.**
+
+Unlike typical MCP setups where each coding agent needs its own server configurations, mcpmu acts as a meta-server: you configure all your MCP servers once, then expose them as a unified endpoint to any agent that supports the Model Context Protocol. Add one entry to Claude Code, Cursor, Windsurf, or any MCP-compatible tool and instantly gain access to your entire MCP ecosystem.
+
+Key differentiators:
+- **Single configuration, universal access** — Define servers once, use everywhere
+- **Namespace profiles** — Group servers by context (work, personal, project) with per-namespace tool permissions
+- **Multi-transport** — Manage both local stdio processes and remote HTTP/SSE endpoints
+- **Interactive TUI** — Monitor, test, and manage servers with a terminal interface
 
 ## Features
 
-- **Multi-transport support**: Stdio processes and Streamable HTTP (SSE) servers
-- **TUI interface**: Interactive server management, logs, and namespaces
-- **Namespace-based permissions**: Group servers and control tool access per namespace
-- **MCP aggregation**: Expose all managed servers as a single MCP endpoint via `serve --stdio`
-- **Bearer token auth**: Authenticate to HTTP servers via environment variables
-- **Custom headers**: Add static or env-sourced HTTP headers
-- **OAuth scopes**: Configure OAuth scopes for servers that support it
+- **Bearer token auth** — Authenticate to HTTP servers via environment variables
+- **Custom headers** — Add static or env-sourced HTTP headers
+- **OAuth support** — Built-in OAuth flow with configurable scopes
+- **Tool permissions** — Allow/deny specific tools per namespace
 
 <img width="798" height="560" alt="image" src="https://github.com/user-attachments/assets/d7eb8ef0-6249-43e6-9019-8b4ee07a23d7" />
 
