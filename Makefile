@@ -1,11 +1,11 @@
-.PHONY: build install test test-v test-integration lint clean run run-debug
+.PHONY: build install test test-v test-integration lint clean run debug
 
 build:
-	go build -o mcp-go ./cmd/mcp-studio
+	go build -o mcpmu ./cmd/mcpmu
 
 install: build
 	mkdir -p ~/.local/bin
-	cp mcp-go ~/.local/bin/mcp-go
+	cp mcpmu ~/.local/bin/mcpmu
 
 test:
 	go test -race ./...
@@ -20,11 +20,11 @@ lint:
 	golangci-lint run
 
 clean:
-	rm -f mcp-go
+	rm -f mcpmu
 	go clean -testcache
 
 run:
-	go run ./cmd/mcp-studio
+	go run ./cmd/mcpmu
 
 debug:
-	go run ./cmd/mcp-studio -debug
+	go run ./cmd/mcpmu --debug
