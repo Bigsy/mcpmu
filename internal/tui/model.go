@@ -988,7 +988,7 @@ func (m Model) renderHeader() string {
 		}
 	}
 
-	title := m.theme.Title.Render("MCP Studio")
+	title := m.theme.Title.Render("mcpmu")
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabViews...)
 
 	// Align title left, tabs right

@@ -53,7 +53,7 @@ type ClientRegistrationResponse struct {
 func RegisterClient(ctx context.Context, registrationEndpoint string, redirectURI string, scopes []string) (*ClientRegistrationResponse, error) {
 	req := ClientRegistrationRequest{
 		RedirectURIs:            []string{redirectURI},
-		ClientName:              "MCP Studio",
+		ClientName:              "mcpmu",
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 		ResponseTypes:           []string{"code"},
 		TokenEndpointAuthMethod: "none", // Public client

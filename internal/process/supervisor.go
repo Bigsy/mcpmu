@@ -264,11 +264,14 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 		authStatus = mcp.AuthStatusBearer
 	} else if s.tokenManager != nil {
 		// Check for OAuth credentials
+		log.Printf("Looking up OAuth token for URL: %s", srv.URL)
 		token, err := s.tokenManager.GetAccessToken(ctx, srv.URL)
 		if err == nil && token != "" {
+			log.Printf("Found OAuth token for %s (len=%d)", srv.ID, len(token))
 			bearerToken = token
 			authStatus = mcp.AuthStatusOAuthOK
 		} else {
+			log.Printf("No OAuth token found for %s: err=%v", srv.ID, err)
 			// Try to discover OAuth support
 			metadata, _ := oauth.SupportsOAuth(ctx, srv.URL)
 			if metadata != nil {

@@ -125,7 +125,7 @@ func (s *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
-<head><title>MCP Studio - Authorization Failed</title></head>
+<head><title>mcpmu - Authorization Failed</title></head>
 <body style="font-family: sans-serif; padding: 40px; text-align: center;">
 <h1>Authorization Failed</h1>
 <p>Error: %s</p>
@@ -140,7 +140,7 @@ func (s *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprint(w, `<!DOCTYPE html>
 <html>
-<head><title>MCP Studio - Error</title></head>
+<head><title>mcpmu - Error</title></head>
 <body style="font-family: sans-serif; padding: 40px; text-align: center;">
 <h1>Error</h1>
 <p>No authorization code received.</p>
@@ -153,10 +153,10 @@ func (s *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, `<!DOCTYPE html>
 <html>
-<head><title>MCP Studio - Authorization Complete</title></head>
+<head><title>mcpmu - Authorization Complete</title></head>
 <body style="font-family: sans-serif; padding: 40px; text-align: center;">
 <h1>✓ Authorization Complete</h1>
-<p>You can close this window and return to MCP Studio.</p>
+<p>You can close this window and return to mcpmu.</p>
 </body>
 </html>`)
 }

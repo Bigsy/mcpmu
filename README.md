@@ -48,13 +48,13 @@ mcpmu add auto-server --autostart -- ./server  # start on app launch
 **Add HTTP server (Streamable HTTP / SSE):**
 ```bash
 # With bearer token from environment variable
-mcpmu add figma --url https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
+mcpmu add figma https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
 
 # With OAuth scopes (login separately with `mcp login`)
-mcpmu add atlassian --url https://mcp.atlassian.com/mcp --scopes read,write
+mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
 
 # Plain HTTP (no auth)
-mcpmu add my-api --url https://example.com/mcp
+mcpmu add my-api https://example.com/mcp
 ```
 
 **List and remove:**

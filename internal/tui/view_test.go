@@ -62,8 +62,8 @@ func TestView_ContainsTitle(t *testing.T) {
 
 	view := testutil.StripANSI(m.View())
 
-	if !strings.Contains(view, "MCP Studio") {
-		t.Error("expected view to contain 'MCP Studio' title")
+	if !strings.Contains(view, "mcpmu") {
+		t.Error("expected view to contain 'mcpmu' title")
 	}
 }
 

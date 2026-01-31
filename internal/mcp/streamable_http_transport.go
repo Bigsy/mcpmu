@@ -105,10 +105,10 @@ func NewStreamableHTTPTransport(config StreamableHTTPConfig) *StreamableHTTPTran
 	}
 }
 
-// Connect establishes the SSE connection for receiving server messages.
-// This should be called before Initialize.
-// If the server doesn't support SSE (returns 404/405), the transport
-// will work in POST-only mode where responses come inline.
+// Connect prepares the transport for use.
+// Per MCP spec (2025-03-26), Streamable HTTP uses POST for requests.
+// SSE is optional and only used if the server indicates support via response headers.
+// Legacy SSE-only servers (pre-2025) should be detected by POST failing with 4xx.
 func (t *StreamableHTTPTransport) Connect(ctx context.Context) error {
 	t.mu.Lock()
 	if t.closed {
@@ -117,49 +117,26 @@ func (t *StreamableHTTPTransport) Connect(ctx context.Context) error {
 	}
 	t.mu.Unlock()
 
-	// Try to establish SSE connection, but don't fail if not supported
-	err := t.connectSSE(ctx)
-	if err != nil {
-		// Check if it's a "not supported" error (404, 405)
-		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "405") {
-			log.Printf("SSE not supported by server, using POST-only mode")
-			// Signal ready for POST-only mode
-			t.readyOnce.Do(func() {
-				close(t.readyChan)
-			})
-			return nil // SSE is optional
-		}
-		return err
-	}
-
-	// Wait for endpoint event (legacy HTTP+SSE) or timeout
-	// For Streamable HTTP servers, they won't send endpoint event,
-	// so we use a short timeout and continue
-	select {
-	case <-t.readyChan:
-		// Got endpoint event with session ID
-		return nil
-	case <-time.After(1 * time.Second):
-		// No endpoint event - assume Streamable HTTP protocol
-		// Session ID will come from initialize response header
-		log.Printf("No endpoint event received, assuming Streamable HTTP protocol")
-		t.readyOnce.Do(func() {
-			close(t.readyChan)
-		})
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.done:
-		return errors.New("transport closed")
-	}
+	// Per MCP spec: try POST first (Streamable HTTP).
+	// SSE GET is only for backwards compatibility with legacy servers.
+	// Signal ready for POST-based communication immediately.
+	t.readyOnce.Do(func() {
+		close(t.readyChan)
+	})
+	return nil
 }
 
 // connectSSE establishes the SSE stream (must hold mu lock).
 func (t *StreamableHTTPTransport) connectSSE(ctx context.Context) error {
+	// Use a timeout for the initial SSE connection attempt.
+	// If the server doesn't support SSE or hangs, we'll fall back to POST-only mode.
+	connectCtx, connectCancel := context.WithTimeout(ctx, DefaultConnectTimeout)
+	defer connectCancel()
+
 	sseCtx, cancel := context.WithCancel(ctx)
 	t.sseCancel = cancel
 
-	req, err := http.NewRequestWithContext(sseCtx, "GET", t.config.URL, nil)
+	req, err := http.NewRequestWithContext(connectCtx, "GET", t.config.URL, nil)
 	if err != nil {
 		return fmt.Errorf("create SSE request: %w", err)
 	}

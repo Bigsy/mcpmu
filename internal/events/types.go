@@ -1,4 +1,4 @@
-// Package events provides the event system for MCP Studio.
+// Package events provides the event system for mcpmu.
 package events
 
 import (

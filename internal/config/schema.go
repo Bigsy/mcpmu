@@ -1,4 +1,4 @@
-// Package config provides configuration schema and persistence for MCP Studio.
+// Package config provides configuration schema and persistence for mcpmu.
 package config
 
 import (
