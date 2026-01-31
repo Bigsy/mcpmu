@@ -6,6 +6,7 @@ build:
 install: build
 	mkdir -p ~/.local/bin
 	cp mcpmu ~/.local/bin/mcpmu
+	codesign --force --sign - ~/.local/bin/mcpmu
 
 test:
 	go test -race ./...

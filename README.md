@@ -12,12 +12,28 @@ A TUI application and MCP server for managing MCP (Model Context Protocol) serve
 - **Custom headers**: Add static or env-sourced HTTP headers
 - **OAuth scopes**: Configure OAuth scopes for servers that support it
 
-## Build & Run
+## Installation
+
+### Homebrew (macOS/Linux)
 
 ```bash
+brew tap Bigsy/mcpmu https://github.com/Bigsy/mcpmu
+brew install mcpmu
+```
+
+### From source
+
+```bash
+go install github.com/Bigsy/mcpmu/cmd/mcpmu@latest
+```
+
+### Manual build
+
+```bash
+git clone https://github.com/Bigsy/mcpmu.git
+cd mcpmu
 go build -o mcpmu ./cmd/mcpmu
 ./mcpmu
-./mcpmu --debug  # logs to /tmp/mcpmu-debug.log
 ```
 
 ## TUI Usage
