@@ -403,7 +403,7 @@ func TestEndToEnd_WithRealBinary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	serverCmd := exec.CommandContext(ctx, tmpBin, "serve", "--stdio", "--config", tmpConfig, "--log-level", "error")
+	serverCmd := exec.CommandContext(ctx, tmpBin, "serve", "--stdio", "--config", tmpConfig, "--log-level", "error", "--expose-manager-tools")
 	stdin, err := serverCmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("StdinPipe: %v", err)

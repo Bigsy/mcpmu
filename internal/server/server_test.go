@@ -84,7 +84,7 @@ func TestServer_Initialize(t *testing.T) {
 	}
 }
 
-func TestServer_ToolsList_NoServers(t *testing.T) {
+func TestServer_ToolsList_NoServers_ManagerToolsHidden(t *testing.T) {
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
@@ -96,13 +96,14 @@ func TestServer_ToolsList_NoServers(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:             cfg,
+		Stdin:              stdin,
+		Stdout:             &stdout,
+		ServerName:         "mcpmu-test",
+		ServerVersion:      "1.0.0",
+		ProtocolVersion:    "2024-11-05",
+		LogLevel:           "error",
+		ExposeManagerTools: false, // default: hidden
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -136,7 +137,68 @@ func TestServer_ToolsList_NoServers(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", resp.Error)
 	}
 
-	// Should have manager tools even with no servers
+	// Manager tools should be hidden by default
+	for _, tool := range resp.Result.Tools {
+		if strings.HasPrefix(tool.Name, "mcpmu.") {
+			t.Errorf("Manager tool %q should be hidden by default", tool.Name)
+		}
+	}
+}
+
+func TestServer_ToolsList_NoServers_ManagerToolsExposed(t *testing.T) {
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers:       map[string]config.ServerConfig{},
+	}
+
+	var stdout bytes.Buffer
+	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+`)
+
+	srv, err := New(Options{
+		Config:             cfg,
+		Stdin:              stdin,
+		Stdout:             &stdout,
+		ServerName:         "mcpmu-test",
+		ServerVersion:      "1.0.0",
+		ProtocolVersion:    "2024-11-05",
+		LogLevel:           "error",
+		ExposeManagerTools: true, // explicitly exposed
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_ = srv.Run(ctx)
+
+	// Parse the second response (tools/list)
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("Expected 2 responses, got %d: %s", len(lines), stdout.String())
+	}
+
+	var resp struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      int    `json:"id"`
+		Result  struct {
+			Tools []AggregatedTool `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+
+	if err := json.Unmarshal([]byte(lines[1]), &resp); err != nil {
+		t.Fatalf("Unmarshal tools/list response: %v\nLine: %s", err, lines[1])
+	}
+
+	if resp.Error != nil {
+		t.Fatalf("Unexpected error: %v", resp.Error)
+	}
+
+	// Should have manager tools when exposed
 	managerTools := 0
 	for _, tool := range resp.Result.Tools {
 		if strings.HasPrefix(tool.Name, "mcpmu.") {

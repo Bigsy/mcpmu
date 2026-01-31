@@ -17,7 +17,7 @@ const (
 	// ToolDiscoveryTimeout is the max time to wait for tool discovery per server
 	ToolDiscoveryTimeout = 5 * time.Second
 	// MaxConcurrentDiscovery is the max number of servers to discover tools from concurrently
-	MaxConcurrentDiscovery = 4
+	MaxConcurrentDiscovery = 8
 )
 
 // AggregatedTool represents a tool with qualified name and server info.
@@ -42,15 +42,17 @@ type Aggregator struct {
 	toolsMu sync.RWMutex
 
 	// Manager tools
-	managerTools []AggregatedTool
+	managerTools       []AggregatedTool
+	exposeManagerTools bool
 }
 
 // NewAggregator creates a new tool aggregator.
-func NewAggregator(cfg *config.Config, supervisor *process.Supervisor) *Aggregator {
+func NewAggregator(cfg *config.Config, supervisor *process.Supervisor, exposeManagerTools bool) *Aggregator {
 	a := &Aggregator{
-		cfg:        cfg,
-		supervisor: supervisor,
-		tools:      make(map[string]AggregatedTool),
+		cfg:                cfg,
+		supervisor:         supervisor,
+		tools:              make(map[string]AggregatedTool),
+		exposeManagerTools: exposeManagerTools,
 	}
 	a.managerTools = a.buildManagerTools()
 	return a
@@ -94,12 +96,15 @@ func (a *Aggregator) ListTools(ctx context.Context, serverIDs []string) ([]Aggre
 	}
 	a.toolsMu.Unlock()
 
-	// Add manager tools
-	result := make([]AggregatedTool, 0, len(allTools)+len(a.managerTools))
-	result = append(result, allTools...)
-	result = append(result, a.managerTools...)
+	// Add manager tools only if exposed
+	if a.exposeManagerTools {
+		result := make([]AggregatedTool, 0, len(allTools)+len(a.managerTools))
+		result = append(result, allTools...)
+		result = append(result, a.managerTools...)
+		return result, nil
+	}
 
-	return result, nil
+	return allTools, nil
 }
 
 // GetTool returns a tool by its qualified name.
@@ -141,6 +146,13 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverID string) (
 		if err != nil {
 			return nil, fmt.Errorf("start server: %w", err)
 		}
+	}
+
+	// Wait for async tool discovery to complete
+	toolsCtx, cancel := context.WithTimeout(ctx, ToolDiscoveryTimeout)
+	defer cancel()
+	if err := handle.WaitForTools(toolsCtx); err != nil {
+		return nil, fmt.Errorf("wait for tools: %w", err)
 	}
 
 	// Get tools from the running server

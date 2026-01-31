@@ -17,16 +17,17 @@ import (
 
 // Options configures the MCP server.
 type Options struct {
-	Config          *config.Config
-	Namespace       string // Namespace to expose (empty = auto-select)
-	EagerStart      bool   // Pre-start all servers
-	LogLevel        string
-	Stdin           io.Reader
-	Stdout          io.Writer
-	Stderr          io.Writer
-	ServerName      string
-	ServerVersion   string
-	ProtocolVersion string
+	Config             *config.Config
+	Namespace          string // Namespace to expose (empty = auto-select)
+	EagerStart         bool   // Pre-start all servers
+	ExposeManagerTools bool   // Include mcpmu.* tools in tools/list
+	LogLevel           string
+	Stdin              io.Reader
+	Stdout             io.Writer
+	Stderr             io.Writer
+	ServerName         string
+	ServerVersion      string
+	ProtocolVersion    string
 }
 
 // SelectionMethod indicates how the active namespace was selected.
@@ -83,7 +84,7 @@ func New(opts Options) (*Server, error) {
 	}
 
 	// Create aggregator and router (will be initialized after namespace selection)
-	s.aggregator = NewAggregator(s.cfg, supervisor)
+	s.aggregator = NewAggregator(s.cfg, supervisor, opts.ExposeManagerTools)
 	s.router = NewRouter(s.cfg, supervisor, s.aggregator)
 
 	return s, nil

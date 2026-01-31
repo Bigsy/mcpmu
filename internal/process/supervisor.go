@@ -176,6 +176,7 @@ func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*
 		client:         client,
 		stdioTransport: transport,
 		logs:           make([]string, 0, 1000),
+		toolsReady:     make(chan struct{}),
 		bus:            s.bus,
 		startedAt:      time.Now(),
 		done:           make(chan struct{}),
@@ -216,15 +217,20 @@ func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*
 		return nil, fmt.Errorf("initialize mcp: %w", initErr)
 	}
 
-	// Discover tools
-	toolsCtx, toolsCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer toolsCancel()
-	tools, err := client.ListTools(toolsCtx)
-	if err != nil {
-		// Non-fatal - server is still running
-		s.bus.Publish(events.NewErrorEvent(srv.ID, err, "Failed to list tools"))
-	} else {
-		handle.tools = tools
+	// Emit running event immediately (tool discovery happens in background)
+	s.emitStatus(srv.ID, events.StateRunning, cmd.Process.Pid, nil, "")
+
+	// Discover tools in background (non-blocking)
+	go func() {
+		defer handle.signalToolsReady()
+		toolsCtx, toolsCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer toolsCancel()
+		tools, err := client.ListTools(toolsCtx)
+		if err != nil {
+			s.bus.Publish(events.NewErrorEvent(srv.ID, err, "Failed to list tools"))
+			return
+		}
+		handle.SetTools(tools)
 		mcpTools := make([]events.McpTool, len(tools))
 		for i, t := range tools {
 			mcpTools[i] = events.McpTool{
@@ -233,10 +239,7 @@ func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*
 			}
 		}
 		s.bus.Publish(events.NewToolsUpdatedEvent(srv.ID, mcpTools))
-	}
-
-	// Emit running event
-	s.emitStatus(srv.ID, events.StateRunning, cmd.Process.Pid, nil, "")
+	}()
 
 	return handle, nil
 }
@@ -323,6 +326,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 		authStatus:    authStatus,
 		serverURL:     srv.URL,
 		logs:          make([]string, 0, 1000),
+		toolsReady:    make(chan struct{}),
 		bus:           s.bus,
 		startedAt:     time.Now(),
 		done:          make(chan struct{}),
@@ -340,14 +344,20 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 		return nil, fmt.Errorf("initialize mcp: %w", err)
 	}
 
-	// Discover tools
-	toolsCtx, toolsCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer toolsCancel()
-	tools, err := client.ListTools(toolsCtx)
-	if err != nil {
-		s.bus.Publish(events.NewErrorEvent(srv.ID, err, "Failed to list tools"))
-	} else {
-		handle.tools = tools
+	// Emit running event immediately (tool discovery happens in background)
+	s.emitStatus(srv.ID, events.StateRunning, 0, nil, "")
+
+	// Discover tools in background (non-blocking)
+	go func() {
+		defer handle.signalToolsReady()
+		toolsCtx, toolsCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer toolsCancel()
+		tools, err := client.ListTools(toolsCtx)
+		if err != nil {
+			s.bus.Publish(events.NewErrorEvent(srv.ID, err, "Failed to list tools"))
+			return
+		}
+		handle.SetTools(tools)
 		mcpTools := make([]events.McpTool, len(tools))
 		for i, t := range tools {
 			mcpTools[i] = events.McpTool{
@@ -356,10 +366,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 			}
 		}
 		s.bus.Publish(events.NewToolsUpdatedEvent(srv.ID, mcpTools))
-	}
-
-	// Emit running event
-	s.emitStatus(srv.ID, events.StateRunning, 0, nil, "")
+	}()
 
 	return handle, nil
 }
@@ -516,15 +523,18 @@ type Handle struct {
 	serverURL     string
 
 	// Common fields
-	client    *mcp.Client
-	tools     []mcp.Tool
-	logs      []string
-	logsMu    sync.RWMutex
-	bus       *events.Bus
-	startedAt time.Time
-	stopped   bool
-	stopMu    sync.Mutex
-	done      chan struct{} // closed when server stops
+	client        *mcp.Client
+	tools         []mcp.Tool
+	toolsMu       sync.RWMutex
+	toolsReady    chan struct{} // closed when tools are discovered
+	toolsReadyMu  sync.Mutex    // protects toolsReady close
+	logs          []string
+	logsMu        sync.RWMutex
+	bus           *events.Bus
+	startedAt     time.Time
+	stopped       bool
+	stopMu        sync.Mutex
+	done          chan struct{} // closed when server stops
 }
 
 // ID returns the server ID.
@@ -539,7 +549,38 @@ func (h *Handle) Client() *mcp.Client {
 
 // Tools returns the discovered tools.
 func (h *Handle) Tools() []mcp.Tool {
+	h.toolsMu.RLock()
+	defer h.toolsMu.RUnlock()
 	return h.tools
+}
+
+// SetTools sets the discovered tools (thread-safe).
+func (h *Handle) SetTools(tools []mcp.Tool) {
+	h.toolsMu.Lock()
+	defer h.toolsMu.Unlock()
+	h.tools = tools
+}
+
+// signalToolsReady signals that tool discovery is complete.
+func (h *Handle) signalToolsReady() {
+	h.toolsReadyMu.Lock()
+	defer h.toolsReadyMu.Unlock()
+	select {
+	case <-h.toolsReady:
+		// Already closed
+	default:
+		close(h.toolsReady)
+	}
+}
+
+// WaitForTools waits for tool discovery to complete or context to be cancelled.
+func (h *Handle) WaitForTools(ctx context.Context) error {
+	select {
+	case <-h.toolsReady:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Logs returns the captured stderr logs.
