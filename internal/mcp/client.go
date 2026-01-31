@@ -198,7 +198,15 @@ func (c *Client) Close() error {
 }
 
 // call makes a JSON-RPC call and waits for the response.
+// The call is serialized with a mutex to prevent concurrent transport access.
 func (c *Client) call(ctx context.Context, method string, params interface{}, result interface{}) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.closed {
+		return fmt.Errorf("client closed")
+	}
+
 	id := c.nextID.Add(1)
 
 	req := rpcRequest{
@@ -265,6 +273,13 @@ func (c *Client) call(ctx context.Context, method string, params interface{}, re
 
 // notify sends a JSON-RPC notification (no response expected).
 func (c *Client) notify(ctx context.Context, method string, params interface{}) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.closed {
+		return fmt.Errorf("client closed")
+	}
+
 	req := rpcRequest{
 		JSONRPC: "2.0",
 		Method:  method,

@@ -52,9 +52,6 @@ func TestView_ContainsTabBar(t *testing.T) {
 	if !strings.Contains(view, "[2]Namespaces") {
 		t.Error("expected view to contain '[2]Namespaces'")
 	}
-	if !strings.Contains(view, "[3]Proxies") {
-		t.Error("expected view to contain '[3]Proxies'")
-	}
 }
 
 func TestView_ContainsTitle(t *testing.T) {

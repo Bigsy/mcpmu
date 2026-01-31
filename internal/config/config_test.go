@@ -44,8 +44,7 @@ func TestLoad_ValidConfig(t *testing.T) {
 				"command": "echo"
 			}
 		},
-		"namespaces": [],
-		"proxies": []
+		"namespaces": []
 	}`
 
 	configPath := filepath.Join(home, ".config", "mcpmu", "config.json")

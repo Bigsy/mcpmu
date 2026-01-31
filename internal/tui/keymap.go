@@ -23,10 +23,9 @@ type KeyBindings struct {
 	Help    key.Binding
 	TabNext key.Binding
 	TabPrev key.Binding
-	Tab1    key.Binding
-	Tab2    key.Binding
-	Tab3    key.Binding
-	Escape  key.Binding
+	Tab1   key.Binding
+	Tab2   key.Binding
+	Escape key.Binding
 	CtrlC   key.Binding
 
 	// List navigation
@@ -77,10 +76,6 @@ func NewKeyBindings() KeyBindings {
 		Tab2: key.NewBinding(
 			key.WithKeys("2"),
 			key.WithHelp("2", "namespaces"),
-		),
-		Tab3: key.NewBinding(
-			key.WithKeys("3"),
-			key.WithHelp("3", "proxies"),
 		),
 		Escape: key.NewBinding(
 			key.WithKeys("esc"),
@@ -165,7 +160,7 @@ func (k KeyBindings) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Top, k.Bottom, k.Enter, k.Escape},
 		{k.Test, k.ToggleEnabled, k.Add, k.Edit, k.Delete},
-		{k.ToggleLogs, k.FollowLogs, k.TabPrev, k.TabNext, k.Tab1, k.Tab2, k.Tab3},
+		{k.ToggleLogs, k.FollowLogs, k.TabPrev, k.TabNext, k.Tab1, k.Tab2},
 		{k.Help, k.Quit, k.CtrlC},
 	}
 }

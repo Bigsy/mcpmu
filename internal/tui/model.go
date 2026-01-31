@@ -25,7 +25,6 @@ type Tab int
 const (
 	TabServers Tab = iota
 	TabNamespaces
-	TabProxies
 )
 
 // View represents the current view mode.
@@ -64,9 +63,6 @@ type Model struct {
 	namespaceForm   *views.NamespaceFormModel
 	serverPicker    views.ServerPickerModel
 	toolPerms       views.ToolPermissionsModel
-
-	// Proxies Components
-	proxies views.ProxiesModel
 
 	// Shared Components
 	logPanel    views.LogPanelModel
@@ -136,7 +132,6 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 		namespaceForm:   newNamespaceFormPtr(th),
 		serverPicker:    views.NewServerPicker(th),
 		toolPerms:       views.NewToolPermissions(th),
-		proxies:         views.NewProxies(th),
 		logPanel:        views.NewLogPanel(th),
 		helpOverlay:     views.NewHelpOverlay(th),
 		confirmDlg:      views.NewConfirm(th),
@@ -174,8 +169,6 @@ func (m *Model) switchToTab(tab Tab) {
 		m.refreshServerList()
 	case TabNamespaces:
 		m.refreshNamespaceList()
-	case TabProxies:
-		// Placeholder view; no list to refresh.
 	}
 }
 
@@ -186,7 +179,6 @@ func (m *Model) applyFocus() {
 	m.serverDetail.SetFocused(false)
 	m.namespaceList.SetFocused(false)
 	m.namespaceDetail.SetFocused(false)
-	m.proxies.SetFocused(false)
 
 	switch m.activeTab {
 	case TabServers:
@@ -201,8 +193,6 @@ func (m *Model) applyFocus() {
 		} else {
 			m.namespaceList.SetFocused(true)
 		}
-	case TabProxies:
-		m.proxies.SetFocused(true)
 	}
 }
 
@@ -376,10 +366,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.namespaceDetail, cmd = m.namespaceDetail.Update(msg)
 			cmds = append(cmds, cmd)
 		}
-	case TabProxies:
-		var cmd tea.Cmd
-		m.proxies, cmd = m.proxies.Update(msg)
-		cmds = append(cmds, cmd)
 	}
 
 	if m.logPanel.IsVisible() {
@@ -469,12 +455,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 		return true, m, tea.Quit
 
 	case key.Matches(msg, m.keys.TabNext):
-		next := Tab((int(m.activeTab) + 1) % 3)
+		next := Tab((int(m.activeTab) + 1) % 2)
 		m.switchToTab(next)
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.TabPrev):
-		prev := Tab((int(m.activeTab) + 2) % 3) // -1 mod 3
+		prev := Tab((int(m.activeTab) + 1) % 2) // -1 mod 2
 		m.switchToTab(prev)
 		return true, m, nil
 
@@ -484,10 +470,6 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 
 	case key.Matches(msg, m.keys.Tab2):
 		m.switchToTab(TabNamespaces)
-		return true, m, nil
-
-	case key.Matches(msg, m.keys.Tab3):
-		m.switchToTab(TabProxies)
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Escape):
@@ -872,9 +854,6 @@ func (m *Model) updateLayout() {
 	m.namespaceList.SetSize(contentWidth, contentHeight)
 	m.namespaceDetail.SetSize(contentWidth, contentHeight)
 
-	// Set component sizes - proxies
-	m.proxies.SetSize(contentWidth, contentHeight)
-
 	// Modal/overlay sizes
 	m.serverPicker.SetSize(m.width, m.height)
 	m.toolPerms.SetSize(m.width, m.height)
@@ -911,8 +890,6 @@ func (m Model) View() string {
 		} else {
 			sections = append(sections, m.namespaceDetail.View())
 		}
-	case TabProxies:
-		sections = append(sections, m.proxies.View())
 	default:
 		sections = append(sections, m.serverList.View())
 	}
@@ -972,8 +949,7 @@ func (m Model) renderHeader() string {
 		enabled bool
 	}{
 		{"Servers", true},
-		{"Namespaces", true}, // Phase 3 - Now enabled
-		{"Proxies", true},    // Phase 5 (placeholder)
+		{"Namespaces", true},
 	}
 
 	var tabViews []string
@@ -1026,8 +1002,6 @@ func (m Model) renderStatusBar() string {
 		} else {
 			keys = "esc:back  s:assign-servers  p:permissions  D:set-default  e:edit  ?:help"
 		}
-	case TabProxies:
-		keys = "1:servers  2:namespaces  ?:help"
 	default:
 		keys = "?:help"
 	}

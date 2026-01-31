@@ -8,16 +8,20 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/process"
+	"github.com/fsnotify/fsnotify"
 )
 
 // Options configures the MCP server.
 type Options struct {
 	Config             *config.Config
+	ConfigPath         string // Expanded path for hot-reload watching (empty = no watching)
 	Namespace          string // Namespace to expose (empty = auto-select)
 	EagerStart         bool   // Pre-start all servers
 	ExposeManagerTools bool   // Include mcpmu.* tools in tools/list
@@ -62,6 +66,9 @@ type Server struct {
 	reader  *bufio.Reader
 	writer  io.Writer
 	writeMu sync.Mutex
+
+	// Hot-reload
+	reloadCh chan *config.Config // Serializes reload with request handling
 }
 
 // New creates a new MCP server.
@@ -81,6 +88,7 @@ func New(opts Options) (*Server, error) {
 		supervisor: supervisor,
 		reader:     bufio.NewReader(opts.Stdin),
 		writer:     opts.Stdout,
+		reloadCh:   make(chan *config.Config, 1), // Buffered to avoid blocking watcher
 	}
 
 	// Create aggregator and router (will be initialized after namespace selection)
@@ -99,6 +107,11 @@ type readResult struct {
 // Run starts the server and processes requests until context is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	defer s.shutdown()
+
+	// Start config file watcher if ConfigPath is set
+	if s.opts.ConfigPath != "" {
+		go s.watchConfig(ctx, s.opts.ConfigPath)
+	}
 
 	// Start a goroutine to read lines from stdin
 	lines := make(chan readResult)
@@ -125,6 +138,10 @@ func (s *Server) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+
+		case newCfg := <-s.reloadCh:
+			// Config file changed - apply reload
+			s.applyReload(ctx, newCfg)
 
 		case r, ok := <-lines:
 			if !ok {
@@ -447,6 +464,195 @@ func (s *Server) shutdown() {
 	log.Println("Shutting down server")
 	s.supervisor.StopAll()
 	s.bus.Close()
+}
+
+// watchConfig watches the config file for changes and sends new config to reloadCh.
+// It watches the parent directory (not the file) to handle atomic renames.
+func (s *Server) watchConfig(ctx context.Context, configPath string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("Failed to create config watcher: %v", err)
+		return
+	}
+	defer watcher.Close()
+
+	// Watch parent directory to catch atomic renames
+	dir := filepath.Dir(configPath)
+	filename := filepath.Base(configPath)
+
+	if err := watcher.Add(dir); err != nil {
+		log.Printf("Failed to watch config directory %s: %v", dir, err)
+		return
+	}
+
+	log.Printf("Watching config file: %s", configPath)
+
+	// Debounce timer
+	const debounceDelay = 150 * time.Millisecond
+	var debounceTimer *time.Timer
+	var debounceMu sync.Mutex
+
+	triggerReload := func() {
+		debounceMu.Lock()
+		if debounceTimer != nil {
+			debounceTimer.Stop()
+		}
+		debounceTimer = time.AfterFunc(debounceDelay, func() {
+			log.Printf("Config file changed, loading new config")
+
+			// Load and parse before sending
+			newCfg, err := config.LoadFrom(configPath)
+			if err != nil {
+				log.Printf("Failed to load config after change: %v (keeping current config)", err)
+				return
+			}
+
+			// Send to reload channel (non-blocking with select to avoid deadlock if channel full)
+			select {
+			case s.reloadCh <- newCfg:
+				log.Printf("Config reload queued")
+			default:
+				log.Printf("Config reload already pending, skipping")
+			}
+		})
+		debounceMu.Unlock()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			debounceMu.Lock()
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			debounceMu.Unlock()
+			return
+
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+
+			// Filter for our target file
+			if filepath.Base(event.Name) != filename {
+				continue
+			}
+
+			// React to write, create, rename, or remove events
+			// Atomic writes show up as rename/create depending on OS/editor
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Remove) != 0 {
+				log.Printf("Config file event: %s (%s)", event.Name, event.Op)
+				triggerReload()
+			}
+
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("Config watcher error: %v", err)
+		}
+	}
+}
+
+// applyReload applies a new configuration, rebuilding all components.
+// Must be called from the Run() goroutine to serialize with request handling.
+func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
+	log.Printf("Applying config reload: %d servers, %d namespaces",
+		len(newCfg.Servers), len(newCfg.Namespaces))
+
+	// Stop all running servers
+	s.supervisor.StopAll()
+
+	// Swap config
+	s.mu.Lock()
+	oldNamespaceID := ""
+	if s.activeNamespace != nil {
+		oldNamespaceID = s.activeNamespace.ID
+	}
+	oldSelectionMethod := s.selectionMethod
+	s.cfg = newCfg
+	s.mu.Unlock()
+
+	// Re-resolve namespace
+	// If namespace was selected by flag and still exists, keep it
+	// If namespace was auto-selected and still valid, keep it
+	// If namespace no longer exists, re-auto-select
+	s.mu.Lock()
+
+	var keepNamespace bool
+	if oldSelectionMethod == SelectionFlag && s.opts.Namespace != "" {
+		// Try to find the namespace by the original flag value
+		for i := range newCfg.Namespaces {
+			if newCfg.Namespaces[i].ID == s.opts.Namespace || newCfg.Namespaces[i].Name == s.opts.Namespace {
+				s.activeNamespace = &newCfg.Namespaces[i]
+				s.activeServerIDs = newCfg.Namespaces[i].ServerIDs
+				s.selectionMethod = SelectionFlag
+				keepNamespace = true
+				break
+			}
+		}
+	} else if oldNamespaceID != "" {
+		// Try to keep the same namespace by ID
+		for i := range newCfg.Namespaces {
+			if newCfg.Namespaces[i].ID == oldNamespaceID {
+				s.activeNamespace = &newCfg.Namespaces[i]
+				s.activeServerIDs = newCfg.Namespaces[i].ServerIDs
+				s.selectionMethod = oldSelectionMethod
+				keepNamespace = true
+				break
+			}
+		}
+	}
+
+	if !keepNamespace {
+		// Need to re-resolve namespace from scratch
+		// Clear current state first
+		s.activeNamespace = nil
+		s.activeServerIDs = nil
+		s.mu.Unlock()
+
+		// Re-run namespace resolution
+		if err := s.resolveNamespace(); err != nil {
+			log.Printf("Failed to resolve namespace after reload: %v", err)
+			// Fall back to exposing all enabled servers
+			s.mu.Lock()
+			s.activeNamespace = nil
+			s.activeServerIDs = make([]string, 0, len(newCfg.Servers))
+			for id, srv := range newCfg.Servers {
+				if srv.IsEnabled() {
+					s.activeServerIDs = append(s.activeServerIDs, id)
+				}
+			}
+			s.selectionMethod = SelectionAll
+			s.mu.Unlock()
+			log.Printf("Fell back to exposing all %d enabled servers", len(s.activeServerIDs))
+		}
+	} else {
+		log.Printf("Kept namespace %q after reload with %d servers",
+			s.activeNamespace.ID, len(s.activeServerIDs))
+		s.mu.Unlock()
+	}
+
+	// Rebuild aggregator and router with new config
+	s.aggregator = NewAggregator(s.cfg, s.supervisor, s.opts.ExposeManagerTools)
+	s.router = NewRouter(s.cfg, s.supervisor, s.aggregator)
+
+	// Update router with active namespace info
+	s.mu.RLock()
+	activeID := ""
+	if s.activeNamespace != nil {
+		activeID = s.activeNamespace.ID
+	}
+	selMethod := s.selectionMethod
+	s.mu.RUnlock()
+	s.router.SetActiveNamespace(activeID, selMethod)
+
+	// Restart servers if eager start is configured
+	if s.opts.EagerStart {
+		go s.startEagerServers(ctx)
+	}
+
+	log.Printf("Config reload complete")
 }
 
 // sendResult sends a successful JSON-RPC response.

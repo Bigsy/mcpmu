@@ -134,20 +134,6 @@ mcpmu.namespaces_list
 | 1.5 | **stdio server mode** (primary feature) | Planned |
 | 2 | TUI for config management | Planned |
 | 3 | Namespaces and tool permissions | Planned |
-| 4 | HTTP proxy (SSE, Streamable-HTTP) | **DEFERRED** |
-| 5 | SSE client + OAuth | Planned |
-
-## Why stdio-Only (Phase 4 Deferred)
-
-HTTP proxy mode adds complexity for use cases most users don't need:
-- Web browser clients
-- Remote access from another machine
-- Shared team servers
-- Enterprise features (auth, audit)
-
-**stdio mode covers 90%+ of local Claude Code/Codex workflows.**
-
-The core is designed to be transport-agnostic, so HTTP can be added later without a rewrite.
 
 ## Key Design Principles
 

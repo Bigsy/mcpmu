@@ -53,17 +53,6 @@ type NamespaceConfig struct {
 	DenyByDefault bool     `json:"denyByDefault,omitempty"` // If true, unconfigured tools are denied
 }
 
-// ProxyConfig represents a proxy configuration (Phase 5, deferred - see plan5.md).
-// Included in schema for forward compatibility.
-type ProxyConfig struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	PathSegment   string `json:"pathSegment"`
-	Host          string `json:"host"`
-	Port          int    `json:"port"`
-	TransportType string `json:"transportType"` // "sse" or "streamable"
-}
-
 // ToolPermission controls whether a specific tool is enabled in a namespace.
 type ToolPermission struct {
 	NamespaceID string `json:"namespaceId"`
@@ -77,9 +66,8 @@ type Config struct {
 	SchemaVersion      int                     `json:"schemaVersion"`
 	DefaultNamespaceID string                  `json:"defaultNamespaceId,omitempty"`
 	Servers            map[string]ServerConfig `json:"servers"`
-	Namespaces         []NamespaceConfig       `json:"namespaces,omitempty"`
-	Proxies            []ProxyConfig           `json:"proxies,omitempty"`
-	ToolPermissions    []ToolPermission        `json:"toolPermissions,omitempty"`
+	Namespaces      []NamespaceConfig `json:"namespaces,omitempty"`
+	ToolPermissions []ToolPermission  `json:"toolPermissions,omitempty"`
 	LastModified       time.Time               `json:"lastModified"`
 
 	// OAuth settings (Codex-compatible)
@@ -93,7 +81,6 @@ func NewConfig() *Config {
 		SchemaVersion: SchemaVersion,
 		Servers:       make(map[string]ServerConfig),
 		Namespaces:    []NamespaceConfig{},
-		Proxies:       []ProxyConfig{},
 		LastModified:  time.Now(),
 	}
 }

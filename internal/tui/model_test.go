@@ -62,12 +62,6 @@ func TestModel_TabSwitching(t *testing.T) {
 		t.Errorf("expected tab to be Namespaces after '2', got %v", m.activeTab)
 	}
 
-	// Tab3 (Proxies) is a placeholder view
-	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
-	if m.activeTab != TabProxies {
-		t.Errorf("expected tab to be Proxies after '3', got %v", m.activeTab)
-	}
-
 	// Press '1' to go back to Servers
 	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
 	if m.activeTab != TabServers {
@@ -78,15 +72,10 @@ func TestModel_TabSwitching(t *testing.T) {
 func TestModel_TabCyclesWithTabAndShiftTab(t *testing.T) {
 	m := newTestModel(t)
 
-	// tab: Servers -> Namespaces -> Proxies -> Servers
+	// tab: Servers -> Namespaces -> Servers
 	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
 	if m.activeTab != TabNamespaces {
 		t.Errorf("expected tab to be Namespaces after Tab, got %v", m.activeTab)
-	}
-
-	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.activeTab != TabProxies {
-		t.Errorf("expected tab to be Proxies after Tab, got %v", m.activeTab)
 	}
 
 	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
@@ -94,10 +83,10 @@ func TestModel_TabCyclesWithTabAndShiftTab(t *testing.T) {
 		t.Errorf("expected tab to be Servers after Tab, got %v", m.activeTab)
 	}
 
-	// shift+tab: Servers -> Proxies
+	// shift+tab: Servers -> Namespaces
 	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyShiftTab})
-	if m.activeTab != TabProxies {
-		t.Errorf("expected tab to be Proxies after Shift+Tab, got %v", m.activeTab)
+	if m.activeTab != TabNamespaces {
+		t.Errorf("expected tab to be Namespaces after Shift+Tab, got %v", m.activeTab)
 	}
 }
 
