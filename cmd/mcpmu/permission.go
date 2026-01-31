@@ -82,20 +82,18 @@ func runPermissionSet(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	ns := cfg.FindNamespaceByName(namespaceName)
-	if ns == nil {
+	if cfg.GetNamespace(namespaceName) == nil {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	// Lookup server by name
-	srv := cfg.FindServerByName(serverName)
-	if srv == nil {
+	if cfg.GetServer(serverName) == nil {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 
-	toolName := normalizeToolName(toolNameRaw, srv.Name, srv.ID)
+	toolName := normalizeToolName(toolNameRaw, serverName)
 
-	if err := cfg.SetToolPermission(ns.ID, srv.ID, toolName, enabled); err != nil {
+	if err := cfg.SetToolPermission(namespaceName, serverName, toolName, enabled); err != nil {
 		return err
 	}
 
@@ -148,20 +146,18 @@ func runPermissionUnset(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	ns := cfg.FindNamespaceByName(namespaceName)
-	if ns == nil {
+	if cfg.GetNamespace(namespaceName) == nil {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	// Lookup server by name
-	srv := cfg.FindServerByName(serverName)
-	if srv == nil {
+	if cfg.GetServer(serverName) == nil {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 
-	toolName := normalizeToolName(toolNameRaw, srv.Name, srv.ID)
+	toolName := normalizeToolName(toolNameRaw, serverName)
 
-	if err := cfg.UnsetToolPermission(ns.ID, srv.ID, toolName); err != nil {
+	if err := cfg.UnsetToolPermission(namespaceName, serverName, toolName); err != nil {
 		return err
 	}
 
@@ -210,28 +206,28 @@ func runPermissionList(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	ns := cfg.FindNamespaceByName(namespaceName)
+	ns := cfg.GetNamespace(namespaceName)
 	if ns == nil {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
-	permissions := cfg.GetToolPermissionsForNamespace(ns.ID)
+	permissions := cfg.GetToolPermissionsForNamespace(namespaceName)
 
 	// Sort by server, then tool
 	sort.Slice(permissions, func(i, j int) bool {
-		if permissions[i].ServerID != permissions[j].ServerID {
-			return permissions[i].ServerID < permissions[j].ServerID
+		if permissions[i].Server != permissions[j].Server {
+			return permissions[i].Server < permissions[j].Server
 		}
 		return permissions[i].ToolName < permissions[j].ToolName
 	})
 
 	if permissionListJSON {
-		return outputPermissionsJSON(cfg, ns, permissions)
+		return outputPermissionsJSON(namespaceName, ns, permissions)
 	}
-	return outputPermissionsTable(cfg, ns, permissions)
+	return outputPermissionsTable(namespaceName, ns, permissions)
 }
 
-func outputPermissionsJSON(cfg *config.Config, ns *config.NamespaceConfig, permissions []config.ToolPermission) error {
+func outputPermissionsJSON(namespaceName string, ns *config.NamespaceConfig, permissions []config.ToolPermission) error {
 	type permissionView struct {
 		Server     string `json:"server"`
 		Tool       string `json:"tool"`
@@ -246,26 +242,20 @@ func outputPermissionsJSON(cfg *config.Config, ns *config.NamespaceConfig, permi
 
 	views := make([]permissionView, len(permissions))
 	for i, p := range permissions {
-		srv := cfg.GetServer(p.ServerID)
-		serverName := p.ServerID
-		if srv != nil {
-			serverName = srv.Name
-		}
-
 		perm := "allow"
 		if !p.Enabled {
 			perm = "deny"
 		}
 
 		views[i] = permissionView{
-			Server:     serverName,
+			Server:     p.Server,
 			Tool:       p.ToolName,
 			Permission: perm,
 		}
 	}
 
 	result := resultView{
-		Namespace:     ns.Name,
+		Namespace:     namespaceName,
 		DenyByDefault: ns.DenyByDefault,
 		Permissions:   views,
 	}
@@ -278,13 +268,13 @@ func outputPermissionsJSON(cfg *config.Config, ns *config.NamespaceConfig, permi
 	return nil
 }
 
-func outputPermissionsTable(cfg *config.Config, ns *config.NamespaceConfig, permissions []config.ToolPermission) error {
+func outputPermissionsTable(namespaceName string, ns *config.NamespaceConfig, permissions []config.ToolPermission) error {
 	// Print namespace info
 	denyDefault := "no"
 	if ns.DenyByDefault {
 		denyDefault = "yes"
 	}
-	fmt.Printf("Namespace: %s (deny-by-default: %s)\n\n", ns.Name, denyDefault)
+	fmt.Printf("Namespace: %s (deny-by-default: %s)\n\n", namespaceName, denyDefault)
 
 	if len(permissions) == 0 {
 		fmt.Println("No explicit permissions configured")
@@ -296,13 +286,8 @@ func outputPermissionsTable(cfg *config.Config, ns *config.NamespaceConfig, perm
 	toolWidth := 4
 
 	for _, p := range permissions {
-		srv := cfg.GetServer(p.ServerID)
-		serverName := p.ServerID
-		if srv != nil {
-			serverName = srv.Name
-		}
-		if len(serverName) > serverWidth {
-			serverWidth = len(serverName)
+		if len(p.Server) > serverWidth {
+			serverWidth = len(p.Server)
 		}
 		if len(p.ToolName) > toolWidth {
 			toolWidth = len(p.ToolName)
@@ -314,27 +299,21 @@ func outputPermissionsTable(cfg *config.Config, ns *config.NamespaceConfig, perm
 
 	// Print permissions
 	for _, p := range permissions {
-		srv := cfg.GetServer(p.ServerID)
-		serverName := p.ServerID
-		if srv != nil {
-			serverName = srv.Name
-		}
-
 		perm := "allow"
 		if !p.Enabled {
 			perm = "deny"
 		}
 
-		fmt.Printf("%-*s  %-*s  %s\n", serverWidth, serverName, toolWidth, p.ToolName, perm)
+		fmt.Printf("%-*s  %-*s  %s\n", serverWidth, p.Server, toolWidth, p.ToolName, perm)
 	}
 
 	return nil
 }
 
 // normalizeToolName strips a qualified server prefix when it matches the
-// selected server. This allows users to paste tools/list output (serverID.tool)
+// selected server. This allows users to paste tools/list output (serverName.tool)
 // while preserving legitimate tool names that include dots.
-func normalizeToolName(toolName, serverName, serverID string) string {
+func normalizeToolName(toolName, serverName string) string {
 	toolName = strings.TrimSpace(toolName)
 	if toolName == "" {
 		return toolName
@@ -346,7 +325,7 @@ func normalizeToolName(toolName, serverName, serverID string) string {
 	}
 
 	prefix := parts[0]
-	if prefix == serverID || (serverName != "" && prefix == serverName) {
+	if serverName != "" && prefix == serverName {
 		return parts[1]
 	}
 

@@ -13,11 +13,12 @@ import (
 
 // NamespaceDetailModel displays detailed information about a namespace.
 type NamespaceDetailModel struct {
-	theme     theme.Theme
-	namespace *config.NamespaceConfig
-	isDefault bool
+	theme         theme.Theme
+	namespaceName string // Namespace name (map key)
+	namespace     *config.NamespaceConfig
+	isDefault     bool
 	// All servers for assignment display
-	allServers []config.ServerConfig
+	allServers []config.ServerEntry
 	// Tool permissions for this namespace
 	permissions []config.ToolPermission
 	viewport    viewport.Model
@@ -36,7 +37,8 @@ func NewNamespaceDetail(th theme.Theme) NamespaceDetailModel {
 }
 
 // SetNamespace sets the namespace to display.
-func (m *NamespaceDetailModel) SetNamespace(ns *config.NamespaceConfig, isDefault bool, allServers []config.ServerConfig, permissions []config.ToolPermission) {
+func (m *NamespaceDetailModel) SetNamespace(name string, ns *config.NamespaceConfig, isDefault bool, allServers []config.ServerEntry, permissions []config.ToolPermission) {
+	m.namespaceName = name
 	m.namespace = ns
 	m.isDefault = isDefault
 	m.allServers = allServers
@@ -73,7 +75,7 @@ func (m *NamespaceDetailModel) updateContent() {
 	var content strings.Builder
 
 	// Header
-	content.WriteString(m.theme.Title.Render(m.namespace.Name))
+	content.WriteString(m.theme.Title.Render(m.namespaceName))
 	if m.isDefault {
 		content.WriteString("  ")
 		content.WriteString(m.theme.Primary.Render("[default]"))
@@ -116,22 +118,11 @@ func (m *NamespaceDetailModel) updateContent() {
 			Width(m.width - 8)
 
 		var serversContent strings.Builder
-		for i, serverID := range m.namespace.ServerIDs {
+		for i, serverName := range m.namespace.ServerIDs {
 			if i > 0 {
 				serversContent.WriteString("\n")
 			}
-			// Find server name
-			serverName := serverID
-			for _, srv := range m.allServers {
-				if srv.ID == serverID {
-					if srv.Name != "" {
-						serverName = srv.Name
-					}
-					break
-				}
-			}
 			serversContent.WriteString(m.theme.Primary.Render(serverName))
-			serversContent.WriteString(m.theme.Faint.Render(fmt.Sprintf(" (%s)", serverID)))
 		}
 		content.WriteString(serverBox.Render(serversContent.String()))
 	}
@@ -163,26 +154,16 @@ func (m *NamespaceDetailModel) updateContent() {
 		// Group by server
 		serverPerms := make(map[string][]config.ToolPermission)
 		for _, perm := range m.permissions {
-			serverPerms[perm.ServerID] = append(serverPerms[perm.ServerID], perm)
+			serverPerms[perm.Server] = append(serverPerms[perm.Server], perm)
 		}
 
 		first := true
-		for serverID, perms := range serverPerms {
+		for serverName, perms := range serverPerms {
 			if !first {
 				permsContent.WriteString("\n\n")
 			}
 			first = false
 
-			// Find server name
-			serverName := serverID
-			for _, srv := range m.allServers {
-				if srv.ID == serverID {
-					if srv.Name != "" {
-						serverName = srv.Name
-					}
-					break
-				}
-			}
 			permsContent.WriteString(m.theme.Item.Bold(true).Render(serverName))
 			permsContent.WriteString("\n")
 

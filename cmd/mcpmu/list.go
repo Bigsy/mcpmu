@@ -49,7 +49,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get servers sorted by name
-	servers := cfg.ServerList()
+	servers := cfg.ServerEntries()
 	sort.Slice(servers, func(i, j int) bool {
 		return servers[i].Name < servers[j].Name
 	})
@@ -60,8 +60,8 @@ func runList(cmd *cobra.Command, args []string) error {
 	return outputTable(servers)
 }
 
-func outputJSON(servers []config.ServerConfig) error {
-	// Create a simplified view without internal IDs
+func outputJSON(servers []config.ServerEntry) error {
+	// Create a simplified view
 	type serverView struct {
 		Name      string            `json:"name"`
 		Kind      string            `json:"kind"`
@@ -76,18 +76,18 @@ func outputJSON(servers []config.ServerConfig) error {
 	}
 
 	views := make([]serverView, len(servers))
-	for i, srv := range servers {
+	for i, entry := range servers {
 		views[i] = serverView{
-			Name:      srv.Name,
-			Kind:      string(srv.GetKind()),
-			Command:   srv.Command,
-			Args:      srv.Args,
-			URL:       srv.URL,
-			Cwd:       srv.Cwd,
-			Env:       srv.Env,
-			Enabled:   srv.IsEnabled(),
-			Autostart: srv.Autostart,
-			Auth:      getAuthType(srv),
+			Name:      entry.Name,
+			Kind:      string(entry.Config.GetKind()),
+			Command:   entry.Config.Command,
+			Args:      entry.Config.Args,
+			URL:       entry.Config.URL,
+			Cwd:       entry.Config.Cwd,
+			Env:       entry.Config.Env,
+			Enabled:   entry.Config.IsEnabled(),
+			Autostart: entry.Config.Autostart,
+			Auth:      getAuthType(entry.Config),
 		}
 	}
 
@@ -111,26 +111,26 @@ func getAuthType(srv config.ServerConfig) string {
 	return "oauth"
 }
 
-func outputTable(servers []config.ServerConfig) error {
+func outputTable(servers []config.ServerEntry) error {
 	if len(servers) == 0 {
 		fmt.Println("No servers configured")
 		return nil
 	}
 
 	// Calculate column widths
-	nameWidth := 4     // "NAME"
-	typeWidth := 4     // "TYPE"
-	cmdWidth := 15     // "COMMAND/URL"
+	nameWidth := 4  // "NAME"
+	typeWidth := 4  // "TYPE"
+	cmdWidth := 15  // "COMMAND/URL"
 
-	for _, srv := range servers {
-		if len(srv.Name) > nameWidth {
-			nameWidth = len(srv.Name)
+	for _, entry := range servers {
+		if len(entry.Name) > nameWidth {
+			nameWidth = len(entry.Name)
 		}
-		kindStr := formatKind(srv)
+		kindStr := formatKind(entry.Config)
 		if len(kindStr) > typeWidth {
 			typeWidth = len(kindStr)
 		}
-		cmdStr := formatCommandOrURL(srv)
+		cmdStr := formatCommandOrURL(entry.Config)
 		if len(cmdStr) > cmdWidth {
 			cmdWidth = len(cmdStr)
 		}
@@ -145,21 +145,21 @@ func outputTable(servers []config.ServerConfig) error {
 	fmt.Printf("%-*s  %-*s  %-*s  %-8s  %s\n", nameWidth, "NAME", typeWidth, "TYPE", cmdWidth, "COMMAND/URL", "AUTH", "ENABLED")
 
 	// Print servers
-	for _, srv := range servers {
-		cmdStr := formatCommandOrURL(srv)
+	for _, entry := range servers {
+		cmdStr := formatCommandOrURL(entry.Config)
 		if len(cmdStr) > cmdWidth {
 			cmdStr = cmdStr[:cmdWidth-3] + "..."
 		}
 
 		enabled := "yes"
-		if !srv.IsEnabled() {
+		if !entry.Config.IsEnabled() {
 			enabled = "no"
 		}
 
-		auth := getAuthType(srv)
-		kindStr := formatKind(srv)
+		auth := getAuthType(entry.Config)
+		kindStr := formatKind(entry.Config)
 
-		fmt.Printf("%-*s  %-*s  %-*s  %-8s  %s\n", nameWidth, srv.Name, typeWidth, kindStr, cmdWidth, cmdStr, auth, enabled)
+		fmt.Printf("%-*s  %-*s  %-*s  %-8s  %s\n", nameWidth, entry.Name, typeWidth, kindStr, cmdWidth, cmdStr, auth, enabled)
 	}
 
 	return nil

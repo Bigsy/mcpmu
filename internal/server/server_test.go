@@ -366,10 +366,10 @@ func TestServer_NamespaceSelection_NoNamespaces(t *testing.T) {
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Server 1", Enabled: &enabled, Command: "echo"},
-			"srv2": {ID: "srv2", Name: "Server 2", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
+			"srv2": {Enabled: &enabled, Command: "echo"},
 		},
-		Namespaces: []config.NamespaceConfig{}, // No namespaces
+		Namespaces: map[string]config.NamespaceConfig{}, // No namespaces
 	}
 
 	var stdout bytes.Buffer
@@ -411,10 +411,10 @@ func TestServer_NamespaceSelection_NoNamespaces(t *testing.T) {
 func TestServer_NamespaceSelection_MultipleNamespacesNoDefault(t *testing.T) {
 	cfg := &config.Config{
 		SchemaVersion: 1,
-		Servers:       map[string]config.ServerConfig{},
-		Namespaces: []config.NamespaceConfig{
-			{ID: "ns1", Name: "Namespace 1"},
-			{ID: "ns2", Name: "Namespace 2"},
+		Servers: map[string]config.ServerConfig{},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns1": {Description: "Namespace 1"},
+			"ns2": {Description: "Namespace 2"},
 		},
 	}
 
@@ -460,12 +460,12 @@ func TestServer_NamespaceSelection_MultipleNamespacesNoDefault(t *testing.T) {
 
 func TestServer_NamespaceSelection_WithDefault(t *testing.T) {
 	cfg := &config.Config{
-		SchemaVersion:      1,
-		DefaultNamespaceID: "ns1",
-		Servers:            map[string]config.ServerConfig{},
-		Namespaces: []config.NamespaceConfig{
-			{ID: "ns1", Name: "Namespace 1"},
-			{ID: "ns2", Name: "Namespace 2"},
+		SchemaVersion:    1,
+		DefaultNamespace: "ns1",
+		Servers:          map[string]config.ServerConfig{},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns1": {Description: "Namespace 1"},
+			"ns2": {Description: "Namespace 2"},
 		},
 	}
 
@@ -509,9 +509,9 @@ func TestServer_NamespaceSelection_ExplicitNamespace(t *testing.T) {
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
-		Namespaces: []config.NamespaceConfig{
-			{ID: "ns1", Name: "Namespace 1"},
-			{ID: "ns2", Name: "Namespace 2"},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns1": {Description: "Namespace 1"},
+			"ns2": {Description: "Namespace 2"},
 		},
 	}
 

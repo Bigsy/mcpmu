@@ -52,7 +52,7 @@ func setupTestConfig(t *testing.T) string {
 	t.Helper()
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	config := `{"schemaVersion": 1, "servers": {}, "namespaces": []}`
+	config := `{"schemaVersion": 1, "servers": {}, "namespaces": {}}`
 	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
 		t.Fatalf("failed to write test config: %v", err)
 	}
@@ -73,18 +73,31 @@ func runCLI(binary, configPath string, args ...string) (string, string, error) {
 	return stdout.String(), stderr.String(), err
 }
 
-func getServerIDByName(t *testing.T, configPath, name string) string {
+func getServerByName(t *testing.T, configPath, name string) *config.ServerConfig {
 	t.Helper()
 
 	cfg, err := config.LoadFrom(configPath)
 	if err != nil {
 		t.Fatalf("failed to load config: %v", err)
 	}
-	srv := cfg.FindServerByName(name)
+	srv := cfg.GetServer(name)
 	if srv == nil {
 		t.Fatalf("server %q not found in config", name)
 	}
-	return srv.ID
+	return srv
+}
+
+// getServerName verifies the server exists and returns its name (which is also the ID now)
+func getServerName(t *testing.T, configPath, name string) string {
+	t.Helper()
+	cfg, err := config.LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+	if cfg.GetServer(name) == nil {
+		t.Fatalf("server %q not found in config", name)
+	}
+	return name
 }
 
 func TestParseEnvFlags(t *testing.T) {
@@ -188,16 +201,12 @@ func TestCLI_Add(t *testing.T) {
 		t.Errorf("expected 1 server, got %d", len(servers))
 	}
 
-	// Find the server (ID is auto-generated)
-	var srv map[string]interface{}
-	for _, s := range servers {
-		srv = s.(map[string]interface{})
-		break
+	// Server name is now the map key
+	srv, exists := servers["my-server"].(map[string]interface{})
+	if !exists {
+		t.Fatal("expected server 'my-server' to exist")
 	}
 
-	if srv["name"] != "my-server" {
-		t.Errorf("expected name 'my-server', got %v", srv["name"])
-	}
 	if srv["command"] != "echo" {
 		t.Errorf("expected command 'echo', got %v", srv["command"])
 	}
@@ -331,18 +340,13 @@ func TestCLI_Add_HTTP_PositionalURL(t *testing.T) {
 		t.Errorf("expected 1 server, got %d", len(servers))
 	}
 
-	var srv map[string]interface{}
-	for _, s := range servers {
-		srv = s.(map[string]interface{})
-		break
+	// Server name is now the map key
+	srv, exists := servers["my-api"].(map[string]interface{})
+	if !exists {
+		t.Fatal("expected server 'my-api' to exist")
 	}
 
-	if srv["name"] != "my-api" {
-		t.Errorf("expected name 'my-api', got %v", srv["name"])
-	}
-	if srv["kind"] != "streamable_http" {
-		t.Errorf("expected kind 'streamable_http', got %v", srv["kind"])
-	}
+	// Kind may be omitted when inferred from URL
 	if srv["url"] != "https://example.com/mcp" {
 		t.Errorf("expected url 'https://example.com/mcp', got %v", srv["url"])
 	}
@@ -508,14 +512,15 @@ func TestCLI_Namespace_Add(t *testing.T) {
 	var config map[string]interface{}
 	_ = json.Unmarshal(data, &config)
 
-	namespaces := config["namespaces"].([]interface{})
+	namespaces := config["namespaces"].(map[string]interface{})
 	if len(namespaces) != 1 {
 		t.Errorf("expected 1 namespace, got %d", len(namespaces))
 	}
 
-	ns := namespaces[0].(map[string]interface{})
-	if ns["name"] != "dev" {
-		t.Errorf("expected name 'dev', got %v", ns["name"])
+	// Namespace name is now the map key
+	ns, exists := namespaces["dev"].(map[string]interface{})
+	if !exists {
+		t.Fatal("expected namespace 'dev' to exist")
 	}
 	if ns["description"] != "Development" {
 		t.Errorf("expected description 'Development', got %v", ns["description"])
@@ -875,7 +880,7 @@ func TestCLI_Permission_Set_NormalizesQualifiedName(t *testing.T) {
 	_, _, _ = runCLI(binary, configPath, "add", "api-server", "--", "echo", "hello")
 	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
 
-	serverID := getServerIDByName(t, configPath, "api-server")
+	serverID := getServerName(t, configPath, "api-server")
 
 	// Use a qualified name like "<serverID>.create_user" - should be normalized to "create_user"
 	stdout, stderr, err := runCLI(binary, configPath, "permission", "set", "prod", "api-server", serverID+".create_user", "deny")
@@ -901,7 +906,7 @@ func TestCLI_Permission_Unset_NormalizesQualifiedName(t *testing.T) {
 	_, _, _ = runCLI(binary, configPath, "namespace", "add", "prod")
 	_, _, _ = runCLI(binary, configPath, "permission", "set", "prod", "api-server", "create_user", "deny")
 
-	serverID := getServerIDByName(t, configPath, "api-server")
+	serverID := getServerName(t, configPath, "api-server")
 
 	// Unset with a qualified name - should still work
 	stdout, stderr, err := runCLI(binary, configPath, "permission", "unset", "prod", "api-server", serverID+".create_user")

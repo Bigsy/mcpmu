@@ -20,11 +20,10 @@ const (
 )
 
 // ServerConfig represents an MCP server configuration.
-// Field names are compatible with mcpServers format for easy copy/paste.
+// Field names are compatible with mcpServers format (Claude Desktop, Cursor, etc).
+// The server name/identifier is the map key, not stored in this struct.
 type ServerConfig struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Kind      ServerKind        `json:"kind"`
+	Kind      ServerKind        `json:"kind,omitempty"`      // optional, inferred from command vs url
 	Enabled   *bool             `json:"enabled,omitempty"`   // nil treated as true (enabled by default)
 	Autostart bool              `json:"autostart,omitempty"` // start server automatically on app launch
 	Command   string            `json:"command,omitempty"`   // stdio only
@@ -33,7 +32,7 @@ type ServerConfig struct {
 	Env       map[string]string `json:"env,omitempty"`
 
 	// Streamable HTTP fields (mutually exclusive with Command)
-	URL               string            `json:"url,omitempty"`                 // Server URL for HTTP transport
+	URL               string            `json:"url,omitempty"`                  // Server URL for HTTP transport
 	BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty"` // Env var containing bearer token
 	HTTPHeaders       map[string]string `json:"http_headers,omitempty"`         // Static HTTP headers
 	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`     // HTTP headers from env vars (key=header name, value=env var name)
@@ -44,31 +43,44 @@ type ServerConfig struct {
 	ToolTimeoutSec    int `json:"tool_timeout_sec,omitempty"`    // Default 60
 }
 
+// ServerEntry pairs a server name with its configuration.
+// Used for iteration when the name is needed.
+type ServerEntry struct {
+	Name   string
+	Config ServerConfig
+}
+
 // NamespaceConfig represents a namespace that groups servers and their tool permissions.
+// The namespace name/identifier is the map key, not stored in this struct.
 type NamespaceConfig struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
 	Description   string   `json:"description,omitempty"`
 	ServerIDs     []string `json:"serverIds"`
 	DenyByDefault bool     `json:"denyByDefault,omitempty"` // If true, unconfigured tools are denied
 }
 
+// NamespaceEntry pairs a namespace name with its configuration.
+// Used for iteration when the name is needed.
+type NamespaceEntry struct {
+	Name   string
+	Config NamespaceConfig
+}
+
 // ToolPermission controls whether a specific tool is enabled in a namespace.
 type ToolPermission struct {
-	NamespaceID string `json:"namespaceId"`
-	ServerID    string `json:"serverId"`
-	ToolName    string `json:"toolName"`
-	Enabled     bool   `json:"enabled"`
+	Namespace string `json:"namespace"`
+	Server    string `json:"server"`
+	ToolName  string `json:"toolName"`
+	Enabled   bool   `json:"enabled"`
 }
 
 // Config is the root configuration structure.
 type Config struct {
-	SchemaVersion      int                     `json:"schemaVersion"`
-	DefaultNamespaceID string                  `json:"defaultNamespaceId,omitempty"`
-	Servers            map[string]ServerConfig `json:"servers"`
-	Namespaces      []NamespaceConfig `json:"namespaces,omitempty"`
-	ToolPermissions []ToolPermission  `json:"toolPermissions,omitempty"`
-	LastModified       time.Time               `json:"lastModified"`
+	SchemaVersion    int                        `json:"schemaVersion"`
+	DefaultNamespace string                     `json:"defaultNamespace,omitempty"`
+	Servers          map[string]ServerConfig    `json:"servers"`
+	Namespaces       map[string]NamespaceConfig `json:"namespaces,omitempty"`
+	ToolPermissions  []ToolPermission           `json:"toolPermissions,omitempty"`
+	LastModified     time.Time                  `json:"lastModified"`
 
 	// OAuth settings (Codex-compatible)
 	MCPOAuthCredentialStore string `json:"mcp_oauth_credentials_store,omitempty"` // "auto", "keyring", "file"
@@ -80,7 +92,7 @@ func NewConfig() *Config {
 	return &Config{
 		SchemaVersion: SchemaVersion,
 		Servers:       make(map[string]ServerConfig),
-		Namespaces:    []NamespaceConfig{},
+		Namespaces:    make(map[string]NamespaceConfig),
 		LastModified:  time.Now(),
 	}
 }
@@ -128,39 +140,48 @@ func (s *ServerConfig) SetEnabled(enabled bool) {
 	s.Enabled = &enabled
 }
 
-// ServerList returns the servers as a slice, sorted by name for display.
-func (c *Config) ServerList() []ServerConfig {
-	servers := make([]ServerConfig, 0, len(c.Servers))
-	for _, s := range c.Servers {
-		servers = append(servers, s)
+// ServerEntries returns the servers as name/config pairs, sorted by name for display.
+func (c *Config) ServerEntries() []ServerEntry {
+	entries := make([]ServerEntry, 0, len(c.Servers))
+	for name, cfg := range c.Servers {
+		entries = append(entries, ServerEntry{Name: name, Config: cfg})
 	}
 
 	// Keep list ordering stable across runs (maps are randomized).
-	sort.SliceStable(servers, func(i, j int) bool {
-		key := func(s ServerConfig) string {
-			if s.Name != "" {
-				return strings.ToLower(s.Name)
-			}
-			if s.Command != "" {
-				return strings.ToLower(s.Command)
-			}
-			return strings.ToLower(s.ID)
-		}
-		ki := key(servers[i])
-		kj := key(servers[j])
-		if ki == kj {
-			return servers[i].ID < servers[j].ID
-		}
-		return ki < kj
+	sort.SliceStable(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
 
-	return servers
+	return entries
 }
 
-// GetServer returns a server by ID, or nil if not found.
-func (c *Config) GetServer(id string) *ServerConfig {
-	if s, ok := c.Servers[id]; ok {
+// NamespaceEntries returns the namespaces as name/config pairs, sorted by name for display.
+func (c *Config) NamespaceEntries() []NamespaceEntry {
+	entries := make([]NamespaceEntry, 0, len(c.Namespaces))
+	for name, cfg := range c.Namespaces {
+		entries = append(entries, NamespaceEntry{Name: name, Config: cfg})
+	}
+
+	// Keep list ordering stable across runs (maps are randomized).
+	sort.SliceStable(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
+
+	return entries
+}
+
+// GetServer returns a server by name, or nil if not found.
+func (c *Config) GetServer(name string) *ServerConfig {
+	if s, ok := c.Servers[name]; ok {
 		return &s
+	}
+	return nil
+}
+
+// GetNamespace returns a namespace by name, or nil if not found.
+func (c *Config) GetNamespace(name string) *NamespaceConfig {
+	if ns, ok := c.Namespaces[name]; ok {
+		return &ns
 	}
 	return nil
 }

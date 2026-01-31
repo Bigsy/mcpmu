@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,13 +63,8 @@ func LoadFrom(path string) (*Config, error) {
 	if cfg.Servers == nil {
 		cfg.Servers = make(map[string]ServerConfig)
 	}
-
-	// Backfill ServerConfig.ID from map keys
-	for id, srv := range cfg.Servers {
-		if srv.ID == "" {
-			srv.ID = id
-			cfg.Servers[id] = srv
-		}
+	if cfg.Namespaces == nil {
+		cfg.Namespaces = make(map[string]NamespaceConfig)
 	}
 
 	return &cfg, nil
@@ -128,123 +121,103 @@ func SaveTo(cfg *Config, path string) error {
 	return nil
 }
 
-// GenerateID creates a short unique ID for servers.
-// IDs are 4 characters [a-z0-9].
-func GenerateID() string {
-	bytes := make([]byte, 2)
-	if _, err := rand.Read(bytes); err != nil {
-		// Fallback to timestamp-based
-		return fmt.Sprintf("%04x", time.Now().UnixNano()&0xFFFF)
+// ValidateName checks if a server or namespace name is valid.
+// Names cannot be empty or contain '.'.
+func ValidateName(name string) error {
+	if name == "" {
+		return errors.New("name cannot be empty")
 	}
-	return hex.EncodeToString(bytes)
-}
-
-// ValidateID checks if a server ID is valid.
-// IDs must be 4 characters [a-z0-9] and cannot contain '.'.
-func ValidateID(id string) error {
-	if len(id) != 4 {
-		return errors.New("id must be 4 characters")
-	}
-	if strings.Contains(id, ".") {
-		return errors.New("id cannot contain '.'")
-	}
-	for _, c := range id {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-			return errors.New("id must contain only [a-z0-9]")
-		}
+	if strings.Contains(name, ".") {
+		return errors.New("name cannot contain '.'")
 	}
 	return nil
 }
 
-// AddServer adds a new server to the config, generating an ID if needed.
-// Returns an error if a server with the same name already exists.
-func (c *Config) AddServer(srv ServerConfig) (string, error) {
+// AddServer adds a new server to the config with the given name.
+// Returns an error if a server with that name already exists.
+func (c *Config) AddServer(name string, srv ServerConfig) error {
+	// Validate name
+	if err := ValidateName(name); err != nil {
+		return fmt.Errorf("invalid name: %w", err)
+	}
+
 	// Check for duplicate name
-	if srv.Name != "" {
-		if existing := c.FindServerByName(srv.Name); existing != nil {
-			return "", fmt.Errorf("server with name %q already exists", srv.Name)
-		}
+	if _, exists := c.Servers[name]; exists {
+		return fmt.Errorf("server %q already exists", name)
 	}
 
-	// Generate ID if empty
-	if srv.ID == "" {
-		for {
-			srv.ID = GenerateID()
-			if _, exists := c.Servers[srv.ID]; !exists {
-				break
-			}
-		}
-	}
-
-	// Validate ID
-	if err := ValidateID(srv.ID); err != nil {
-		return "", fmt.Errorf("invalid id: %w", err)
-	}
-
-	// Check for ID collision
-	if _, exists := c.Servers[srv.ID]; exists {
-		return "", fmt.Errorf("server id %q already exists", srv.ID)
-	}
-
-	// Set default kind
-	if srv.Kind == "" {
-		srv.Kind = ServerKindStdio
-	}
-
-	c.Servers[srv.ID] = srv
-	return srv.ID, nil
-}
-
-// FindServerByName returns the server with the given name, or nil if not found.
-func (c *Config) FindServerByName(name string) *ServerConfig {
-	for _, srv := range c.Servers {
-		if srv.Name == name {
-			return &srv
-		}
-	}
+	c.Servers[name] = srv
 	return nil
-}
-
-// DeleteServerByName removes a server by name.
-// Returns an error if no server with that name exists.
-func (c *Config) DeleteServerByName(name string) error {
-	for id, srv := range c.Servers {
-		if srv.Name == name {
-			return c.DeleteServer(id)
-		}
-	}
-	return fmt.Errorf("server %q not found", name)
 }
 
 // UpdateServer updates an existing server configuration.
-func (c *Config) UpdateServer(srv ServerConfig) error {
-	if _, exists := c.Servers[srv.ID]; !exists {
-		return fmt.Errorf("server %q not found", srv.ID)
+func (c *Config) UpdateServer(name string, srv ServerConfig) error {
+	if _, exists := c.Servers[name]; !exists {
+		return fmt.Errorf("server %q not found", name)
 	}
-	c.Servers[srv.ID] = srv
+	c.Servers[name] = srv
 	return nil
 }
 
-// DeleteServer removes a server from the config.
-func (c *Config) DeleteServer(id string) error {
-	if _, exists := c.Servers[id]; !exists {
-		return fmt.Errorf("server %q not found", id)
+// DeleteServer removes a server from the config by name.
+// Also cleans up namespace references and tool permissions.
+func (c *Config) DeleteServer(name string) error {
+	if _, exists := c.Servers[name]; !exists {
+		return fmt.Errorf("server %q not found", name)
 	}
-	delete(c.Servers, id)
+	delete(c.Servers, name)
 
 	// Clean up namespace references
-	for i := range c.Namespaces {
-		c.Namespaces[i].ServerIDs = removeString(c.Namespaces[i].ServerIDs, id)
+	for nsName, ns := range c.Namespaces {
+		ns.ServerIDs = removeString(ns.ServerIDs, name)
+		c.Namespaces[nsName] = ns
 	}
 
 	// Clean up tool permissions
 	filtered := make([]ToolPermission, 0, len(c.ToolPermissions))
 	for _, tp := range c.ToolPermissions {
-		if tp.ServerID != id {
+		if tp.Server != name {
 			filtered = append(filtered, tp)
 		}
 	}
 	c.ToolPermissions = filtered
+
+	return nil
+}
+
+// RenameServer renames a server, updating all references atomically.
+func (c *Config) RenameServer(oldName, newName string) error {
+	srv, exists := c.Servers[oldName]
+	if !exists {
+		return fmt.Errorf("server %q not found", oldName)
+	}
+	if _, exists := c.Servers[newName]; exists {
+		return fmt.Errorf("server %q already exists", newName)
+	}
+	if err := ValidateName(newName); err != nil {
+		return fmt.Errorf("invalid name: %w", err)
+	}
+
+	// Move in servers map
+	delete(c.Servers, oldName)
+	c.Servers[newName] = srv
+
+	// Update namespace references
+	for nsName, ns := range c.Namespaces {
+		for i, sid := range ns.ServerIDs {
+			if sid == oldName {
+				ns.ServerIDs[i] = newName
+				c.Namespaces[nsName] = ns
+			}
+		}
+	}
+
+	// Update tool permissions
+	for i, tp := range c.ToolPermissions {
+		if tp.Server == oldName {
+			c.ToolPermissions[i].Server = newName
+		}
+	}
 
 	return nil
 }
@@ -259,54 +232,17 @@ func removeString(slice []string, s string) []string {
 	return result
 }
 
-// FindNamespaceByName returns the namespace with the given name, or nil if not found.
-func (c *Config) FindNamespaceByName(name string) *NamespaceConfig {
-	for i := range c.Namespaces {
-		if c.Namespaces[i].Name == name {
-			return &c.Namespaces[i]
-		}
+// AddNamespace adds a new namespace to the config with the given name.
+// Returns an error if a namespace with that name already exists.
+func (c *Config) AddNamespace(name string, ns NamespaceConfig) error {
+	// Validate name
+	if err := ValidateName(name); err != nil {
+		return fmt.Errorf("invalid name: %w", err)
 	}
-	return nil
-}
 
-// FindNamespaceByID returns the namespace with the given ID, or nil if not found.
-func (c *Config) FindNamespaceByID(id string) *NamespaceConfig {
-	for i := range c.Namespaces {
-		if c.Namespaces[i].ID == id {
-			return &c.Namespaces[i]
-		}
-	}
-	return nil
-}
-
-// AddNamespace adds a new namespace to the config, generating an ID if needed.
-// Returns an error if a namespace with the same name already exists.
-func (c *Config) AddNamespace(ns NamespaceConfig) (string, error) {
 	// Check for duplicate name
-	if ns.Name != "" {
-		if existing := c.FindNamespaceByName(ns.Name); existing != nil {
-			return "", fmt.Errorf("namespace with name %q already exists", ns.Name)
-		}
-	}
-
-	// Generate ID if empty
-	if ns.ID == "" {
-		for {
-			ns.ID = GenerateID()
-			if c.FindNamespaceByID(ns.ID) == nil {
-				break
-			}
-		}
-	}
-
-	// Validate ID
-	if err := ValidateID(ns.ID); err != nil {
-		return "", fmt.Errorf("invalid id: %w", err)
-	}
-
-	// Check for ID collision
-	if c.FindNamespaceByID(ns.ID) != nil {
-		return "", fmt.Errorf("namespace id %q already exists", ns.ID)
+	if _, exists := c.Namespaces[name]; exists {
+		return fmt.Errorf("namespace %q already exists", name)
 	}
 
 	// Initialize ServerIDs if nil
@@ -314,124 +250,130 @@ func (c *Config) AddNamespace(ns NamespaceConfig) (string, error) {
 		ns.ServerIDs = []string{}
 	}
 
-	c.Namespaces = append(c.Namespaces, ns)
-	return ns.ID, nil
+	c.Namespaces[name] = ns
+	return nil
 }
 
-// DeleteNamespaceByName removes a namespace by name.
-// Returns an error if no namespace with that name exists.
+// UpdateNamespace updates an existing namespace configuration.
+func (c *Config) UpdateNamespace(name string, ns NamespaceConfig) error {
+	if _, exists := c.Namespaces[name]; !exists {
+		return fmt.Errorf("namespace %q not found", name)
+	}
+	c.Namespaces[name] = ns
+	return nil
+}
+
+// DeleteNamespace removes a namespace by name.
 // Also cleans up tool permissions and default namespace reference.
-func (c *Config) DeleteNamespaceByName(name string) error {
-	for i, ns := range c.Namespaces {
-		if ns.Name == name {
-			return c.deleteNamespace(i, ns.ID)
-		}
+func (c *Config) DeleteNamespace(name string) error {
+	if _, exists := c.Namespaces[name]; !exists {
+		return fmt.Errorf("namespace %q not found", name)
 	}
-	return fmt.Errorf("namespace %q not found", name)
-}
 
-// DeleteNamespaceByID removes a namespace by ID.
-func (c *Config) DeleteNamespaceByID(id string) error {
-	for i, ns := range c.Namespaces {
-		if ns.ID == id {
-			return c.deleteNamespace(i, id)
-		}
-	}
-	return fmt.Errorf("namespace %q not found", id)
-}
-
-// deleteNamespace removes namespace at index and cleans up references.
-func (c *Config) deleteNamespace(index int, id string) error {
-	// Remove from slice
-	c.Namespaces = append(c.Namespaces[:index], c.Namespaces[index+1:]...)
+	delete(c.Namespaces, name)
 
 	// Clean up tool permissions
 	filtered := make([]ToolPermission, 0, len(c.ToolPermissions))
 	for _, tp := range c.ToolPermissions {
-		if tp.NamespaceID != id {
+		if tp.Namespace != name {
 			filtered = append(filtered, tp)
 		}
 	}
 	c.ToolPermissions = filtered
 
 	// Clear default namespace if it was this one
-	if c.DefaultNamespaceID == id {
-		c.DefaultNamespaceID = ""
+	if c.DefaultNamespace == name {
+		c.DefaultNamespace = ""
 	}
 
 	return nil
 }
 
-// UpdateNamespace updates an existing namespace configuration.
-// Returns an error if the new name conflicts with another namespace.
-func (c *Config) UpdateNamespace(ns NamespaceConfig) error {
-	// Check for duplicate name (but allow keeping the same name)
-	if ns.Name != "" {
-		if existing := c.FindNamespaceByName(ns.Name); existing != nil && existing.ID != ns.ID {
-			return fmt.Errorf("namespace with name %q already exists", ns.Name)
+// RenameNamespace renames a namespace, updating all references atomically.
+func (c *Config) RenameNamespace(oldName, newName string) error {
+	ns, exists := c.Namespaces[oldName]
+	if !exists {
+		return fmt.Errorf("namespace %q not found", oldName)
+	}
+	if _, exists := c.Namespaces[newName]; exists {
+		return fmt.Errorf("namespace %q already exists", newName)
+	}
+	if err := ValidateName(newName); err != nil {
+		return fmt.Errorf("invalid name: %w", err)
+	}
+
+	// Move in namespaces map
+	delete(c.Namespaces, oldName)
+	c.Namespaces[newName] = ns
+
+	// Update default namespace reference
+	if c.DefaultNamespace == oldName {
+		c.DefaultNamespace = newName
+	}
+
+	// Update tool permissions
+	for i, tp := range c.ToolPermissions {
+		if tp.Namespace == oldName {
+			c.ToolPermissions[i].Namespace = newName
 		}
 	}
 
-	for i := range c.Namespaces {
-		if c.Namespaces[i].ID == ns.ID {
-			c.Namespaces[i] = ns
-			return nil
-		}
-	}
-	return fmt.Errorf("namespace %q not found", ns.ID)
+	return nil
 }
 
 // AssignServerToNamespace adds a server to a namespace's server list.
-func (c *Config) AssignServerToNamespace(namespaceID, serverID string) error {
-	ns := c.FindNamespaceByID(namespaceID)
-	if ns == nil {
-		return fmt.Errorf("namespace %q not found", namespaceID)
+func (c *Config) AssignServerToNamespace(namespaceName, serverName string) error {
+	ns, exists := c.Namespaces[namespaceName]
+	if !exists {
+		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	// Check server exists
-	if c.GetServer(serverID) == nil {
-		return fmt.Errorf("server %q not found", serverID)
+	if c.GetServer(serverName) == nil {
+		return fmt.Errorf("server %q not found", serverName)
 	}
 
 	// Check if already assigned
 	for _, sid := range ns.ServerIDs {
-		if sid == serverID {
+		if sid == serverName {
 			return nil // Already assigned, no-op
 		}
 	}
 
-	ns.ServerIDs = append(ns.ServerIDs, serverID)
+	ns.ServerIDs = append(ns.ServerIDs, serverName)
+	c.Namespaces[namespaceName] = ns
 	return nil
 }
 
 // UnassignServerFromNamespace removes a server from a namespace's server list.
-func (c *Config) UnassignServerFromNamespace(namespaceID, serverID string) error {
-	ns := c.FindNamespaceByID(namespaceID)
-	if ns == nil {
-		return fmt.Errorf("namespace %q not found", namespaceID)
+func (c *Config) UnassignServerFromNamespace(namespaceName, serverName string) error {
+	ns, exists := c.Namespaces[namespaceName]
+	if !exists {
+		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
-	ns.ServerIDs = removeString(ns.ServerIDs, serverID)
+	ns.ServerIDs = removeString(ns.ServerIDs, serverName)
+	c.Namespaces[namespaceName] = ns
 	return nil
 }
 
 // SetToolPermission sets a permission for a tool in a namespace.
 // If a permission already exists, it is updated.
-func (c *Config) SetToolPermission(namespaceID, serverID, toolName string, enabled bool) error {
+func (c *Config) SetToolPermission(namespaceName, serverName, toolName string, enabled bool) error {
 	// Validate namespace exists
-	if c.FindNamespaceByID(namespaceID) == nil {
-		return fmt.Errorf("namespace %q not found", namespaceID)
+	if _, exists := c.Namespaces[namespaceName]; !exists {
+		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	// Validate server exists
-	if c.GetServer(serverID) == nil {
-		return fmt.Errorf("server %q not found", serverID)
+	if c.GetServer(serverName) == nil {
+		return fmt.Errorf("server %q not found", serverName)
 	}
 
 	// Check if permission already exists
 	for i := range c.ToolPermissions {
 		tp := &c.ToolPermissions[i]
-		if tp.NamespaceID == namespaceID && tp.ServerID == serverID && tp.ToolName == toolName {
+		if tp.Namespace == namespaceName && tp.Server == serverName && tp.ToolName == toolName {
 			tp.Enabled = enabled
 			return nil
 		}
@@ -439,18 +381,18 @@ func (c *Config) SetToolPermission(namespaceID, serverID, toolName string, enabl
 
 	// Add new permission
 	c.ToolPermissions = append(c.ToolPermissions, ToolPermission{
-		NamespaceID: namespaceID,
-		ServerID:    serverID,
-		ToolName:    toolName,
-		Enabled:     enabled,
+		Namespace: namespaceName,
+		Server:    serverName,
+		ToolName:  toolName,
+		Enabled:   enabled,
 	})
 	return nil
 }
 
 // UnsetToolPermission removes a permission for a tool, reverting to namespace default.
-func (c *Config) UnsetToolPermission(namespaceID, serverID, toolName string) error {
+func (c *Config) UnsetToolPermission(namespaceName, serverName, toolName string) error {
 	for i, tp := range c.ToolPermissions {
-		if tp.NamespaceID == namespaceID && tp.ServerID == serverID && tp.ToolName == toolName {
+		if tp.Namespace == namespaceName && tp.Server == serverName && tp.ToolName == toolName {
 			c.ToolPermissions = append(c.ToolPermissions[:i], c.ToolPermissions[i+1:]...)
 			return nil
 		}
@@ -460,9 +402,9 @@ func (c *Config) UnsetToolPermission(namespaceID, serverID, toolName string) err
 
 // GetToolPermission returns the explicit permission for a tool, if any.
 // Returns (permission, found).
-func (c *Config) GetToolPermission(namespaceID, serverID, toolName string) (bool, bool) {
+func (c *Config) GetToolPermission(namespaceName, serverName, toolName string) (bool, bool) {
 	for _, tp := range c.ToolPermissions {
-		if tp.NamespaceID == namespaceID && tp.ServerID == serverID && tp.ToolName == toolName {
+		if tp.Namespace == namespaceName && tp.Server == serverName && tp.ToolName == toolName {
 			return tp.Enabled, true
 		}
 	}
@@ -470,10 +412,10 @@ func (c *Config) GetToolPermission(namespaceID, serverID, toolName string) (bool
 }
 
 // GetToolPermissionsForNamespace returns all tool permissions for a namespace.
-func (c *Config) GetToolPermissionsForNamespace(namespaceID string) []ToolPermission {
+func (c *Config) GetToolPermissionsForNamespace(namespaceName string) []ToolPermission {
 	result := []ToolPermission{}
 	for _, tp := range c.ToolPermissions {
-		if tp.NamespaceID == namespaceID {
+		if tp.Namespace == namespaceName {
 			result = append(result, tp)
 		}
 	}

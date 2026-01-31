@@ -15,28 +15,28 @@ func TestServerPicker_Show(t *testing.T) {
 		t.Error("picker should not be visible initially")
 	}
 
-	servers := []config.ServerConfig{
-		{ID: "s1", Name: "Server 1"},
-		{ID: "s2", Name: "Server 2"},
-		{ID: "s3", Name: "Server 3"},
+	servers := []config.ServerEntry{
+		{Name: "Server 1", Config: config.ServerConfig{Command: "cmd1"}},
+		{Name: "Server 2", Config: config.ServerConfig{Command: "cmd2"}},
+		{Name: "Server 3", Config: config.ServerConfig{Command: "cmd3"}},
 	}
-	selectedIDs := []string{"s1", "s3"}
+	selectedNames := []string{"Server 1", "Server 3"}
 
-	picker.Show(servers, selectedIDs)
+	picker.Show(servers, selectedNames)
 
 	if !picker.IsVisible() {
 		t.Error("picker should be visible after Show")
 	}
 
 	// Check selection state
-	if !picker.selected["s1"] {
-		t.Error("s1 should be selected")
+	if !picker.selected["Server 1"] {
+		t.Error("Server 1 should be selected")
 	}
-	if picker.selected["s2"] {
-		t.Error("s2 should not be selected")
+	if picker.selected["Server 2"] {
+		t.Error("Server 2 should not be selected")
 	}
-	if !picker.selected["s3"] {
-		t.Error("s3 should be selected")
+	if !picker.selected["Server 3"] {
+		t.Error("Server 3 should be selected")
 	}
 }
 
@@ -44,8 +44,8 @@ func TestServerPicker_Hide(t *testing.T) {
 	th := theme.New()
 	picker := NewServerPicker(th)
 
-	servers := []config.ServerConfig{
-		{ID: "s1", Name: "Server 1"},
+	servers := []config.ServerEntry{
+		{Name: "Server 1", Config: config.ServerConfig{Command: "cmd1"}},
 	}
 	picker.Show(servers, nil)
 
@@ -62,12 +62,10 @@ func TestServerPicker_Hide(t *testing.T) {
 
 func TestServerPickerItem_Interface(t *testing.T) {
 	item := serverPickerItem{
-		server: config.ServerConfig{
-			ID:      "s1",
-			Name:    "Test Server",
+		name: "Test Server",
+		config: config.ServerConfig{
 			Command: "test-cmd",
 		},
-		selected: true,
 	}
 
 	if item.Title() != "Test Server" {

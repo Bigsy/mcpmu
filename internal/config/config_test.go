@@ -33,18 +33,16 @@ func TestLoad_NonExistentFile(t *testing.T) {
 func TestLoad_ValidConfig(t *testing.T) {
 	home := testutil.SetupTestHome(t)
 
-	// Write a valid config
+	// Write a valid config (new format: no id/name fields in body)
 	configJSON := `{
 		"schemaVersion": 1,
 		"servers": {
-			"test": {
-				"id": "test",
-				"name": "Test Server",
+			"test-server": {
 				"kind": "stdio",
 				"command": "echo"
 			}
 		},
-		"namespaces": []
+		"namespaces": {}
 	}`
 
 	configPath := filepath.Join(home, ".config", "mcpmu", "config.json")
@@ -61,13 +59,9 @@ func TestLoad_ValidConfig(t *testing.T) {
 		t.Errorf("expected 1 server, got %d", len(cfg.Servers))
 	}
 
-	srv, ok := cfg.Servers["test"]
+	srv, ok := cfg.Servers["test-server"]
 	if !ok {
-		t.Fatal("expected server 'test' to exist")
-	}
-
-	if srv.Name != "Test Server" {
-		t.Errorf("expected name 'Test Server', got %q", srv.Name)
+		t.Fatal("expected server 'test-server' to exist")
 	}
 
 	if srv.Kind != ServerKindStdio {
@@ -89,44 +83,11 @@ func TestLoad_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestLoad_BackfillsServerID(t *testing.T) {
-	home := testutil.SetupTestHome(t)
-
-	// Config where server ID is only in the map key, not in the object
-	configJSON := `{
-		"schemaVersion": 1,
-		"servers": {
-			"abcd": {
-				"name": "Test Server",
-				"kind": "stdio",
-				"command": "echo"
-			}
-		}
-	}`
-
-	configPath := filepath.Join(home, ".config", "mcpmu", "config.json")
-	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-
-	srv := cfg.Servers["abcd"]
-	if srv.ID != "abcd" {
-		t.Errorf("expected ID to be backfilled to 'abcd', got %q", srv.ID)
-	}
-}
-
 func TestSave_AtomicWrite(t *testing.T) {
 	testutil.SetupTestHome(t)
 
 	cfg := NewConfig()
 	cfg.Servers["test"] = ServerConfig{
-		ID:      "test",
-		Name:    "Test Server",
 		Kind:    ServerKindStdio,
 		Command: "echo",
 	}
@@ -220,39 +181,26 @@ func TestServerConfig_SetEnabled(t *testing.T) {
 	}
 }
 
-func TestValidateID(t *testing.T) {
+func TestValidateName(t *testing.T) {
 	tests := []struct {
-		id      string
+		name    string
 		wantErr bool
 	}{
-		{"abcd", false},
-		{"1234", false},
-		{"a1b2", false},
-		{"abc", true},      // too short
-		{"abcde", true},    // too long
-		{"ABCD", true},     // uppercase not allowed
-		{"ab.c", true},     // dot not allowed
-		{"ab-c", true},     // hyphen not allowed
-		{"ab_c", true},     // underscore not allowed
+		{"my-server", false},
+		{"test_server", false},
+		{"server123", false},
+		{"filesystem", false},
 		{"", true},         // empty
-		{"    ", true},     // spaces
+		{"has.dot", true},  // dot not allowed (used as namespace separator)
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.id, func(t *testing.T) {
-			err := ValidateID(tt.id)
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateName(tt.name)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+				t.Errorf("ValidateName(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
 			}
 		})
-	}
-}
-
-func TestGenerateID(t *testing.T) {
-	id := GenerateID()
-
-	if err := ValidateID(id); err != nil {
-		t.Errorf("GenerateID() produced invalid ID %q: %v", id, err)
 	}
 }
 
@@ -260,170 +208,90 @@ func TestConfig_AddServer(t *testing.T) {
 	cfg := NewConfig()
 
 	srv := ServerConfig{
-		Name:    "Test Server",
 		Kind:    ServerKindStdio,
 		Command: "echo",
 	}
 
-	id, err := cfg.AddServer(srv)
+	err := cfg.AddServer("test-server", srv)
 	if err != nil {
 		t.Fatalf("AddServer failed: %v", err)
 	}
 
-	if id == "" {
-		t.Error("expected non-empty ID")
-	}
-
-	if _, ok := cfg.Servers[id]; !ok {
+	if _, ok := cfg.Servers["test-server"]; !ok {
 		t.Error("expected server to be added to config")
 	}
 }
 
-func TestConfig_AddServer_WithID(t *testing.T) {
+func TestConfig_AddServer_Duplicate(t *testing.T) {
 	cfg := NewConfig()
 
 	srv := ServerConfig{
-		ID:      "abcd",
-		Name:    "Test Server",
 		Kind:    ServerKindStdio,
 		Command: "echo",
 	}
 
-	id, err := cfg.AddServer(srv)
-	if err != nil {
-		t.Fatalf("AddServer failed: %v", err)
-	}
-
-	if id != "abcd" {
-		t.Errorf("expected ID 'abcd', got %q", id)
-	}
-}
-
-func TestConfig_AddServer_Collision(t *testing.T) {
-	cfg := NewConfig()
-
-	srv := ServerConfig{
-		ID:      "abcd",
-		Name:    "Test Server",
-		Kind:    ServerKindStdio,
-		Command: "echo",
-	}
-
-	_, err := cfg.AddServer(srv)
+	err := cfg.AddServer("test", srv)
 	if err != nil {
 		t.Fatalf("first AddServer failed: %v", err)
 	}
 
-	// Try to add another server with same ID
+	// Try to add another server with same name
 	srv2 := ServerConfig{
-		ID:      "abcd",
-		Name:    "Different Name",
-		Kind:    ServerKindStdio,
-		Command: "echo",
-	}
-	_, err = cfg.AddServer(srv2)
-	if err == nil {
-		t.Error("expected error for duplicate ID")
-	}
-}
-
-func TestConfig_AddServer_DuplicateName(t *testing.T) {
-	cfg := NewConfig()
-
-	srv1 := ServerConfig{
-		Name:    "My Server",
-		Kind:    ServerKindStdio,
-		Command: "echo",
-	}
-
-	_, err := cfg.AddServer(srv1)
-	if err != nil {
-		t.Fatalf("first AddServer failed: %v", err)
-	}
-
-	// Try to add another server with same name (different ID)
-	srv2 := ServerConfig{
-		Name:    "My Server",
 		Kind:    ServerKindStdio,
 		Command: "cat",
 	}
-	_, err = cfg.AddServer(srv2)
+	err = cfg.AddServer("test", srv2)
 	if err == nil {
 		t.Error("expected error for duplicate name")
 	}
 }
 
-func TestConfig_FindServerByName(t *testing.T) {
+func TestConfig_UpdateServer(t *testing.T) {
 	cfg := NewConfig()
 
-	cfg.Servers["abcd"] = ServerConfig{
-		ID:      "abcd",
-		Name:    "Test Server",
+	cfg.Servers["test"] = ServerConfig{
 		Kind:    ServerKindStdio,
 		Command: "echo",
 	}
 
-	// Found
-	srv := cfg.FindServerByName("Test Server")
-	if srv == nil {
-		t.Fatal("expected server to be found")
-	}
-	if srv.ID != "abcd" {
-		t.Errorf("expected ID 'abcd', got %q", srv.ID)
-	}
-
-	// Not found
-	srv = cfg.FindServerByName("Nonexistent")
-	if srv != nil {
-		t.Error("expected nil for non-existent server name")
-	}
-}
-
-func TestConfig_DeleteServerByName(t *testing.T) {
-	cfg := NewConfig()
-
-	cfg.Servers["abcd"] = ServerConfig{
-		ID:      "abcd",
-		Name:    "Test Server",
+	// Update with new command
+	err := cfg.UpdateServer("test", ServerConfig{
 		Kind:    ServerKindStdio,
-		Command: "echo",
-	}
-
-	err := cfg.DeleteServerByName("Test Server")
+		Command: "cat",
+	})
 	if err != nil {
-		t.Fatalf("DeleteServerByName failed: %v", err)
+		t.Fatalf("UpdateServer failed: %v", err)
 	}
 
-	if _, ok := cfg.Servers["abcd"]; ok {
-		t.Error("expected server to be deleted")
+	srv := cfg.GetServer("test")
+	if srv.Command != "cat" {
+		t.Errorf("expected command 'cat', got %q", srv.Command)
 	}
 }
 
-func TestConfig_DeleteServerByName_NotFound(t *testing.T) {
+func TestConfig_UpdateServer_NotFound(t *testing.T) {
 	cfg := NewConfig()
 
-	err := cfg.DeleteServerByName("Nonexistent")
+	err := cfg.UpdateServer("nonexistent", ServerConfig{Command: "echo"})
 	if err == nil {
-		t.Error("expected error for non-existent server name")
+		t.Error("expected error for non-existent server")
 	}
 }
 
 func TestConfig_DeleteServer(t *testing.T) {
 	cfg := NewConfig()
 
-	cfg.Servers["abcd"] = ServerConfig{
-		ID:      "abcd",
-		Name:    "Test Server",
+	cfg.Servers["test"] = ServerConfig{
 		Kind:    ServerKindStdio,
 		Command: "echo",
 	}
 
-	err := cfg.DeleteServer("abcd")
+	err := cfg.DeleteServer("test")
 	if err != nil {
 		t.Fatalf("DeleteServer failed: %v", err)
 	}
 
-	if _, ok := cfg.Servers["abcd"]; ok {
+	if _, ok := cfg.Servers["test"]; ok {
 		t.Error("expected server to be deleted")
 	}
 }
@@ -437,22 +305,106 @@ func TestConfig_DeleteServer_NotFound(t *testing.T) {
 	}
 }
 
+func TestConfig_DeleteServer_CleansUpReferences(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
+	cfg.Namespaces["ns1"] = NamespaceConfig{ServerIDs: []string{"srv1", "srv2"}}
+	cfg.ToolPermissions = []ToolPermission{
+		{Namespace: "ns1", Server: "srv1", ToolName: "tool1", Enabled: true},
+		{Namespace: "ns1", Server: "srv2", ToolName: "tool2", Enabled: true},
+	}
+
+	err := cfg.DeleteServer("srv1")
+	if err != nil {
+		t.Fatalf("DeleteServer failed: %v", err)
+	}
+
+	// Check namespace reference was removed
+	ns := cfg.GetNamespace("ns1")
+	if len(ns.ServerIDs) != 1 || ns.ServerIDs[0] != "srv2" {
+		t.Error("expected srv1 to be removed from namespace")
+	}
+
+	// Check tool permission was removed
+	if len(cfg.ToolPermissions) != 1 {
+		t.Error("expected srv1 tool permissions to be removed")
+	}
+}
+
+func TestConfig_RenameServer(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["old-name"] = ServerConfig{Command: "echo"}
+	cfg.Namespaces["ns1"] = NamespaceConfig{ServerIDs: []string{"old-name", "other"}}
+	cfg.ToolPermissions = []ToolPermission{
+		{Namespace: "ns1", Server: "old-name", ToolName: "tool1", Enabled: true},
+	}
+
+	err := cfg.RenameServer("old-name", "new-name")
+	if err != nil {
+		t.Fatalf("RenameServer failed: %v", err)
+	}
+
+	// Check server was moved
+	if _, ok := cfg.Servers["old-name"]; ok {
+		t.Error("expected old-name to be removed")
+	}
+	if _, ok := cfg.Servers["new-name"]; !ok {
+		t.Error("expected new-name to exist")
+	}
+
+	// Check namespace reference was updated
+	ns := cfg.GetNamespace("ns1")
+	found := false
+	for _, sid := range ns.ServerIDs {
+		if sid == "new-name" {
+			found = true
+		}
+		if sid == "old-name" {
+			t.Error("expected old-name to be removed from namespace")
+		}
+	}
+	if !found {
+		t.Error("expected new-name to be in namespace")
+	}
+
+	// Check tool permission was updated
+	if cfg.ToolPermissions[0].Server != "new-name" {
+		t.Error("expected tool permission server to be updated")
+	}
+}
+
+func TestConfig_RenameServer_Errors(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["existing"] = ServerConfig{Command: "echo"}
+	cfg.Servers["other"] = ServerConfig{Command: "cat"}
+
+	// Not found
+	err := cfg.RenameServer("nonexistent", "new-name")
+	if err == nil {
+		t.Error("expected error for non-existent server")
+	}
+
+	// Duplicate
+	err = cfg.RenameServer("existing", "other")
+	if err == nil {
+		t.Error("expected error for duplicate name")
+	}
+}
+
 func TestConfig_GetServer(t *testing.T) {
 	cfg := NewConfig()
 
-	cfg.Servers["abcd"] = ServerConfig{
-		ID:      "abcd",
-		Name:    "Test Server",
+	cfg.Servers["test"] = ServerConfig{
 		Kind:    ServerKindStdio,
 		Command: "echo",
 	}
 
-	srv := cfg.GetServer("abcd")
+	srv := cfg.GetServer("test")
 	if srv == nil {
 		t.Fatal("expected server to be found")
 	}
-	if srv.Name != "Test Server" {
-		t.Errorf("expected name 'Test Server', got %q", srv.Name)
+	if srv.Command != "echo" {
+		t.Errorf("expected command 'echo', got %q", srv.Command)
 	}
 
 	// Non-existent
@@ -462,15 +414,22 @@ func TestConfig_GetServer(t *testing.T) {
 	}
 }
 
-func TestConfig_ServerList(t *testing.T) {
+func TestConfig_ServerEntries(t *testing.T) {
 	cfg := NewConfig()
 
-	cfg.Servers["abcd"] = ServerConfig{ID: "abcd", Name: "Server A"}
-	cfg.Servers["efgh"] = ServerConfig{ID: "efgh", Name: "Server B"}
+	cfg.Servers["server-a"] = ServerConfig{Command: "a"}
+	cfg.Servers["server-b"] = ServerConfig{Command: "b"}
 
-	list := cfg.ServerList()
-	if len(list) != 2 {
-		t.Errorf("expected 2 servers in list, got %d", len(list))
+	entries := cfg.ServerEntries()
+	if len(entries) != 2 {
+		t.Errorf("expected 2 servers in list, got %d", len(entries))
+	}
+
+	// Check that entries have names
+	for _, e := range entries {
+		if e.Name == "" {
+			t.Error("expected entry to have name")
+		}
 	}
 }
 
@@ -486,89 +445,92 @@ func TestConfig_AddNamespace(t *testing.T) {
 	cfg := NewConfig()
 
 	ns := NamespaceConfig{
-		Name:        "development",
 		Description: "Dev environment",
 	}
 
-	id, err := cfg.AddNamespace(ns)
+	err := cfg.AddNamespace("development", ns)
 	if err != nil {
 		t.Fatalf("AddNamespace failed: %v", err)
-	}
-
-	if id == "" {
-		t.Error("expected non-empty ID")
 	}
 
 	if len(cfg.Namespaces) != 1 {
 		t.Error("expected namespace to be added to config")
 	}
+
+	if _, ok := cfg.Namespaces["development"]; !ok {
+		t.Error("expected 'development' namespace to exist")
+	}
 }
 
-func TestConfig_AddNamespace_DuplicateName(t *testing.T) {
+func TestConfig_AddNamespace_Duplicate(t *testing.T) {
 	cfg := NewConfig()
 
-	ns1 := NamespaceConfig{Name: "dev"}
-	_, err := cfg.AddNamespace(ns1)
+	ns1 := NamespaceConfig{}
+	err := cfg.AddNamespace("dev", ns1)
 	if err != nil {
 		t.Fatalf("first AddNamespace failed: %v", err)
 	}
 
-	ns2 := NamespaceConfig{Name: "dev"}
-	_, err = cfg.AddNamespace(ns2)
+	ns2 := NamespaceConfig{}
+	err = cfg.AddNamespace("dev", ns2)
 	if err == nil {
 		t.Error("expected error for duplicate name")
 	}
 }
 
-func TestConfig_FindNamespaceByName(t *testing.T) {
+func TestConfig_GetNamespace(t *testing.T) {
 	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "abcd", Name: "development"},
-		{ID: "efgh", Name: "production"},
-	}
+	cfg.Namespaces["development"] = NamespaceConfig{Description: "Dev env"}
 
-	ns := cfg.FindNamespaceByName("development")
+	ns := cfg.GetNamespace("development")
 	if ns == nil {
 		t.Fatal("expected namespace to be found")
 	}
-	if ns.ID != "abcd" {
-		t.Errorf("expected ID 'abcd', got %q", ns.ID)
+	if ns.Description != "Dev env" {
+		t.Errorf("expected description 'Dev env', got %q", ns.Description)
 	}
 
-	ns = cfg.FindNamespaceByName("nonexistent")
+	ns = cfg.GetNamespace("nonexistent")
 	if ns != nil {
 		t.Error("expected nil for non-existent namespace")
 	}
 }
 
-func TestConfig_FindNamespaceByID(t *testing.T) {
+func TestConfig_UpdateNamespace(t *testing.T) {
 	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "abcd", Name: "development"},
+	cfg.Namespaces["development"] = NamespaceConfig{Description: "Old"}
+
+	err := cfg.UpdateNamespace("development", NamespaceConfig{Description: "New"})
+	if err != nil {
+		t.Fatalf("UpdateNamespace failed: %v", err)
 	}
 
-	ns := cfg.FindNamespaceByID("abcd")
-	if ns == nil {
-		t.Fatal("expected namespace to be found")
-	}
-	if ns.Name != "development" {
-		t.Errorf("expected name 'development', got %q", ns.Name)
+	ns := cfg.GetNamespace("development")
+	if ns.Description != "New" {
+		t.Errorf("expected description 'New', got %q", ns.Description)
 	}
 }
 
-func TestConfig_DeleteNamespaceByName(t *testing.T) {
+func TestConfig_UpdateNamespace_NotFound(t *testing.T) {
 	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "abcd", Name: "development"},
-	}
-	cfg.ToolPermissions = []ToolPermission{
-		{NamespaceID: "abcd", ServerID: "srv1", ToolName: "tool1", Enabled: true},
-	}
-	cfg.DefaultNamespaceID = "abcd"
 
-	err := cfg.DeleteNamespaceByName("development")
+	err := cfg.UpdateNamespace("nonexistent", NamespaceConfig{})
+	if err == nil {
+		t.Error("expected error for non-existent namespace")
+	}
+}
+
+func TestConfig_DeleteNamespace(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces["development"] = NamespaceConfig{}
+	cfg.ToolPermissions = []ToolPermission{
+		{Namespace: "development", Server: "srv1", ToolName: "tool1", Enabled: true},
+	}
+	cfg.DefaultNamespace = "development"
+
+	err := cfg.DeleteNamespace("development")
 	if err != nil {
-		t.Fatalf("DeleteNamespaceByName failed: %v", err)
+		t.Fatalf("DeleteNamespace failed: %v", err)
 	}
 
 	if len(cfg.Namespaces) != 0 {
@@ -579,124 +541,91 @@ func TestConfig_DeleteNamespaceByName(t *testing.T) {
 		t.Error("expected tool permissions to be cleaned up")
 	}
 
-	if cfg.DefaultNamespaceID != "" {
+	if cfg.DefaultNamespace != "" {
 		t.Error("expected default namespace to be cleared")
 	}
 }
 
-func TestConfig_DeleteNamespaceByName_NotFound(t *testing.T) {
+func TestConfig_DeleteNamespace_NotFound(t *testing.T) {
 	cfg := NewConfig()
 
-	err := cfg.DeleteNamespaceByName("nonexistent")
+	err := cfg.DeleteNamespace("nonexistent")
 	if err == nil {
 		t.Error("expected error for non-existent namespace")
 	}
 }
 
-func TestConfig_UpdateNamespace(t *testing.T) {
+func TestConfig_RenameNamespace(t *testing.T) {
 	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "ns01", Name: "development", Description: "Dev env"},
+	cfg.Namespaces["old-name"] = NamespaceConfig{Description: "Test"}
+	cfg.DefaultNamespace = "old-name"
+	cfg.ToolPermissions = []ToolPermission{
+		{Namespace: "old-name", Server: "srv1", ToolName: "tool1", Enabled: true},
 	}
 
-	// Update description - should succeed
-	err := cfg.UpdateNamespace(NamespaceConfig{
-		ID:          "ns01",
-		Name:        "development",
-		Description: "Updated description",
-	})
+	err := cfg.RenameNamespace("old-name", "new-name")
 	if err != nil {
-		t.Fatalf("UpdateNamespace failed: %v", err)
+		t.Fatalf("RenameNamespace failed: %v", err)
 	}
 
-	ns := cfg.FindNamespaceByID("ns01")
-	if ns.Description != "Updated description" {
-		t.Errorf("expected description 'Updated description', got %q", ns.Description)
+	// Check namespace was moved
+	if _, ok := cfg.Namespaces["old-name"]; ok {
+		t.Error("expected old-name to be removed")
 	}
-}
-
-func TestConfig_UpdateNamespace_DuplicateName(t *testing.T) {
-	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "ns01", Name: "development"},
-		{ID: "ns02", Name: "production"},
+	if _, ok := cfg.Namespaces["new-name"]; !ok {
+		t.Error("expected new-name to exist")
 	}
 
-	// Try to rename ns01 to "production" - should fail
-	err := cfg.UpdateNamespace(NamespaceConfig{
-		ID:   "ns01",
-		Name: "production",
-	})
-	if err == nil {
-		t.Error("expected error when renaming to duplicate name")
-	}
-	if !strings.Contains(err.Error(), "already exists") {
-		t.Errorf("expected 'already exists' error, got: %v", err)
+	// Check default namespace was updated
+	if cfg.DefaultNamespace != "new-name" {
+		t.Error("expected default namespace to be updated")
 	}
 
-	// Verify ns01 wasn't changed
-	ns := cfg.FindNamespaceByID("ns01")
-	if ns.Name != "development" {
-		t.Errorf("namespace should not have been renamed, got name %q", ns.Name)
+	// Check tool permission was updated
+	if cfg.ToolPermissions[0].Namespace != "new-name" {
+		t.Error("expected tool permission namespace to be updated")
 	}
 }
 
-func TestConfig_UpdateNamespace_SameName(t *testing.T) {
+func TestConfig_RenameNamespace_Errors(t *testing.T) {
 	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "ns01", Name: "development", Description: "Old"},
-	}
+	cfg.Namespaces["existing"] = NamespaceConfig{}
+	cfg.Namespaces["other"] = NamespaceConfig{}
 
-	// Update with same name - should succeed
-	err := cfg.UpdateNamespace(NamespaceConfig{
-		ID:          "ns01",
-		Name:        "development",
-		Description: "New",
-	})
-	if err != nil {
-		t.Fatalf("UpdateNamespace with same name should succeed: %v", err)
-	}
-
-	ns := cfg.FindNamespaceByID("ns01")
-	if ns.Description != "New" {
-		t.Errorf("expected description 'New', got %q", ns.Description)
-	}
-}
-
-func TestConfig_UpdateNamespace_NotFound(t *testing.T) {
-	cfg := NewConfig()
-
-	err := cfg.UpdateNamespace(NamespaceConfig{
-		ID:   "nonexistent",
-		Name: "test",
-	})
+	// Not found
+	err := cfg.RenameNamespace("nonexistent", "new-name")
 	if err == nil {
 		t.Error("expected error for non-existent namespace")
+	}
+
+	// Duplicate
+	err = cfg.RenameNamespace("existing", "other")
+	if err == nil {
+		t.Error("expected error for duplicate name")
 	}
 }
 
 func TestConfig_AssignServerToNamespace(t *testing.T) {
 	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "ns01", Name: "dev", ServerIDs: []string{}},
-	}
-	cfg.Servers["srv1"] = ServerConfig{ID: "srv1", Name: "Server 1"}
+	cfg.Namespaces["dev"] = NamespaceConfig{ServerIDs: []string{}}
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
 
-	err := cfg.AssignServerToNamespace("ns01", "srv1")
+	err := cfg.AssignServerToNamespace("dev", "srv1")
 	if err != nil {
 		t.Fatalf("AssignServerToNamespace failed: %v", err)
 	}
 
-	ns := cfg.FindNamespaceByID("ns01")
+	ns := cfg.GetNamespace("dev")
 	if len(ns.ServerIDs) != 1 || ns.ServerIDs[0] != "srv1" {
 		t.Error("expected server to be assigned")
 	}
 
 	// Assigning again should be a no-op
-	err = cfg.AssignServerToNamespace("ns01", "srv1")
+	err = cfg.AssignServerToNamespace("dev", "srv1")
 	if err != nil {
 		t.Fatalf("second AssignServerToNamespace failed: %v", err)
 	}
+	ns = cfg.GetNamespace("dev")
 	if len(ns.ServerIDs) != 1 {
 		t.Error("expected no duplicate assignment")
 	}
@@ -704,9 +633,7 @@ func TestConfig_AssignServerToNamespace(t *testing.T) {
 
 func TestConfig_AssignServerToNamespace_Errors(t *testing.T) {
 	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "ns01", Name: "dev", ServerIDs: []string{}},
-	}
+	cfg.Namespaces["dev"] = NamespaceConfig{ServerIDs: []string{}}
 
 	// Non-existent namespace
 	err := cfg.AssignServerToNamespace("nonexistent", "srv1")
@@ -715,7 +642,7 @@ func TestConfig_AssignServerToNamespace_Errors(t *testing.T) {
 	}
 
 	// Non-existent server
-	err = cfg.AssignServerToNamespace("ns01", "nonexistent")
+	err = cfg.AssignServerToNamespace("dev", "nonexistent")
 	if err == nil {
 		t.Error("expected error for non-existent server")
 	}
@@ -723,16 +650,14 @@ func TestConfig_AssignServerToNamespace_Errors(t *testing.T) {
 
 func TestConfig_UnassignServerFromNamespace(t *testing.T) {
 	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "ns01", Name: "dev", ServerIDs: []string{"srv1", "srv2"}},
-	}
+	cfg.Namespaces["dev"] = NamespaceConfig{ServerIDs: []string{"srv1", "srv2"}}
 
-	err := cfg.UnassignServerFromNamespace("ns01", "srv1")
+	err := cfg.UnassignServerFromNamespace("dev", "srv1")
 	if err != nil {
 		t.Fatalf("UnassignServerFromNamespace failed: %v", err)
 	}
 
-	ns := cfg.FindNamespaceByID("ns01")
+	ns := cfg.GetNamespace("dev")
 	if len(ns.ServerIDs) != 1 || ns.ServerIDs[0] != "srv2" {
 		t.Error("expected server to be unassigned")
 	}
@@ -744,12 +669,10 @@ func TestConfig_UnassignServerFromNamespace(t *testing.T) {
 
 func TestConfig_SetToolPermission(t *testing.T) {
 	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "ns01", Name: "dev"},
-	}
-	cfg.Servers["srv1"] = ServerConfig{ID: "srv1", Name: "Server 1"}
+	cfg.Namespaces["dev"] = NamespaceConfig{}
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
 
-	err := cfg.SetToolPermission("ns01", "srv1", "read_file", true)
+	err := cfg.SetToolPermission("dev", "srv1", "read_file", true)
 	if err != nil {
 		t.Fatalf("SetToolPermission failed: %v", err)
 	}
@@ -759,12 +682,12 @@ func TestConfig_SetToolPermission(t *testing.T) {
 	}
 
 	tp := cfg.ToolPermissions[0]
-	if tp.NamespaceID != "ns01" || tp.ServerID != "srv1" || tp.ToolName != "read_file" || !tp.Enabled {
+	if tp.Namespace != "dev" || tp.Server != "srv1" || tp.ToolName != "read_file" || !tp.Enabled {
 		t.Error("permission not set correctly")
 	}
 
 	// Update existing permission
-	err = cfg.SetToolPermission("ns01", "srv1", "read_file", false)
+	err = cfg.SetToolPermission("dev", "srv1", "read_file", false)
 	if err != nil {
 		t.Fatalf("SetToolPermission update failed: %v", err)
 	}
@@ -780,10 +703,8 @@ func TestConfig_SetToolPermission(t *testing.T) {
 
 func TestConfig_SetToolPermission_Errors(t *testing.T) {
 	cfg := NewConfig()
-	cfg.Namespaces = []NamespaceConfig{
-		{ID: "ns01", Name: "dev"},
-	}
-	cfg.Servers["srv1"] = ServerConfig{ID: "srv1", Name: "Server 1"}
+	cfg.Namespaces["dev"] = NamespaceConfig{}
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
 
 	// Non-existent namespace
 	err := cfg.SetToolPermission("nonexistent", "srv1", "tool", true)
@@ -792,7 +713,7 @@ func TestConfig_SetToolPermission_Errors(t *testing.T) {
 	}
 
 	// Non-existent server
-	err = cfg.SetToolPermission("ns01", "nonexistent", "tool", true)
+	err = cfg.SetToolPermission("dev", "nonexistent", "tool", true)
 	if err == nil {
 		t.Error("expected error for non-existent server")
 	}
@@ -801,11 +722,11 @@ func TestConfig_SetToolPermission_Errors(t *testing.T) {
 func TestConfig_UnsetToolPermission(t *testing.T) {
 	cfg := NewConfig()
 	cfg.ToolPermissions = []ToolPermission{
-		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "read_file", Enabled: true},
-		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "write_file", Enabled: false},
+		{Namespace: "dev", Server: "srv1", ToolName: "read_file", Enabled: true},
+		{Namespace: "dev", Server: "srv1", ToolName: "write_file", Enabled: false},
 	}
 
-	err := cfg.UnsetToolPermission("ns01", "srv1", "read_file")
+	err := cfg.UnsetToolPermission("dev", "srv1", "read_file")
 	if err != nil {
 		t.Fatalf("UnsetToolPermission failed: %v", err)
 	}
@@ -815,7 +736,7 @@ func TestConfig_UnsetToolPermission(t *testing.T) {
 	}
 
 	// Unset non-existent is not an error
-	err = cfg.UnsetToolPermission("ns01", "srv1", "nonexistent")
+	err = cfg.UnsetToolPermission("dev", "srv1", "nonexistent")
 	if err != nil {
 		t.Error("expected no error for non-existent permission")
 	}
@@ -824,11 +745,11 @@ func TestConfig_UnsetToolPermission(t *testing.T) {
 func TestConfig_GetToolPermission(t *testing.T) {
 	cfg := NewConfig()
 	cfg.ToolPermissions = []ToolPermission{
-		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "read_file", Enabled: true},
-		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "write_file", Enabled: false},
+		{Namespace: "dev", Server: "srv1", ToolName: "read_file", Enabled: true},
+		{Namespace: "dev", Server: "srv1", ToolName: "write_file", Enabled: false},
 	}
 
-	enabled, found := cfg.GetToolPermission("ns01", "srv1", "read_file")
+	enabled, found := cfg.GetToolPermission("dev", "srv1", "read_file")
 	if !found {
 		t.Error("expected permission to be found")
 	}
@@ -836,7 +757,7 @@ func TestConfig_GetToolPermission(t *testing.T) {
 		t.Error("expected permission to be enabled")
 	}
 
-	enabled, found = cfg.GetToolPermission("ns01", "srv1", "write_file")
+	enabled, found = cfg.GetToolPermission("dev", "srv1", "write_file")
 	if !found {
 		t.Error("expected permission to be found")
 	}
@@ -844,7 +765,7 @@ func TestConfig_GetToolPermission(t *testing.T) {
 		t.Error("expected permission to be disabled")
 	}
 
-	_, found = cfg.GetToolPermission("ns01", "srv1", "nonexistent")
+	_, found = cfg.GetToolPermission("dev", "srv1", "nonexistent")
 	if found {
 		t.Error("expected permission not to be found")
 	}
@@ -853,9 +774,9 @@ func TestConfig_GetToolPermission(t *testing.T) {
 func TestConfig_GetToolPermissionsForNamespace(t *testing.T) {
 	cfg := NewConfig()
 	cfg.ToolPermissions = []ToolPermission{
-		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "tool1", Enabled: true},
-		{NamespaceID: "ns01", ServerID: "srv2", ToolName: "tool2", Enabled: false},
-		{NamespaceID: "ns02", ServerID: "srv1", ToolName: "tool1", Enabled: true},
+		{Namespace: "ns01", Server: "srv1", ToolName: "tool1", Enabled: true},
+		{Namespace: "ns01", Server: "srv2", ToolName: "tool2", Enabled: false},
+		{Namespace: "ns02", Server: "srv1", ToolName: "tool1", Enabled: true},
 	}
 
 	perms := cfg.GetToolPermissionsForNamespace("ns01")
@@ -871,5 +792,53 @@ func TestConfig_GetToolPermissionsForNamespace(t *testing.T) {
 	perms = cfg.GetToolPermissionsForNamespace("nonexistent")
 	if len(perms) != 0 {
 		t.Errorf("expected 0 permissions, got %d", len(perms))
+	}
+}
+
+func TestConfig_NamespaceEntries(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces["ns-a"] = NamespaceConfig{}
+	cfg.Namespaces["ns-b"] = NamespaceConfig{}
+
+	entries := cfg.NamespaceEntries()
+	if len(entries) != 2 {
+		t.Errorf("expected 2 namespaces, got %d", len(entries))
+	}
+
+	// Verify sorting
+	if entries[0].Name > entries[1].Name {
+		t.Error("expected entries to be sorted by name")
+	}
+}
+
+// Test that tool permission field names use new format
+func TestToolPermission_FieldNames(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces["dev"] = NamespaceConfig{}
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
+	cfg.SetToolPermission("dev", "srv1", "tool1", true)
+
+	tp := cfg.ToolPermissions[0]
+
+	// These should compile - verifying the field names are correct
+	if tp.Namespace != "dev" {
+		t.Errorf("expected Namespace 'dev', got %q", tp.Namespace)
+	}
+	if tp.Server != "srv1" {
+		t.Errorf("expected Server 'srv1', got %q", tp.Server)
+	}
+	if tp.ToolName != "tool1" {
+		t.Errorf("expected ToolName 'tool1', got %q", tp.ToolName)
+	}
+}
+
+// Test that ValidateName rejects dots (used as namespace separator)
+func TestValidateName_RejectsDots(t *testing.T) {
+	err := ValidateName("server.name")
+	if err == nil {
+		t.Error("expected error for name with dot")
+	}
+	if !strings.Contains(err.Error(), ".") {
+		t.Errorf("expected error to mention dot, got: %v", err)
 	}
 }

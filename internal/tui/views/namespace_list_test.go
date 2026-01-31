@@ -13,11 +13,13 @@ func TestNamespaceList_SetItems(t *testing.T) {
 
 	items := []NamespaceItem{
 		{
-			Config:    config.NamespaceConfig{ID: "ns1", Name: "Production", ServerIDs: []string{"s1", "s2"}},
+			Name:      "Production",
+			Config:    config.NamespaceConfig{ServerIDs: []string{"s1", "s2"}},
 			IsDefault: true,
 		},
 		{
-			Config:    config.NamespaceConfig{ID: "ns2", Name: "Development", ServerIDs: []string{"s3"}},
+			Name:      "Development",
+			Config:    config.NamespaceConfig{ServerIDs: []string{"s3"}},
 			IsDefault: false,
 		},
 	}
@@ -41,7 +43,8 @@ func TestNamespaceList_SelectedItem(t *testing.T) {
 
 	items := []NamespaceItem{
 		{
-			Config:    config.NamespaceConfig{ID: "ns1", Name: "Production"},
+			Name:      "Production",
+			Config:    config.NamespaceConfig{},
 			IsDefault: true,
 		},
 	}
@@ -51,8 +54,8 @@ func TestNamespaceList_SelectedItem(t *testing.T) {
 	if selected == nil {
 		t.Fatal("expected selected item, got nil")
 	}
-	if selected.Config.ID != "ns1" {
-		t.Errorf("expected ID 'ns1', got %q", selected.Config.ID)
+	if selected.Name != "Production" {
+		t.Errorf("expected Name 'Production', got %q", selected.Name)
 	}
 	if !selected.IsDefault {
 		t.Error("expected IsDefault to be true")
@@ -61,9 +64,8 @@ func TestNamespaceList_SelectedItem(t *testing.T) {
 
 func TestNamespaceItem_Interface(t *testing.T) {
 	item := NamespaceItem{
+		Name: "Test Namespace",
 		Config: config.NamespaceConfig{
-			ID:          "ns1",
-			Name:        "Test Namespace",
 			Description: "A test namespace",
 		},
 	}

@@ -60,30 +60,31 @@ func NewAggregator(cfg *config.Config, supervisor *process.Supervisor, exposeMan
 
 // ListTools discovers and returns all tools from the specified servers.
 // This may start servers lazily if they're not running.
-func (a *Aggregator) ListTools(ctx context.Context, serverIDs []string) ([]AggregatedTool, error) {
+// serverNames is a list of server names (map keys).
+func (a *Aggregator) ListTools(ctx context.Context, serverNames []string) ([]AggregatedTool, error) {
 	// Discover tools from servers concurrently with bounded parallelism
 	sem := make(chan struct{}, MaxConcurrentDiscovery)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var allTools []AggregatedTool
 
-	for _, id := range serverIDs {
+	for _, name := range serverNames {
 		wg.Add(1)
-		go func(serverID string) {
+		go func(serverName string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			tools, err := a.discoverServerTools(ctx, serverID)
+			tools, err := a.discoverServerTools(ctx, serverName)
 			if err != nil {
-				log.Printf("Failed to discover tools from %s: %v", serverID, err)
+				log.Printf("Failed to discover tools from %s: %v", serverName, err)
 				return
 			}
 
 			mu.Lock()
 			allTools = append(allTools, tools...)
 			mu.Unlock()
-		}(id)
+		}(name)
 	}
 
 	wg.Wait()
@@ -123,26 +124,27 @@ func (a *Aggregator) GetTool(name string) (AggregatedTool, bool) {
 }
 
 // discoverServerTools starts a server (if needed) and retrieves its tools.
-func (a *Aggregator) discoverServerTools(ctx context.Context, serverID string) ([]AggregatedTool, error) {
-	srv := a.cfg.GetServer(serverID)
+// serverName is the server's map key (identifier).
+func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string) ([]AggregatedTool, error) {
+	srv := a.cfg.GetServer(serverName)
 	if srv == nil {
-		return nil, fmt.Errorf("server not found: %s", serverID)
+		return nil, fmt.Errorf("server not found: %s", serverName)
 	}
 
 	if !srv.IsEnabled() {
-		log.Printf("Server %s is disabled, skipping", serverID)
+		log.Printf("Server %s is disabled, skipping", serverName)
 		return nil, nil
 	}
 
 	// Check if server is already running
-	handle := a.supervisor.Get(serverID)
+	handle := a.supervisor.Get(serverName)
 	if handle == nil || !handle.IsRunning() {
 		// Start the server
 		var err error
 		timeoutCtx, cancel := context.WithTimeout(ctx, ToolDiscoveryTimeout)
 		defer cancel()
 
-		handle, err = a.supervisor.Start(timeoutCtx, *srv)
+		handle, err = a.supervisor.Start(timeoutCtx, serverName, *srv)
 		if err != nil {
 			return nil, fmt.Errorf("start server: %w", err)
 		}
@@ -157,15 +159,11 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverID string) (
 
 	// Get tools from the running server
 	mcpTools := handle.Tools()
-	serverName := srv.Name
-	if serverName == "" {
-		serverName = serverID
-	}
 
 	tools := make([]AggregatedTool, len(mcpTools))
 	for i, t := range mcpTools {
-		// Qualify tool name: serverId.toolName
-		qualifiedName := serverID + "." + t.Name
+		// Qualify tool name: serverName.toolName
+		qualifiedName := serverName + "." + t.Name
 
 		// Prefix description with server name
 		desc := t.Description
@@ -187,7 +185,7 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverID string) (
 			Name:        qualifiedName,
 			Description: desc,
 			InputSchema: schemaJSON,
-			serverID:    serverID,
+			serverID:    serverName,
 			serverName:  serverName,
 			origName:    t.Name,
 		}
@@ -248,8 +246,8 @@ func (a *Aggregator) buildManagerTools() []AggregatedTool {
 }
 
 // RefreshServerTools refreshes the tool cache for a specific server.
-func (a *Aggregator) RefreshServerTools(ctx context.Context, serverID string) error {
-	tools, err := a.discoverServerTools(ctx, serverID)
+func (a *Aggregator) RefreshServerTools(ctx context.Context, serverName string) error {
+	tools, err := a.discoverServerTools(ctx, serverName)
 	if err != nil {
 		return err
 	}
@@ -259,7 +257,7 @@ func (a *Aggregator) RefreshServerTools(ctx context.Context, serverID string) er
 
 	// Remove old tools from this server
 	for name, t := range a.tools {
-		if t.serverID == serverID {
+		if t.serverID == serverName {
 			delete(a.tools, name)
 		}
 	}

@@ -25,55 +25,55 @@ func TestPermissionResult_String(t *testing.T) {
 
 func TestCheckPermission(t *testing.T) {
 	cfg := config.NewConfig()
-	cfg.Namespaces = []config.NamespaceConfig{
-		{ID: "ns01", Name: "test"},
+	cfg.Namespaces = map[string]config.NamespaceConfig{
+		"test": {},
 	}
-	cfg.Servers["srv1"] = config.ServerConfig{ID: "srv1", Name: "Server 1"}
+	cfg.Servers["srv1"] = config.ServerConfig{Command: "echo"}
 	cfg.ToolPermissions = []config.ToolPermission{
-		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "allowed_tool", Enabled: true},
-		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "denied_tool", Enabled: false},
+		{Namespace: "test", Server: "srv1", ToolName: "allowed_tool", Enabled: true},
+		{Namespace: "test", Server: "srv1", ToolName: "denied_tool", Enabled: false},
 	}
 
 	tests := []struct {
-		name        string
-		namespaceID string
-		serverID    string
-		toolName    string
-		expected    PermissionResult
+		name          string
+		namespaceName string
+		serverName    string
+		toolName      string
+		expected      PermissionResult
 	}{
 		{
-			name:        "explicit allow",
-			namespaceID: "ns01",
-			serverID:    "srv1",
-			toolName:    "allowed_tool",
-			expected:    PermissionAllow,
+			name:          "explicit allow",
+			namespaceName: "test",
+			serverName:    "srv1",
+			toolName:      "allowed_tool",
+			expected:      PermissionAllow,
 		},
 		{
-			name:        "explicit deny",
-			namespaceID: "ns01",
-			serverID:    "srv1",
-			toolName:    "denied_tool",
-			expected:    PermissionDeny,
+			name:          "explicit deny",
+			namespaceName: "test",
+			serverName:    "srv1",
+			toolName:      "denied_tool",
+			expected:      PermissionDeny,
 		},
 		{
-			name:        "no explicit rule",
-			namespaceID: "ns01",
-			serverID:    "srv1",
-			toolName:    "unknown_tool",
-			expected:    PermissionDefault,
+			name:          "no explicit rule",
+			namespaceName: "test",
+			serverName:    "srv1",
+			toolName:      "unknown_tool",
+			expected:      PermissionDefault,
 		},
 		{
-			name:        "different server",
-			namespaceID: "ns01",
-			serverID:    "srv2",
-			toolName:    "allowed_tool",
-			expected:    PermissionDefault,
+			name:          "different server",
+			namespaceName: "test",
+			serverName:    "srv2",
+			toolName:      "allowed_tool",
+			expected:      PermissionDefault,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := CheckPermission(cfg, tt.namespaceID, tt.serverID, tt.toolName)
+			result := CheckPermission(cfg, tt.namespaceName, tt.serverName, tt.toolName)
 			if result != tt.expected {
 				t.Errorf("expected %v, got %v", tt.expected, result)
 			}
@@ -83,99 +83,99 @@ func TestCheckPermission(t *testing.T) {
 
 func TestIsToolAllowed(t *testing.T) {
 	cfg := config.NewConfig()
-	cfg.Namespaces = []config.NamespaceConfig{
-		{ID: "ns01", Name: "allow-by-default"},
-		{ID: "ns02", Name: "deny-by-default", DenyByDefault: true},
+	cfg.Namespaces = map[string]config.NamespaceConfig{
+		"allow-by-default": {},
+		"deny-by-default":  {DenyByDefault: true},
 	}
-	cfg.Servers["srv1"] = config.ServerConfig{ID: "srv1", Name: "Server 1"}
+	cfg.Servers["srv1"] = config.ServerConfig{Command: "echo"}
 	cfg.ToolPermissions = []config.ToolPermission{
-		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "explicitly_allowed", Enabled: true},
-		{NamespaceID: "ns01", ServerID: "srv1", ToolName: "explicitly_denied", Enabled: false},
-		{NamespaceID: "ns02", ServerID: "srv1", ToolName: "explicitly_allowed", Enabled: true},
-		{NamespaceID: "ns02", ServerID: "srv1", ToolName: "explicitly_denied", Enabled: false},
+		{Namespace: "allow-by-default", Server: "srv1", ToolName: "explicitly_allowed", Enabled: true},
+		{Namespace: "allow-by-default", Server: "srv1", ToolName: "explicitly_denied", Enabled: false},
+		{Namespace: "deny-by-default", Server: "srv1", ToolName: "explicitly_allowed", Enabled: true},
+		{Namespace: "deny-by-default", Server: "srv1", ToolName: "explicitly_denied", Enabled: false},
 	}
 
 	tests := []struct {
-		name        string
-		namespaceID string
-		serverID    string
-		toolName    string
-		allowed     bool
-		hasReason   bool
+		name          string
+		namespaceName string
+		serverName    string
+		toolName      string
+		allowed       bool
+		hasReason     bool
 	}{
 		// No namespace (selection=all) - always allowed
 		{
-			name:        "no namespace allows all",
-			namespaceID: "",
-			serverID:    "srv1",
-			toolName:    "any_tool",
-			allowed:     true,
-			hasReason:   false,
+			name:          "no namespace allows all",
+			namespaceName: "",
+			serverName:    "srv1",
+			toolName:      "any_tool",
+			allowed:       true,
+			hasReason:     false,
 		},
 		// Allow-by-default namespace
 		{
-			name:        "allow-by-default: explicit allow",
-			namespaceID: "ns01",
-			serverID:    "srv1",
-			toolName:    "explicitly_allowed",
-			allowed:     true,
-			hasReason:   false,
+			name:          "allow-by-default: explicit allow",
+			namespaceName: "allow-by-default",
+			serverName:    "srv1",
+			toolName:      "explicitly_allowed",
+			allowed:       true,
+			hasReason:     false,
 		},
 		{
-			name:        "allow-by-default: explicit deny",
-			namespaceID: "ns01",
-			serverID:    "srv1",
-			toolName:    "explicitly_denied",
-			allowed:     false,
-			hasReason:   true,
+			name:          "allow-by-default: explicit deny",
+			namespaceName: "allow-by-default",
+			serverName:    "srv1",
+			toolName:      "explicitly_denied",
+			allowed:       false,
+			hasReason:     true,
 		},
 		{
-			name:        "allow-by-default: no rule = allowed",
-			namespaceID: "ns01",
-			serverID:    "srv1",
-			toolName:    "unknown_tool",
-			allowed:     true,
-			hasReason:   false,
+			name:          "allow-by-default: no rule = allowed",
+			namespaceName: "allow-by-default",
+			serverName:    "srv1",
+			toolName:      "unknown_tool",
+			allowed:       true,
+			hasReason:     false,
 		},
 		// Deny-by-default namespace
 		{
-			name:        "deny-by-default: explicit allow",
-			namespaceID: "ns02",
-			serverID:    "srv1",
-			toolName:    "explicitly_allowed",
-			allowed:     true,
-			hasReason:   false,
+			name:          "deny-by-default: explicit allow",
+			namespaceName: "deny-by-default",
+			serverName:    "srv1",
+			toolName:      "explicitly_allowed",
+			allowed:       true,
+			hasReason:     false,
 		},
 		{
-			name:        "deny-by-default: explicit deny",
-			namespaceID: "ns02",
-			serverID:    "srv1",
-			toolName:    "explicitly_denied",
-			allowed:     false,
-			hasReason:   true,
+			name:          "deny-by-default: explicit deny",
+			namespaceName: "deny-by-default",
+			serverName:    "srv1",
+			toolName:      "explicitly_denied",
+			allowed:       false,
+			hasReason:     true,
 		},
 		{
-			name:        "deny-by-default: no rule = denied",
-			namespaceID: "ns02",
-			serverID:    "srv1",
-			toolName:    "unknown_tool",
-			allowed:     false,
-			hasReason:   true,
+			name:          "deny-by-default: no rule = denied",
+			namespaceName: "deny-by-default",
+			serverName:    "srv1",
+			toolName:      "unknown_tool",
+			allowed:       false,
+			hasReason:     true,
 		},
 		// Non-existent namespace (edge case)
 		{
-			name:        "non-existent namespace allows",
-			namespaceID: "nonexistent",
-			serverID:    "srv1",
-			toolName:    "any_tool",
-			allowed:     true,
-			hasReason:   false,
+			name:          "non-existent namespace allows",
+			namespaceName: "nonexistent",
+			serverName:    "srv1",
+			toolName:      "any_tool",
+			allowed:       true,
+			hasReason:     false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason := IsToolAllowed(cfg, tt.namespaceID, tt.serverID, tt.toolName)
+			allowed, reason := IsToolAllowed(cfg, tt.namespaceName, tt.serverName, tt.toolName)
 			if allowed != tt.allowed {
 				t.Errorf("expected allowed=%v, got %v", tt.allowed, allowed)
 			}

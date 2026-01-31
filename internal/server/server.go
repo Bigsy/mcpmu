@@ -54,9 +54,10 @@ type Server struct {
 	router     *Router
 
 	// Active namespace (resolved at init)
-	activeNamespace   *config.NamespaceConfig
-	activeServerIDs   []string        // Server IDs in the active namespace (or all if no namespace)
-	selectionMethod   SelectionMethod // How the namespace was selected
+	activeNamespaceName string                  // Name of the active namespace
+	activeNamespace     *config.NamespaceConfig // Cached pointer (may be stale after config reload)
+	activeServerNames   []string                // Server names in the active namespace (or all if no namespace)
+	selectionMethod     SelectionMethod         // How the namespace was selected
 
 	// Protocol state
 	initialized bool
@@ -254,11 +255,7 @@ func (s *Server) handleInitialize(ctx context.Context, params json.RawMessage) (
 	}
 
 	// Update router with active namespace info
-	activeID := ""
-	if s.activeNamespace != nil {
-		activeID = s.activeNamespace.ID
-	}
-	s.router.SetActiveNamespace(activeID, s.selectionMethod)
+	s.router.SetActiveNamespace(s.activeNamespaceName, s.selectionMethod)
 
 	s.initialized = true
 
@@ -287,30 +284,28 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 		s.mu.RUnlock()
 		return nil, ErrInvalidRequest("not initialized")
 	}
-	activeNamespaceID := ""
-	if s.activeNamespace != nil {
-		activeNamespaceID = s.activeNamespace.ID
-	}
+	activeNamespaceName := s.activeNamespaceName
+	activeServerNames := s.activeServerNames
 	s.mu.RUnlock()
 
 	// Get aggregated tools
-	tools, err := s.aggregator.ListTools(ctx, s.activeServerIDs)
+	tools, err := s.aggregator.ListTools(ctx, activeServerNames)
 	if err != nil {
 		return nil, ErrInternalError(err.Error())
 	}
 
 	// Filter tools based on permissions (if namespace is active)
-	if activeNamespaceID != "" {
+	if activeNamespaceName != "" {
 		filtered := make([]AggregatedTool, 0, len(tools))
 		for _, tool := range tools {
-			serverID, toolName, isManager := ParseToolName(tool.Name)
+			serverName, toolName, isManager := ParseToolName(tool.Name)
 			// Manager tools are always shown
 			if isManager {
 				filtered = append(filtered, tool)
 				continue
 			}
 			// Check permission for regular tools
-			allowed, _ := IsToolAllowed(s.cfg, activeNamespaceID, serverID, toolName)
+			allowed, _ := IsToolAllowed(s.cfg, activeNamespaceName, serverName, toolName)
 			if allowed {
 				filtered = append(filtered, tool)
 			}
@@ -328,7 +323,7 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 		s.mu.RUnlock()
 		return nil, ErrInvalidRequest("not initialized")
 	}
-	activeServerIDs := s.activeServerIDs
+	activeServerNames := s.activeServerNames
 	s.mu.RUnlock()
 
 	var req toolsCallRequest
@@ -337,29 +332,29 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 	}
 
 	// Parse tool name to check namespace enforcement
-	serverID, _, isManager := ParseToolName(req.Name)
+	serverName, _, isManager := ParseToolName(req.Name)
 
 	// Manager tools are always allowed
-	if !isManager && serverID != "" {
+	if !isManager && serverName != "" {
 		// Check if the server is in the active namespace
 		allowed := false
-		for _, id := range activeServerIDs {
-			if id == serverID {
+		for _, name := range activeServerNames {
+			if name == serverName {
 				allowed = true
 				break
 			}
 		}
 		if !allowed {
-			return nil, ErrServerNotFound(serverID)
+			return nil, ErrServerNotFound(serverName)
 		}
 
 		// Check if server is enabled
-		srv := s.cfg.GetServer(serverID)
+		srv := s.cfg.GetServer(serverName)
 		if srv == nil {
-			return nil, ErrServerNotFound(serverID)
+			return nil, ErrServerNotFound(serverName)
 		}
 		if !srv.IsEnabled() {
-			return nil, NewRPCError(ErrCodeServerNotRunning, "server is disabled: "+serverID, nil)
+			return nil, NewRPCError(ErrCodeServerNotRunning, "server is disabled: "+serverName, nil)
 		}
 	}
 
@@ -377,65 +372,56 @@ func (s *Server) resolveNamespace() *RPCError {
 	cfg := s.cfg
 	namespaceArg := s.opts.Namespace
 
-	// Rule 1: If --namespace provided, use it (lookup by ID or name)
+	// Rule 1: If --namespace provided, use it (lookup by name)
 	if namespaceArg != "" {
-		// Try lookup by ID first
-		for i := range cfg.Namespaces {
-			if cfg.Namespaces[i].ID == namespaceArg {
-				s.activeNamespace = &cfg.Namespaces[i]
-				s.activeServerIDs = cfg.Namespaces[i].ServerIDs
-				s.selectionMethod = SelectionFlag
-				log.Printf("Using namespace %q with %d servers (selection: flag)", namespaceArg, len(s.activeServerIDs))
-				return nil
-			}
-		}
-		// Try lookup by name
-		for i := range cfg.Namespaces {
-			if cfg.Namespaces[i].Name == namespaceArg {
-				s.activeNamespace = &cfg.Namespaces[i]
-				s.activeServerIDs = cfg.Namespaces[i].ServerIDs
-				s.selectionMethod = SelectionFlag
-				log.Printf("Using namespace %q with %d servers (selection: flag)", cfg.Namespaces[i].Name, len(s.activeServerIDs))
-				return nil
-			}
+		if ns, exists := cfg.Namespaces[namespaceArg]; exists {
+			s.activeNamespaceName = namespaceArg
+			s.activeNamespace = &ns
+			s.activeServerNames = ns.ServerIDs
+			s.selectionMethod = SelectionFlag
+			log.Printf("Using namespace %q with %d servers (selection: flag)", namespaceArg, len(s.activeServerNames))
+			return nil
 		}
 		return ErrNamespaceNotFound(namespaceArg)
 	}
 
-	// Rule 2: If config.defaultNamespaceId is set, use it
-	if cfg.DefaultNamespaceID != "" {
-		for i := range cfg.Namespaces {
-			if cfg.Namespaces[i].ID == cfg.DefaultNamespaceID {
-				s.activeNamespace = &cfg.Namespaces[i]
-				s.activeServerIDs = cfg.Namespaces[i].ServerIDs
-				s.selectionMethod = SelectionDefault
-				log.Printf("Using default namespace %q with %d servers (selection: default)", cfg.DefaultNamespaceID, len(s.activeServerIDs))
-				return nil
-			}
+	// Rule 2: If config.defaultNamespace is set, use it
+	if cfg.DefaultNamespace != "" {
+		if ns, exists := cfg.Namespaces[cfg.DefaultNamespace]; exists {
+			s.activeNamespaceName = cfg.DefaultNamespace
+			s.activeNamespace = &ns
+			s.activeServerNames = ns.ServerIDs
+			s.selectionMethod = SelectionDefault
+			log.Printf("Using default namespace %q with %d servers (selection: default)", cfg.DefaultNamespace, len(s.activeServerNames))
+			return nil
 		}
-		return ErrNamespaceNotFound(cfg.DefaultNamespaceID)
+		return ErrNamespaceNotFound(cfg.DefaultNamespace)
 	}
 
 	// Rule 3: If exactly 1 namespace, use it
 	if len(cfg.Namespaces) == 1 {
-		s.activeNamespace = &cfg.Namespaces[0]
-		s.activeServerIDs = cfg.Namespaces[0].ServerIDs
-		s.selectionMethod = SelectionOnly
-		log.Printf("Using only namespace %q with %d servers (selection: only)", cfg.Namespaces[0].ID, len(s.activeServerIDs))
-		return nil
+		for name, ns := range cfg.Namespaces {
+			s.activeNamespaceName = name
+			s.activeNamespace = &ns
+			s.activeServerNames = ns.ServerIDs
+			s.selectionMethod = SelectionOnly
+			log.Printf("Using only namespace %q with %d servers (selection: only)", name, len(s.activeServerNames))
+			return nil
+		}
 	}
 
 	// Rule 4: If 0 namespaces, expose all enabled servers
 	if len(cfg.Namespaces) == 0 {
+		s.activeNamespaceName = ""
 		s.activeNamespace = nil
-		s.activeServerIDs = make([]string, 0, len(cfg.Servers))
-		for id, srv := range cfg.Servers {
+		s.activeServerNames = make([]string, 0, len(cfg.Servers))
+		for name, srv := range cfg.Servers {
 			if srv.IsEnabled() {
-				s.activeServerIDs = append(s.activeServerIDs, id)
+				s.activeServerNames = append(s.activeServerNames, name)
 			}
 		}
 		s.selectionMethod = SelectionAll
-		log.Printf("No namespaces configured, exposing all %d enabled servers (selection: all)", len(s.activeServerIDs))
+		log.Printf("No namespaces configured, exposing all %d enabled servers (selection: all)", len(s.activeServerNames))
 		return nil
 	}
 
@@ -447,14 +433,14 @@ func (s *Server) resolveNamespace() *RPCError {
 
 // startEagerServers starts all servers in the active namespace.
 func (s *Server) startEagerServers(ctx context.Context) {
-	log.Printf("Starting %d servers eagerly", len(s.activeServerIDs))
-	for _, id := range s.activeServerIDs {
-		srv := s.cfg.GetServer(id)
+	log.Printf("Starting %d servers eagerly", len(s.activeServerNames))
+	for _, name := range s.activeServerNames {
+		srv := s.cfg.GetServer(name)
 		if srv == nil {
 			continue
 		}
-		if _, err := s.supervisor.Start(ctx, *srv); err != nil {
-			log.Printf("Failed to start server %s: %v", id, err)
+		if _, err := s.supervisor.Start(ctx, name, *srv); err != nil {
+			log.Printf("Failed to start server %s: %v", name, err)
 		}
 	}
 }
@@ -565,10 +551,7 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 
 	// Swap config
 	s.mu.Lock()
-	oldNamespaceID := ""
-	if s.activeNamespace != nil {
-		oldNamespaceID = s.activeNamespace.ID
-	}
+	oldNamespaceName := s.activeNamespaceName
 	oldSelectionMethod := s.selectionMethod
 	s.cfg = newCfg
 	s.mu.Unlock()
@@ -582,33 +565,30 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 	var keepNamespace bool
 	if oldSelectionMethod == SelectionFlag && s.opts.Namespace != "" {
 		// Try to find the namespace by the original flag value
-		for i := range newCfg.Namespaces {
-			if newCfg.Namespaces[i].ID == s.opts.Namespace || newCfg.Namespaces[i].Name == s.opts.Namespace {
-				s.activeNamespace = &newCfg.Namespaces[i]
-				s.activeServerIDs = newCfg.Namespaces[i].ServerIDs
-				s.selectionMethod = SelectionFlag
-				keepNamespace = true
-				break
-			}
+		if ns, exists := newCfg.Namespaces[s.opts.Namespace]; exists {
+			s.activeNamespaceName = s.opts.Namespace
+			s.activeNamespace = &ns
+			s.activeServerNames = ns.ServerIDs
+			s.selectionMethod = SelectionFlag
+			keepNamespace = true
 		}
-	} else if oldNamespaceID != "" {
-		// Try to keep the same namespace by ID
-		for i := range newCfg.Namespaces {
-			if newCfg.Namespaces[i].ID == oldNamespaceID {
-				s.activeNamespace = &newCfg.Namespaces[i]
-				s.activeServerIDs = newCfg.Namespaces[i].ServerIDs
-				s.selectionMethod = oldSelectionMethod
-				keepNamespace = true
-				break
-			}
+	} else if oldNamespaceName != "" {
+		// Try to keep the same namespace by name
+		if ns, exists := newCfg.Namespaces[oldNamespaceName]; exists {
+			s.activeNamespaceName = oldNamespaceName
+			s.activeNamespace = &ns
+			s.activeServerNames = ns.ServerIDs
+			s.selectionMethod = oldSelectionMethod
+			keepNamespace = true
 		}
 	}
 
 	if !keepNamespace {
 		// Need to re-resolve namespace from scratch
 		// Clear current state first
+		s.activeNamespaceName = ""
 		s.activeNamespace = nil
-		s.activeServerIDs = nil
+		s.activeServerNames = nil
 		s.mu.Unlock()
 
 		// Re-run namespace resolution
@@ -616,20 +596,21 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 			log.Printf("Failed to resolve namespace after reload: %v", err)
 			// Fall back to exposing all enabled servers
 			s.mu.Lock()
+			s.activeNamespaceName = ""
 			s.activeNamespace = nil
-			s.activeServerIDs = make([]string, 0, len(newCfg.Servers))
-			for id, srv := range newCfg.Servers {
+			s.activeServerNames = make([]string, 0, len(newCfg.Servers))
+			for name, srv := range newCfg.Servers {
 				if srv.IsEnabled() {
-					s.activeServerIDs = append(s.activeServerIDs, id)
+					s.activeServerNames = append(s.activeServerNames, name)
 				}
 			}
 			s.selectionMethod = SelectionAll
 			s.mu.Unlock()
-			log.Printf("Fell back to exposing all %d enabled servers", len(s.activeServerIDs))
+			log.Printf("Fell back to exposing all %d enabled servers", len(s.activeServerNames))
 		}
 	} else {
 		log.Printf("Kept namespace %q after reload with %d servers",
-			s.activeNamespace.ID, len(s.activeServerIDs))
+			s.activeNamespaceName, len(s.activeServerNames))
 		s.mu.Unlock()
 	}
 
@@ -639,13 +620,10 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 
 	// Update router with active namespace info
 	s.mu.RLock()
-	activeID := ""
-	if s.activeNamespace != nil {
-		activeID = s.activeNamespace.ID
-	}
+	activeNsName := s.activeNamespaceName
 	selMethod := s.selectionMethod
 	s.mu.RUnlock()
-	s.router.SetActiveNamespace(activeID, selMethod)
+	s.router.SetActiveNamespace(activeNsName, selMethod)
 
 	// Restart servers if eager start is configured
 	if s.opts.EagerStart {

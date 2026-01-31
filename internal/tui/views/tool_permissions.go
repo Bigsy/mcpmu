@@ -118,62 +118,47 @@ func NewToolPermissions(th theme.Theme) ToolPermissionsModel {
 }
 
 // Show displays the editor with tools from running servers.
-// serverTools maps serverID -> list of tools
+// serverTools maps serverName -> list of tools
 // permissions are the current explicit permissions
 func (m *ToolPermissionsModel) Show(
-	namespaceID string,
+	namespaceName string,
 	serverTools map[string][]events.McpTool,
-	servers []config.ServerConfig,
+	servers []config.ServerEntry,
 	permissions []config.ToolPermission,
 	denyByDefault bool,
 ) {
 	m.visible = true
-	m.namespaceID = namespaceID
+	m.namespaceID = namespaceName
 	m.denyByDefault = denyByDefault
 	m.originalPerms = make(map[string]bool)
 	m.currentPerms = make(map[string]bool)
 
 	// Build permission lookup
 	for _, perm := range permissions {
-		if perm.NamespaceID == namespaceID {
-			key := perm.ServerID + ":" + perm.ToolName
+		if perm.Namespace == namespaceName {
+			key := perm.Server + ":" + perm.ToolName
 			m.originalPerms[key] = perm.Enabled
 			m.currentPerms[key] = perm.Enabled
 		}
 	}
 
-	// Build server name lookup
-	serverNames := make(map[string]string)
-	for _, srv := range servers {
-		name := srv.Name
-		if name == "" {
-			name = srv.Command
-		}
-		serverNames[srv.ID] = name
-	}
-
 	// Build list items
 	var items []list.Item
-	for serverID, tools := range serverTools {
+	for serverName, tools := range serverTools {
 		if len(tools) == 0 {
 			continue
 		}
 
-		serverName := serverNames[serverID]
-		if serverName == "" {
-			serverName = serverID
-		}
-
 		// Add server header
 		items = append(items, toolPermItem{
-			serverID:   serverID,
+			serverID:   serverName,
 			serverName: serverName,
 			isHeader:   true,
 		})
 
 		// Add tools
 		for _, tool := range tools {
-			key := serverID + ":" + tool.Name
+			key := serverName + ":" + tool.Name
 			enabled, hasExplicit := m.currentPerms[key]
 			if !hasExplicit {
 				// Use namespace default
@@ -181,7 +166,7 @@ func (m *ToolPermissionsModel) Show(
 			}
 
 			items = append(items, toolPermItem{
-				serverID:    serverID,
+				serverID:    serverName,
 				serverName:  serverName,
 				toolName:    tool.Name,
 				description: tool.Description,
@@ -243,7 +228,7 @@ func (m *ToolPermissionsModel) ClearAutoStartedServers() {
 // FinishDiscovery transitions from discovery to editing mode.
 func (m *ToolPermissionsModel) FinishDiscovery(
 	serverTools map[string][]events.McpTool,
-	servers []config.ServerConfig,
+	servers []config.ServerEntry,
 	permissions []config.ToolPermission,
 	denyByDefault bool,
 ) {
@@ -253,52 +238,37 @@ func (m *ToolPermissionsModel) FinishDiscovery(
 
 	// Build permission lookup
 	for _, perm := range permissions {
-		if perm.NamespaceID == m.namespaceID {
-			key := perm.ServerID + ":" + perm.ToolName
+		if perm.Namespace == m.namespaceID {
+			key := perm.Server + ":" + perm.ToolName
 			m.originalPerms[key] = perm.Enabled
 			m.currentPerms[key] = perm.Enabled
 		}
 	}
 
-	// Build server name lookup
-	serverNames := make(map[string]string)
-	for _, srv := range servers {
-		name := srv.Name
-		if name == "" {
-			name = srv.Command
-		}
-		serverNames[srv.ID] = name
-	}
-
 	// Build list items
 	var items []list.Item
-	for serverID, tools := range serverTools {
+	for serverName, tools := range serverTools {
 		if len(tools) == 0 {
 			continue
 		}
 
-		serverName := serverNames[serverID]
-		if serverName == "" {
-			serverName = serverID
-		}
-
 		// Add server header
 		items = append(items, toolPermItem{
-			serverID:   serverID,
+			serverID:   serverName,
 			serverName: serverName,
 			isHeader:   true,
 		})
 
 		// Add tools
 		for _, tool := range tools {
-			key := serverID + ":" + tool.Name
+			key := serverName + ":" + tool.Name
 			enabled, hasExplicit := m.currentPerms[key]
 			if !hasExplicit {
 				enabled = !denyByDefault
 			}
 
 			items = append(items, toolPermItem{
-				serverID:    serverID,
+				serverID:    serverName,
 				serverName:  serverName,
 				toolName:    tool.Name,
 				description: tool.Description,

@@ -52,7 +52,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check server exists
-	srv := cfg.FindServerByName(name)
+	srv := cfg.GetServer(name)
 	if srv == nil {
 		return fmt.Errorf("server %q not found", name)
 	}
@@ -73,7 +73,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	// Remove server
-	if err := cfg.DeleteServerByName(name); err != nil {
+	if err := cfg.DeleteServer(name); err != nil {
 		return err
 	}
 

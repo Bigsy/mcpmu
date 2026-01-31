@@ -13,9 +13,11 @@ import (
 
 // ServerFormResult is sent when the user completes or cancels the form.
 type ServerFormResult struct {
-	Server    config.ServerConfig
-	Submitted bool
-	IsEdit    bool // true if editing an existing server
+	Name         string // Server name (map key)
+	OriginalName string // Original name (for rename detection in edit mode)
+	Server       config.ServerConfig
+	Submitted    bool
+	IsEdit       bool // true if editing an existing server
 }
 
 // ServerFormModel is a form for adding/editing servers.
@@ -31,10 +33,10 @@ type ServerFormModel struct {
 
 	// Original server config (for edit mode - preserves fields not in form)
 	originalServer *config.ServerConfig
+	originalName   string // Original name for edit mode (to detect rename)
 
 	// Form field values
-	serverID  string // Only used for edit mode
-	name      string
+	name string
 	command   string
 	args      string
 	cwd       string
@@ -74,7 +76,7 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.isEdit = false
 	m.showConfirmDiscard = false
 	m.originalServer = nil
-	m.serverID = ""
+	m.originalName = ""
 	m.name = ""
 	m.command = ""
 	m.args = ""
@@ -94,13 +96,13 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 
 // ShowEdit displays the form for editing an existing server.
 // Returns a tea.Cmd to initialize the form.
-func (m *ServerFormModel) ShowEdit(srv config.ServerConfig) tea.Cmd {
+func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd {
 	m.visible = true
 	m.isEdit = true
 	m.showConfirmDiscard = false
-	m.originalServer = &srv // Preserve original for non-form fields
-	m.serverID = srv.ID
-	m.name = srv.Name
+	m.originalServer = &srv  // Preserve original for non-form fields
+	m.originalName = name    // Remember original name for rename detection
+	m.name = name
 	m.command = srv.Command
 	m.args = formatArgs(srv.Args) // Properly quote args with spaces
 	m.cwd = srv.Cwd
@@ -231,11 +233,15 @@ func (m *ServerFormModel) Update(msg tea.Msg) tea.Cmd {
 				m.visible = false
 				m.showConfirmDiscard = false
 				srv := m.buildServerConfig()
+				name := m.getName()
+				originalName := m.originalName
 				return func() tea.Msg {
 					return ServerFormResult{
-						Server:    srv,
-						Submitted: true,
-						IsEdit:    m.isEdit,
+						Name:         name,
+						OriginalName: originalName,
+						Server:       srv,
+						Submitted:    true,
+						IsEdit:       m.isEdit,
 					}
 				}
 			case "n", "N":
@@ -283,11 +289,16 @@ func (m *ServerFormModel) Update(msg tea.Msg) tea.Cmd {
 	if m.form.State == huh.StateCompleted {
 		m.visible = false
 		srv := m.buildServerConfig()
+		name := m.getName()
+		originalName := m.originalName
+		isEdit := m.isEdit
 		return func() tea.Msg {
 			return ServerFormResult{
-				Server:    srv,
-				Submitted: true,
-				IsEdit:    m.isEdit,
+				Name:         name,
+				OriginalName: originalName,
+				Server:       srv,
+				Submitted:    true,
+				IsEdit:       isEdit,
 			}
 		}
 	}
@@ -313,25 +324,22 @@ func (m ServerFormModel) buildServerConfig() config.ServerConfig {
 	}
 
 	// Override with form values
-	srv.ID = m.serverID // Empty for new servers (will be auto-generated)
-	srv.Name = strings.TrimSpace(m.name)
 	srv.Command = strings.TrimSpace(m.command)
 	srv.Args = parseArgs(m.args)
 	srv.Cwd = strings.TrimSpace(m.cwd)
 	srv.Env = parseEnvVars(m.env)
 	srv.Autostart = m.autostart
 
-	// For new servers, set Kind to stdio (the only type supported in form currently)
-	if !m.isEdit {
-		srv.Kind = config.ServerKindStdio
-	}
-
-	// Use command as name if name is empty
-	if srv.Name == "" {
-		srv.Name = srv.Command
-	}
-
 	return srv
+}
+
+// getName returns the server name, using command as fallback for new servers
+func (m ServerFormModel) getName() string {
+	name := strings.TrimSpace(m.name)
+	if name == "" {
+		return strings.TrimSpace(m.command)
+	}
+	return name
 }
 
 // View renders the form.

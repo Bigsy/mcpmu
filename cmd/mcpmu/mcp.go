@@ -76,7 +76,7 @@ func runMCPLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	// Find server
-	srv := cfg.FindServerByName(serverName)
+	srv := cfg.GetServer(serverName)
 	if srv == nil {
 		return fmt.Errorf("server %q not found", serverName)
 	}
@@ -107,7 +107,7 @@ func runMCPLogin(cmd *cobra.Command, args []string) error {
 	// Run OAuth flow
 	flowConfig := oauth.FlowConfig{
 		ServerURL:    srv.URL,
-		ServerName:   srv.Name,
+		ServerName:   serverName,
 		Scopes:       scopes,
 		CallbackPort: cfg.MCPOAuthCallbackPort,
 		Store:        store,
@@ -144,7 +144,7 @@ func runMCPLogout(cmd *cobra.Command, args []string) error {
 	}
 
 	// Find server
-	srv := cfg.FindServerByName(serverName)
+	srv := cfg.GetServer(serverName)
 	if srv == nil {
 		return fmt.Errorf("server %q not found", serverName)
 	}

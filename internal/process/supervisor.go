@@ -98,28 +98,29 @@ func (s *Supervisor) CredentialStore() oauth.CredentialStore {
 }
 
 // Start starts an MCP server (stdio process or HTTP connection).
-func (s *Supervisor) Start(ctx context.Context, srv config.ServerConfig) (*Handle, error) {
+// The name parameter is used as the identifier for the server.
+func (s *Supervisor) Start(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Check if already running
-	if h, exists := s.handles[srv.ID]; exists && h.IsRunning() {
-		return nil, fmt.Errorf("server %s is already running", srv.ID)
+	if h, exists := s.handles[name]; exists && h.IsRunning() {
+		return nil, fmt.Errorf("server %s is already running", name)
 	}
 
 	// Dispatch based on server type
 	if srv.IsHTTP() {
-		return s.startHTTP(ctx, srv)
+		return s.startHTTP(ctx, name, srv)
 	}
-	return s.startStdio(ctx, srv)
+	return s.startStdio(ctx, name, srv)
 }
 
 // startStdio starts a stdio-based MCP server process.
-func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*Handle, error) {
-	log.Printf("Starting stdio server: id=%s cmd=%s args=%v", srv.ID, srv.Command, srv.Args)
+func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
+	log.Printf("Starting stdio server: name=%s cmd=%s args=%v", name, srv.Command, srv.Args)
 
 	// Emit starting event
-	s.emitStatus(srv.ID, events.StateStarting, 0, nil, "")
+	s.emitStatus(name, events.StateStarting, 0, nil, "")
 
 	// Build command
 	cmd := exec.CommandContext(ctx, srv.Command, srv.Args...)
@@ -135,31 +136,31 @@ func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*
 	// Set up pipes
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		s.emitStatus(srv.ID, events.StateError, 0, nil, err.Error())
+		s.emitStatus(name, events.StateError, 0, nil, err.Error())
 		return nil, fmt.Errorf("stdin pipe: %w", err)
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		s.emitStatus(srv.ID, events.StateError, 0, nil, err.Error())
+		s.emitStatus(name, events.StateError, 0, nil, err.Error())
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		s.emitStatus(srv.ID, events.StateError, 0, nil, err.Error())
+		s.emitStatus(name, events.StateError, 0, nil, err.Error())
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 
 	// Start the process
 	if err := cmd.Start(); err != nil {
-		s.emitStatus(srv.ID, events.StateError, 0, nil, err.Error())
+		s.emitStatus(name, events.StateError, 0, nil, err.Error())
 		return nil, fmt.Errorf("start process: %w", err)
 	}
 
 	// Track PID for orphan cleanup
 	if s.pidTracker != nil {
-		if err := s.pidTracker.Add(srv.ID, cmd.Process.Pid, srv.Command, srv.Args); err != nil {
+		if err := s.pidTracker.Add(name, cmd.Process.Pid, srv.Command, srv.Args); err != nil {
 			log.Printf("Warning: failed to track PID: %v", err)
 		}
 	}
@@ -170,7 +171,7 @@ func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*
 
 	// Create handle
 	handle := &Handle{
-		id:             srv.ID,
+		id:             name,
 		kind:           HandleKindStdio,
 		cmd:            cmd,
 		client:         client,
@@ -182,7 +183,7 @@ func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*
 		done:           make(chan struct{}),
 	}
 
-	s.handles[srv.ID] = handle
+	s.handles[name] = handle
 
 	// Start stderr reader goroutine
 	go handle.readStderr(stderr)
@@ -213,12 +214,12 @@ func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*
 
 	if initErr != nil {
 		_ = handle.Stop()
-		s.emitStatus(srv.ID, events.StateError, cmd.Process.Pid, nil, fmt.Sprintf("MCP init failed after %d attempts: %v", MaxInitRetries, initErr))
+		s.emitStatus(name, events.StateError, cmd.Process.Pid, nil, fmt.Sprintf("MCP init failed after %d attempts: %v", MaxInitRetries, initErr))
 		return nil, fmt.Errorf("initialize mcp: %w", initErr)
 	}
 
 	// Emit running event immediately (tool discovery happens in background)
-	s.emitStatus(srv.ID, events.StateRunning, cmd.Process.Pid, nil, "")
+	s.emitStatus(name, events.StateRunning, cmd.Process.Pid, nil, "")
 
 	// Discover tools in background (non-blocking)
 	go func() {
@@ -227,7 +228,7 @@ func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*
 		defer toolsCancel()
 		tools, err := client.ListTools(toolsCtx)
 		if err != nil {
-			s.bus.Publish(events.NewErrorEvent(srv.ID, err, "Failed to list tools"))
+			s.bus.Publish(events.NewErrorEvent(name, err, "Failed to list tools"))
 			return
 		}
 		handle.SetTools(tools)
@@ -238,18 +239,18 @@ func (s *Supervisor) startStdio(ctx context.Context, srv config.ServerConfig) (*
 				Description: t.Description,
 			}
 		}
-		s.bus.Publish(events.NewToolsUpdatedEvent(srv.ID, mcpTools))
+		s.bus.Publish(events.NewToolsUpdatedEvent(name, mcpTools))
 	}()
 
 	return handle, nil
 }
 
 // startHTTP starts an HTTP-based MCP server connection.
-func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*Handle, error) {
-	log.Printf("Starting HTTP server: id=%s url=%s", srv.ID, srv.URL)
+func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
+	log.Printf("Starting HTTP server: name=%s url=%s", name, srv.URL)
 
 	// Emit starting event
-	s.emitStatus(srv.ID, events.StateStarting, 0, nil, "")
+	s.emitStatus(name, events.StateStarting, 0, nil, "")
 
 	// Determine authentication
 	var bearerToken string
@@ -260,7 +261,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 		token := os.Getenv(srv.BearerTokenEnvVar)
 		if token == "" {
 			err := fmt.Errorf("bearer token env var %s is not set", srv.BearerTokenEnvVar)
-			s.emitStatus(srv.ID, events.StateError, 0, nil, err.Error())
+			s.emitStatus(name, events.StateError, 0, nil, err.Error())
 			return nil, err
 		}
 		bearerToken = token
@@ -270,17 +271,17 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 		log.Printf("Looking up OAuth token for URL: %s", srv.URL)
 		token, err := s.tokenManager.GetAccessToken(ctx, srv.URL)
 		if err == nil && token != "" {
-			log.Printf("Found OAuth token for %s (len=%d)", srv.ID, len(token))
+			log.Printf("Found OAuth token for %s (len=%d)", name, len(token))
 			bearerToken = token
 			authStatus = mcp.AuthStatusOAuthOK
 		} else {
-			log.Printf("No OAuth token found for %s: err=%v", srv.ID, err)
+			log.Printf("No OAuth token found for %s: err=%v", name, err)
 			// Try to discover OAuth support
 			metadata, _ := oauth.SupportsOAuth(ctx, srv.URL)
 			if metadata != nil {
 				authStatus = mcp.AuthStatusOAuthNeeds
 				// Don't fail - server might work without auth, or user can login later
-				log.Printf("Server %s supports OAuth but needs login", srv.ID)
+				log.Printf("Server %s supports OAuth but needs login", name)
 			}
 		}
 	}
@@ -308,9 +309,9 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 	if err := httpTransport.Connect(ctx); err != nil {
 		// Check if it's an auth error
 		if authStatus == mcp.AuthStatusOAuthNeeds {
-			log.Printf("Server %s requires OAuth login", srv.ID)
+			log.Printf("Server %s requires OAuth login", name)
 		}
-		s.emitStatus(srv.ID, events.StateError, 0, nil, err.Error())
+		s.emitStatus(name, events.StateError, 0, nil, err.Error())
 		return nil, fmt.Errorf("connect HTTP transport: %w", err)
 	}
 
@@ -319,7 +320,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 
 	// Create handle
 	handle := &Handle{
-		id:            srv.ID,
+		id:            name,
 		kind:          HandleKindHTTP,
 		client:        client,
 		httpTransport: httpTransport,
@@ -332,7 +333,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 		done:          make(chan struct{}),
 	}
 
-	s.handles[srv.ID] = handle
+	s.handles[name] = handle
 
 	// Initialize MCP connection
 	initCtx, cancel := context.WithTimeout(ctx, time.Duration(srv.StartupTimeout())*time.Second)
@@ -340,12 +341,12 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 
 	if err := client.Initialize(initCtx); err != nil {
 		_ = handle.Stop()
-		s.emitStatus(srv.ID, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
+		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
 		return nil, fmt.Errorf("initialize mcp: %w", err)
 	}
 
 	// Emit running event immediately (tool discovery happens in background)
-	s.emitStatus(srv.ID, events.StateRunning, 0, nil, "")
+	s.emitStatus(name, events.StateRunning, 0, nil, "")
 
 	// Discover tools in background (non-blocking)
 	go func() {
@@ -354,7 +355,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 		defer toolsCancel()
 		tools, err := client.ListTools(toolsCtx)
 		if err != nil {
-			s.bus.Publish(events.NewErrorEvent(srv.ID, err, "Failed to list tools"))
+			s.bus.Publish(events.NewErrorEvent(name, err, "Failed to list tools"))
 			return
 		}
 		handle.SetTools(tools)
@@ -365,7 +366,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, srv config.ServerConfig) (*H
 				Description: t.Description,
 			}
 		}
-		s.bus.Publish(events.NewToolsUpdatedEvent(srv.ID, mcpTools))
+		s.bus.Publish(events.NewToolsUpdatedEvent(name, mcpTools))
 	}()
 
 	return handle, nil

@@ -77,11 +77,10 @@ func runNamespaceAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	ns := config.NamespaceConfig{
-		Name:        name,
 		Description: namespaceAddDescription,
 	}
 
-	if _, err := cfg.AddNamespace(ns); err != nil {
+	if err := cfg.AddNamespace(name, ns); err != nil {
 		return err
 	}
 
@@ -126,7 +125,7 @@ func runNamespaceList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	namespaces := cfg.Namespaces
+	namespaces := cfg.NamespaceEntries()
 	sort.Slice(namespaces, func(i, j int) bool {
 		return namespaces[i].Name < namespaces[j].Name
 	})
@@ -137,7 +136,7 @@ func runNamespaceList(cmd *cobra.Command, args []string) error {
 	return outputNamespacesTable(cfg, namespaces)
 }
 
-func outputNamespacesJSON(cfg *config.Config, namespaces []config.NamespaceConfig) error {
+func outputNamespacesJSON(cfg *config.Config, namespaces []config.NamespaceEntry) error {
 	type namespaceView struct {
 		Name          string   `json:"name"`
 		Description   string   `json:"description,omitempty"`
@@ -148,15 +147,14 @@ func outputNamespacesJSON(cfg *config.Config, namespaces []config.NamespaceConfi
 	}
 
 	views := make([]namespaceView, len(namespaces))
-	for i, ns := range namespaces {
-		serverNames := resolveServerNames(cfg, ns.ServerIDs)
+	for i, entry := range namespaces {
 		views[i] = namespaceView{
-			Name:          ns.Name,
-			Description:   ns.Description,
-			ServerCount:   len(ns.ServerIDs),
-			Servers:       serverNames,
-			DenyByDefault: ns.DenyByDefault,
-			IsDefault:     ns.ID == cfg.DefaultNamespaceID,
+			Name:          entry.Name,
+			Description:   entry.Config.Description,
+			ServerCount:   len(entry.Config.ServerIDs),
+			Servers:       entry.Config.ServerIDs, // Server names are stored directly
+			DenyByDefault: entry.Config.DenyByDefault,
+			IsDefault:     entry.Name == cfg.DefaultNamespace,
 		}
 	}
 
@@ -168,7 +166,7 @@ func outputNamespacesJSON(cfg *config.Config, namespaces []config.NamespaceConfi
 	return nil
 }
 
-func outputNamespacesTable(cfg *config.Config, namespaces []config.NamespaceConfig) error {
+func outputNamespacesTable(cfg *config.Config, namespaces []config.NamespaceEntry) error {
 	if len(namespaces) == 0 {
 		fmt.Println("No namespaces configured")
 		return nil
@@ -178,12 +176,12 @@ func outputNamespacesTable(cfg *config.Config, namespaces []config.NamespaceConf
 	nameWidth := 4
 	descWidth := 11
 
-	for _, ns := range namespaces {
-		if len(ns.Name) > nameWidth {
-			nameWidth = len(ns.Name)
+	for _, entry := range namespaces {
+		if len(entry.Name) > nameWidth {
+			nameWidth = len(entry.Name)
 		}
-		if len(ns.Description) > descWidth {
-			descWidth = len(ns.Description)
+		if len(entry.Config.Description) > descWidth {
+			descWidth = len(entry.Config.Description)
 		}
 	}
 
@@ -196,37 +194,26 @@ func outputNamespacesTable(cfg *config.Config, namespaces []config.NamespaceConf
 	fmt.Printf("%-*s  %-*s  %s  %s  %s\n", nameWidth, "NAME", descWidth, "DESCRIPTION", "SERVERS", "DENY-DEFAULT", "DEFAULT")
 
 	// Print namespaces
-	for _, ns := range namespaces {
-		desc := ns.Description
+	for _, entry := range namespaces {
+		desc := entry.Config.Description
 		if len(desc) > descWidth {
 			desc = desc[:descWidth-3] + "..."
 		}
 
 		denyDefault := "no"
-		if ns.DenyByDefault {
+		if entry.Config.DenyByDefault {
 			denyDefault = "yes"
 		}
 
 		isDefault := ""
-		if ns.ID == cfg.DefaultNamespaceID {
+		if entry.Name == cfg.DefaultNamespace {
 			isDefault = "*"
 		}
 
-		fmt.Printf("%-*s  %-*s  %-7d  %-12s  %s\n", nameWidth, ns.Name, descWidth, desc, len(ns.ServerIDs), denyDefault, isDefault)
+		fmt.Printf("%-*s  %-*s  %-7d  %-12s  %s\n", nameWidth, entry.Name, descWidth, desc, len(entry.Config.ServerIDs), denyDefault, isDefault)
 	}
 
 	return nil
-}
-
-func resolveServerNames(cfg *config.Config, serverIDs []string) []string {
-	names := make([]string, 0, len(serverIDs))
-	for _, id := range serverIDs {
-		srv := cfg.GetServer(id)
-		if srv != nil {
-			names = append(names, srv.Name)
-		}
-	}
-	return names
 }
 
 // ============================================================================
@@ -266,7 +253,7 @@ func runNamespaceRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check namespace exists
-	ns := cfg.FindNamespaceByName(name)
+	ns := cfg.GetNamespace(name)
 	if ns == nil {
 		return fmt.Errorf("namespace %q not found", name)
 	}
@@ -286,7 +273,7 @@ func runNamespaceRemove(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := cfg.DeleteNamespaceByName(name); err != nil {
+	if err := cfg.DeleteNamespace(name); err != nil {
 		return err
 	}
 
@@ -332,18 +319,16 @@ func runNamespaceAssign(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	ns := cfg.FindNamespaceByName(namespaceName)
-	if ns == nil {
+	if cfg.GetNamespace(namespaceName) == nil {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	// Lookup server by name
-	srv := cfg.FindServerByName(serverName)
-	if srv == nil {
+	if cfg.GetServer(serverName) == nil {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 
-	if err := cfg.AssignServerToNamespace(ns.ID, srv.ID); err != nil {
+	if err := cfg.AssignServerToNamespace(namespaceName, serverName); err != nil {
 		return err
 	}
 
@@ -388,18 +373,16 @@ func runNamespaceUnassign(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	ns := cfg.FindNamespaceByName(namespaceName)
-	if ns == nil {
+	if cfg.GetNamespace(namespaceName) == nil {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
-	// Lookup server by name
-	srv := cfg.FindServerByName(serverName)
-	if srv == nil {
+	// Lookup server by name (optional - might want to unassign even if server was removed)
+	if cfg.GetServer(serverName) == nil {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 
-	if err := cfg.UnassignServerFromNamespace(ns.ID, srv.ID); err != nil {
+	if err := cfg.UnassignServerFromNamespace(namespaceName, serverName); err != nil {
 		return err
 	}
 
@@ -443,12 +426,11 @@ func runNamespaceDefault(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	ns := cfg.FindNamespaceByName(name)
-	if ns == nil {
+	if cfg.GetNamespace(name) == nil {
 		return fmt.Errorf("namespace %q not found", name)
 	}
 
-	cfg.DefaultNamespaceID = ns.ID
+	cfg.DefaultNamespace = name
 
 	if err := saveConfig(cfg, namespaceDefaultConfigPath); err != nil {
 		return err
@@ -503,14 +485,14 @@ func runNamespaceSetDenyDefault(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	ns := cfg.FindNamespaceByName(namespaceName)
+	ns := cfg.GetNamespace(namespaceName)
 	if ns == nil {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	ns.DenyByDefault = denyByDefault
 
-	if err := cfg.UpdateNamespace(*ns); err != nil {
+	if err := cfg.UpdateNamespace(namespaceName, *ns); err != nil {
 		return err
 	}
 

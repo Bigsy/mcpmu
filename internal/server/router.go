@@ -25,8 +25,8 @@ type Router struct {
 	aggregator *Aggregator
 
 	// Active namespace info (set after initialize)
-	activeNamespaceID string
-	selectionMethod   SelectionMethod
+	activeNamespaceName string
+	selectionMethod     SelectionMethod
 }
 
 // NewRouter creates a new tool call router.
@@ -39,8 +39,8 @@ func NewRouter(cfg *config.Config, supervisor *process.Supervisor, aggregator *A
 }
 
 // SetActiveNamespace sets the active namespace info for the router.
-func (r *Router) SetActiveNamespace(namespaceID string, selection SelectionMethod) {
-	r.activeNamespaceID = namespaceID
+func (r *Router) SetActiveNamespace(namespaceName string, selection SelectionMethod) {
+	r.activeNamespaceName = namespaceName
 	r.selectionMethod = selection
 }
 
@@ -49,7 +49,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 	log.Printf("CallTool: %s", qualifiedName)
 
 	// Parse the tool name
-	serverID, toolName, isManager := ParseToolName(qualifiedName)
+	serverName, toolName, isManager := ParseToolName(qualifiedName)
 
 	// Handle manager tools (always allowed, no permission check)
 	if isManager {
@@ -57,37 +57,37 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 	}
 
 	// Check permission (skip if no active namespace, i.e., selection=all)
-	if r.activeNamespaceID != "" {
-		allowed, reason := IsToolAllowed(r.cfg, r.activeNamespaceID, serverID, toolName)
+	if r.activeNamespaceName != "" {
+		allowed, reason := IsToolAllowed(r.cfg, r.activeNamespaceName, serverName, toolName)
 		if !allowed {
 			return nil, ErrToolDenied(qualifiedName, reason)
 		}
 	}
 
 	// Validate server exists
-	srv := r.cfg.GetServer(serverID)
+	srv := r.cfg.GetServer(serverName)
 	if srv == nil {
-		return nil, ErrServerNotFound(serverID)
+		return nil, ErrServerNotFound(serverName)
 	}
 
 	// Get or start the server
-	handle := r.supervisor.Get(serverID)
+	handle := r.supervisor.Get(serverName)
 	if handle == nil || !handle.IsRunning() {
 		// Lazy start the server
 		var err error
 		startCtx, cancel := context.WithTimeout(ctx, LazyStartTimeout)
 		defer cancel()
 
-		handle, err = r.supervisor.Start(startCtx, *srv)
+		handle, err = r.supervisor.Start(startCtx, serverName, *srv)
 		if err != nil {
-			return nil, ErrServerFailedToStart(serverID, err.Error())
+			return nil, ErrServerFailedToStart(serverName, err.Error())
 		}
 	}
 
 	// Call the tool on the upstream server
 	client := handle.Client()
 	if client == nil {
-		return nil, ErrServerNotRunning(serverID)
+		return nil, ErrServerNotRunning(serverName)
 	}
 
 	// Set timeout for the call
@@ -97,7 +97,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 	result, err := client.CallTool(callCtx, toolName, arguments)
 	if err != nil {
 		if callCtx.Err() == context.DeadlineExceeded {
-			return nil, ErrToolCallTimeout(serverID, toolName)
+			return nil, ErrToolCallTimeout(serverName, toolName)
 		}
 		return nil, ErrInternalError(fmt.Sprintf("tool call failed: %v", err))
 	}
@@ -137,17 +137,17 @@ func (r *Router) handleManagerTool(ctx context.Context, toolName string, argumen
 // handleServersList returns the list of configured servers with status.
 func (r *Router) handleServersList(ctx context.Context) (*ToolCallResult, *RPCError) {
 	servers := make([]ServerInfo, 0, len(r.cfg.Servers))
-	for id, srv := range r.cfg.Servers {
+	for name, srv := range r.cfg.Servers {
 		info := ServerInfo{
-			ID:      id,
-			Name:    srv.Name,
-			Kind:    string(srv.Kind),
+			ID:      name, // Use name as ID for backwards compatibility in output
+			Name:    name,
+			Kind:    string(srv.GetKind()),
 			Enabled: srv.IsEnabled(),
 			Command: srv.Command,
 		}
 
 		// Check if running
-		handle := r.supervisor.Get(id)
+		handle := r.supervisor.Get(name)
 		if handle != nil && handle.IsRunning() {
 			info.Status = "running"
 			info.PID = handle.PID()
@@ -163,108 +163,111 @@ func (r *Router) handleServersList(ctx context.Context) (*ToolCallResult, *RPCEr
 	return textResult(mustJSON(servers)), nil
 }
 
-// handleServersStart starts a server by ID.
+// handleServersStart starts a server by name.
 func (r *Router) handleServersStart(ctx context.Context, arguments json.RawMessage) (*ToolCallResult, *RPCError) {
 	var args struct {
-		ServerID string `json:"server_id"`
+		ServerID string `json:"server_id"` // Keep JSON field name for API compatibility
 	}
 	if err := json.Unmarshal(arguments, &args); err != nil {
 		return nil, ErrInvalidParams(err.Error())
 	}
 
-	srv := r.cfg.GetServer(args.ServerID)
+	serverName := args.ServerID // server_id now means server name
+	srv := r.cfg.GetServer(serverName)
 	if srv == nil {
-		return nil, ErrServerNotFound(args.ServerID)
+		return nil, ErrServerNotFound(serverName)
 	}
 
 	// Check if already running
-	handle := r.supervisor.Get(args.ServerID)
+	handle := r.supervisor.Get(serverName)
 	if handle != nil && handle.IsRunning() {
-		return textResult(fmt.Sprintf("Server %s is already running (PID: %d)", args.ServerID, handle.PID())), nil
+		return textResult(fmt.Sprintf("Server %s is already running (PID: %d)", serverName, handle.PID())), nil
 	}
 
 	// Start the server
-	handle, err := r.supervisor.Start(ctx, *srv)
+	handle, err := r.supervisor.Start(ctx, serverName, *srv)
 	if err != nil {
-		return nil, ErrServerFailedToStart(args.ServerID, err.Error())
+		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}
 
 	// Refresh tools after starting
-	if err := r.aggregator.RefreshServerTools(ctx, args.ServerID); err != nil {
+	if err := r.aggregator.RefreshServerTools(ctx, serverName); err != nil {
 		log.Printf("Failed to refresh tools after start: %v", err)
 	}
 
-	return textResult(fmt.Sprintf("Started server %s (PID: %d, tools: %d)", args.ServerID, handle.PID(), len(handle.Tools()))), nil
+	return textResult(fmt.Sprintf("Started server %s (PID: %d, tools: %d)", serverName, handle.PID(), len(handle.Tools()))), nil
 }
 
-// handleServersStop stops a server by ID.
+// handleServersStop stops a server by name.
 func (r *Router) handleServersStop(ctx context.Context, arguments json.RawMessage) (*ToolCallResult, *RPCError) {
 	var args struct {
-		ServerID string `json:"server_id"`
+		ServerID string `json:"server_id"` // Keep JSON field name for API compatibility
 	}
 	if err := json.Unmarshal(arguments, &args); err != nil {
 		return nil, ErrInvalidParams(err.Error())
 	}
 
-	srv := r.cfg.GetServer(args.ServerID)
+	serverName := args.ServerID
+	srv := r.cfg.GetServer(serverName)
 	if srv == nil {
-		return nil, ErrServerNotFound(args.ServerID)
+		return nil, ErrServerNotFound(serverName)
 	}
 
 	// Check if running
-	handle := r.supervisor.Get(args.ServerID)
+	handle := r.supervisor.Get(serverName)
 	if handle == nil || !handle.IsRunning() {
-		return textResult(fmt.Sprintf("Server %s is not running", args.ServerID)), nil
+		return textResult(fmt.Sprintf("Server %s is not running", serverName)), nil
 	}
 
 	// Stop the server
-	if err := r.supervisor.Stop(args.ServerID); err != nil {
+	if err := r.supervisor.Stop(serverName); err != nil {
 		return nil, ErrInternalError(fmt.Sprintf("failed to stop server: %v", err))
 	}
 
-	return textResult(fmt.Sprintf("Stopped server %s", args.ServerID)), nil
+	return textResult(fmt.Sprintf("Stopped server %s", serverName)), nil
 }
 
-// handleServersRestart restarts a server by ID.
+// handleServersRestart restarts a server by name.
 func (r *Router) handleServersRestart(ctx context.Context, arguments json.RawMessage) (*ToolCallResult, *RPCError) {
 	var args struct {
-		ServerID string `json:"server_id"`
+		ServerID string `json:"server_id"` // Keep JSON field name for API compatibility
 	}
 	if err := json.Unmarshal(arguments, &args); err != nil {
 		return nil, ErrInvalidParams(err.Error())
 	}
 
-	srv := r.cfg.GetServer(args.ServerID)
+	serverName := args.ServerID
+	srv := r.cfg.GetServer(serverName)
 	if srv == nil {
-		return nil, ErrServerNotFound(args.ServerID)
+		return nil, ErrServerNotFound(serverName)
 	}
 
 	// Stop if running
-	handle := r.supervisor.Get(args.ServerID)
+	handle := r.supervisor.Get(serverName)
 	if handle != nil && handle.IsRunning() {
-		if err := r.supervisor.Stop(args.ServerID); err != nil {
+		if err := r.supervisor.Stop(serverName); err != nil {
 			return nil, ErrInternalError(fmt.Sprintf("failed to stop server: %v", err))
 		}
 	}
 
 	// Start the server
-	handle, err := r.supervisor.Start(ctx, *srv)
+	handle, err := r.supervisor.Start(ctx, serverName, *srv)
 	if err != nil {
-		return nil, ErrServerFailedToStart(args.ServerID, err.Error())
+		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}
 
 	// Refresh tools after restart
-	if err := r.aggregator.RefreshServerTools(ctx, args.ServerID); err != nil {
+	if err := r.aggregator.RefreshServerTools(ctx, serverName); err != nil {
 		log.Printf("Failed to refresh tools after restart: %v", err)
 	}
 
-	return textResult(fmt.Sprintf("Restarted server %s (PID: %d, tools: %d)", args.ServerID, handle.PID(), len(handle.Tools()))), nil
+	return textResult(fmt.Sprintf("Restarted server %s (PID: %d, tools: %d)", serverName, handle.PID(), len(handle.Tools()))), nil
 }
 
 // handleServerLogs returns recent log lines from a server.
 func (r *Router) handleServerLogs(ctx context.Context, arguments json.RawMessage) (*ToolCallResult, *RPCError) {
 	var args struct {
-		ServerID string `json:"server_id"`
+		ServerID string `json:"server_id"` // Keep JSON field name for API compatibility
 		Lines    int    `json:"lines"`
 	}
 	args.Lines = 50 // default
@@ -280,14 +283,15 @@ func (r *Router) handleServerLogs(ctx context.Context, arguments json.RawMessage
 		args.Lines = 50 // treat 0 as default
 	}
 
-	srv := r.cfg.GetServer(args.ServerID)
+	serverName := args.ServerID
+	srv := r.cfg.GetServer(serverName)
 	if srv == nil {
-		return nil, ErrServerNotFound(args.ServerID)
+		return nil, ErrServerNotFound(serverName)
 	}
 
-	handle := r.supervisor.Get(args.ServerID)
+	handle := r.supervisor.Get(serverName)
 	if handle == nil {
-		return textResult(fmt.Sprintf("Server %s has not been started in this session", args.ServerID)), nil
+		return textResult(fmt.Sprintf("Server %s has not been started in this session", serverName)), nil
 	}
 
 	logs := handle.Logs()
@@ -295,7 +299,7 @@ func (r *Router) handleServerLogs(ctx context.Context, arguments json.RawMessage
 		logs = logs[len(logs)-args.Lines:]
 	}
 
-	result := fmt.Sprintf("Last %d log lines from %s:\n", len(logs), args.ServerID)
+	result := fmt.Sprintf("Last %d log lines from %s:\n", len(logs), serverName)
 	for _, line := range logs {
 		result += line + "\n"
 	}
@@ -305,20 +309,20 @@ func (r *Router) handleServerLogs(ctx context.Context, arguments json.RawMessage
 
 // handleNamespacesList returns the list of namespaces with active namespace info.
 func (r *Router) handleNamespacesList(ctx context.Context) (*ToolCallResult, *RPCError) {
-	namespaces := make([]NamespaceInfo, len(r.cfg.Namespaces))
-	for i, ns := range r.cfg.Namespaces {
-		namespaces[i] = NamespaceInfo{
-			ID:          ns.ID,
-			Name:        ns.Name,
+	namespaces := make([]NamespaceInfo, 0, len(r.cfg.Namespaces))
+	for name, ns := range r.cfg.Namespaces {
+		namespaces = append(namespaces, NamespaceInfo{
+			ID:          name, // Use name as ID for backwards compatibility
+			Name:        name,
 			Description: ns.Description,
 			ServerCount: len(ns.ServerIDs),
 			ServerIDs:   ns.ServerIDs,
-		}
+		})
 	}
 
 	// Return envelope with active namespace info
 	result := NamespacesListResult{
-		ActiveNamespaceID: r.activeNamespaceID,
+		ActiveNamespaceID: r.activeNamespaceName,
 		Selection:         string(r.selectionMethod),
 		Namespaces:        namespaces,
 	}

@@ -140,9 +140,7 @@ func TestView_WithServers(t *testing.T) {
 	testutil.SetupTestHome(t)
 
 	cfg := config.NewConfig()
-	cfg.Servers["test"] = config.ServerConfig{
-		ID:      "test",
-		Name:    "Test Server",
+	cfg.Servers["Test Server"] = config.ServerConfig{
 		Kind:    config.ServerKindStdio,
 		Command: "echo",
 	}

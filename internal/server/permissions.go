@@ -34,9 +34,9 @@ func (p PermissionResult) String() string {
 // Evaluation order:
 // 1. Check explicit ToolPermission entry → return Allow/Deny
 // 2. No explicit entry → return Default (caller should check namespace DenyByDefault)
-func CheckPermission(cfg *config.Config, namespaceID, serverID, toolName string) PermissionResult {
+func CheckPermission(cfg *config.Config, namespaceName, serverName, toolName string) PermissionResult {
 	// Check for explicit permission
-	enabled, found := cfg.GetToolPermission(namespaceID, serverID, toolName)
+	enabled, found := cfg.GetToolPermission(namespaceName, serverName, toolName)
 	if found {
 		if enabled {
 			return PermissionAllow
@@ -52,26 +52,26 @@ func CheckPermission(cfg *config.Config, namespaceID, serverID, toolName string)
 // the namespace's DenyByDefault setting.
 //
 // Evaluation order:
-// 1. If no namespace (namespaceID empty), allow all
+// 1. If no namespace (namespaceName empty), allow all
 // 2. Check explicit ToolPermission → use it
 // 3. No explicit entry → check namespace DenyByDefault
 // 4. If DenyByDefault=true → deny
 // 5. Otherwise → allow
-func IsToolAllowed(cfg *config.Config, namespaceID, serverID, toolName string) (bool, string) {
+func IsToolAllowed(cfg *config.Config, namespaceName, serverName, toolName string) (bool, string) {
 	// No namespace means no permission enforcement
-	if namespaceID == "" {
+	if namespaceName == "" {
 		return true, ""
 	}
 
 	// Get namespace for DenyByDefault setting
-	ns := cfg.FindNamespaceByID(namespaceID)
+	ns := cfg.GetNamespace(namespaceName)
 	if ns == nil {
 		// Namespace not found, allow (shouldn't happen in normal use)
 		return true, ""
 	}
 
 	// Check permission
-	result := CheckPermission(cfg, namespaceID, serverID, toolName)
+	result := CheckPermission(cfg, namespaceName, serverName, toolName)
 	switch result {
 	case PermissionAllow:
 		return true, ""

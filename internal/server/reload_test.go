@@ -21,7 +21,7 @@ func TestServer_ApplyReload_SwapsConfig(t *testing.T) {
 	oldCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Old Server", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
 		},
 	}
 
@@ -51,8 +51,8 @@ func TestServer_ApplyReload_SwapsConfig(t *testing.T) {
 	newCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "New Server", Enabled: &enabled, Command: "echo"},
-			"srv2": {ID: "srv2", Name: "Added Server", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
+			"srv2": {Enabled: &enabled, Command: "echo"},
 		},
 	}
 
@@ -74,10 +74,10 @@ func TestServer_ApplyReload_KeepsNamespaceIfStillValid(t *testing.T) {
 	oldCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Server 1", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
 		},
-		Namespaces: []config.NamespaceConfig{
-			{ID: "ns1", Name: "Work", ServerIDs: []string{"srv1"}},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns1": {Description: "Work", ServerIDs: []string{"srv1"}},
 		},
 	}
 
@@ -105,7 +105,7 @@ func TestServer_ApplyReload_KeepsNamespaceIfStillValid(t *testing.T) {
 	_ = srv.Run(ctx)
 
 	// Verify initial state
-	if srv.activeNamespace == nil || srv.activeNamespace.ID != "ns1" {
+	if srv.activeNamespaceName != "ns1" {
 		t.Fatal("Expected ns1 to be active after init")
 	}
 	if srv.selectionMethod != SelectionFlag {
@@ -116,11 +116,11 @@ func TestServer_ApplyReload_KeepsNamespaceIfStillValid(t *testing.T) {
 	newCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Server 1 Updated", Enabled: &enabled, Command: "echo"},
-			"srv2": {ID: "srv2", Name: "Server 2", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
+			"srv2": {Enabled: &enabled, Command: "echo"},
 		},
-		Namespaces: []config.NamespaceConfig{
-			{ID: "ns1", Name: "Work", ServerIDs: []string{"srv1", "srv2"}},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns1": {Description: "Work", ServerIDs: []string{"srv1", "srv2"}},
 		},
 	}
 
@@ -128,14 +128,14 @@ func TestServer_ApplyReload_KeepsNamespaceIfStillValid(t *testing.T) {
 	srv.applyReload(context.Background(), newCfg)
 
 	// Verify namespace was kept
-	if srv.activeNamespace == nil || srv.activeNamespace.ID != "ns1" {
+	if srv.activeNamespaceName != "ns1" {
 		t.Error("Expected ns1 to still be active after reload")
 	}
 	if srv.selectionMethod != SelectionFlag {
 		t.Errorf("Expected SelectionFlag to be preserved, got %v", srv.selectionMethod)
 	}
-	if len(srv.activeServerIDs) != 2 {
-		t.Errorf("Expected 2 active servers after reload, got %d", len(srv.activeServerIDs))
+	if len(srv.activeServerNames) != 2 {
+		t.Errorf("Expected 2 active servers after reload, got %d", len(srv.activeServerNames))
 	}
 }
 
@@ -144,10 +144,10 @@ func TestServer_ApplyReload_ReSelectsNamespaceIfRemoved(t *testing.T) {
 	oldCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Server 1", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
 		},
-		Namespaces: []config.NamespaceConfig{
-			{ID: "ns1", Name: "Work", ServerIDs: []string{"srv1"}},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns1": {Description: "Work", ServerIDs: []string{"srv1"}},
 		},
 	}
 
@@ -174,7 +174,7 @@ func TestServer_ApplyReload_ReSelectsNamespaceIfRemoved(t *testing.T) {
 	_ = srv.Run(ctx)
 
 	// Verify initial state
-	if srv.activeNamespace == nil || srv.activeNamespace.ID != "ns1" {
+	if srv.activeNamespaceName != "ns1" {
 		t.Fatal("Expected ns1 to be active after init")
 	}
 
@@ -182,10 +182,10 @@ func TestServer_ApplyReload_ReSelectsNamespaceIfRemoved(t *testing.T) {
 	newCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Server 1", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
 		},
-		Namespaces: []config.NamespaceConfig{
-			{ID: "ns2", Name: "Personal", ServerIDs: []string{"srv1"}},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns2": {Description: "Personal", ServerIDs: []string{"srv1"}},
 		},
 	}
 
@@ -193,7 +193,7 @@ func TestServer_ApplyReload_ReSelectsNamespaceIfRemoved(t *testing.T) {
 	srv.applyReload(context.Background(), newCfg)
 
 	// Verify namespace was re-selected (ns2 is now the only namespace)
-	if srv.activeNamespace == nil || srv.activeNamespace.ID != "ns2" {
+	if srv.activeNamespaceName != "ns2" {
 		t.Error("Expected ns2 to be selected after reload (only available namespace)")
 	}
 	if srv.selectionMethod != SelectionOnly {
@@ -206,7 +206,7 @@ func TestServer_ApplyReload_RebuildAggregatorAndRouter(t *testing.T) {
 	oldCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Server 1", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
 		},
 	}
 
@@ -240,7 +240,7 @@ func TestServer_ApplyReload_RebuildAggregatorAndRouter(t *testing.T) {
 	newCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv2": {ID: "srv2", Name: "Server 2", Enabled: &enabled, Command: "echo"},
+			"srv2": {Enabled: &enabled, Command: "echo"},
 		},
 	}
 
@@ -261,7 +261,7 @@ func TestServer_ReloadChannel_ReceivesNewConfig(t *testing.T) {
 	oldCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Server 1", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
 		},
 	}
 
@@ -309,7 +309,7 @@ func TestServer_ReloadChannel_ReceivesNewConfig(t *testing.T) {
 	newCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv2": {ID: "srv2", Name: "Server 2", Enabled: &enabled, Command: "echo"},
+			"srv2": {Enabled: &enabled, Command: "echo"},
 		},
 	}
 
@@ -348,7 +348,7 @@ func TestServer_WatchConfig_DetectsFileChange(t *testing.T) {
 	initialCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Server 1", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
 		},
 	}
 
@@ -401,8 +401,8 @@ func TestServer_WatchConfig_DetectsFileChange(t *testing.T) {
 	newCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Server 1 Updated", Enabled: &enabled, Command: "echo"},
-			"srv2": {ID: "srv2", Name: "Server 2", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
+			"srv2": {Enabled: &enabled, Command: "echo"},
 		},
 	}
 
@@ -438,7 +438,7 @@ func TestServer_WatchConfig_IgnoresParseErrors(t *testing.T) {
 	initialCfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Server 1", Enabled: &enabled, Command: "echo"},
+			"srv1": {Enabled: &enabled, Command: "echo"},
 		},
 	}
 
@@ -509,7 +509,7 @@ func TestServer_WatchConfig_IgnoresParseErrors(t *testing.T) {
 	if len(srv.cfg.Servers) != 1 {
 		t.Errorf("Expected 1 server (original config), got %d", len(srv.cfg.Servers))
 	}
-	if srv.cfg.Servers["srv1"].Name != "Server 1" {
+	if srv.cfg.Servers["srv1"].Command != "echo" {
 		t.Error("Original config was modified despite parse error")
 	}
 }
@@ -541,8 +541,6 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
 			"srv1": {
-				ID:      "srv1",
-				Name:    "Server 1",
 				Kind:    config.ServerKindStdio,
 				Enabled: &enabled,
 				Command: os.Args[0],
@@ -553,7 +551,7 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 				},
 			},
 		},
-		Namespaces: []config.NamespaceConfig{},
+		Namespaces: map[string]config.NamespaceConfig{},
 	}
 	if err := config.SaveTo(initialCfg, tmpConfig); err != nil {
 		t.Fatalf("Failed to write initial config: %v", err)
@@ -670,8 +668,6 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
 			"srv1": {
-				ID:      "srv1",
-				Name:    "Server 1",
 				Kind:    config.ServerKindStdio,
 				Enabled: &enabled,
 				Command: os.Args[0],
@@ -682,8 +678,6 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 				},
 			},
 			"srv2": {
-				ID:      "srv2",
-				Name:    "Server 2",
 				Kind:    config.ServerKindStdio,
 				Enabled: &enabled,
 				Command: os.Args[0],
@@ -694,7 +688,7 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 				},
 			},
 		},
-		Namespaces: []config.NamespaceConfig{},
+		Namespaces: map[string]config.NamespaceConfig{},
 	}
 	if err := config.SaveTo(updatedCfg, tmpConfig); err != nil {
 		t.Fatalf("Failed to save updated config: %v", err)

@@ -113,8 +113,6 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 
 	// Build server config
 	srv := config.ServerConfig{
-		Name:      name,
-		Kind:      config.ServerKindStdio,
 		Command:   cmdArgs[0],
 		Args:      cmdArgs[1:],
 		Cwd:       addCwd,
@@ -123,7 +121,7 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 	}
 
 	// Add server (this enforces name uniqueness)
-	if _, err := cfg.AddServer(srv); err != nil {
+	if err := cfg.AddServer(name, srv); err != nil {
 		return err
 	}
 
@@ -168,8 +166,6 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 
 	// Build server config
 	srv := config.ServerConfig{
-		Name:              name,
-		Kind:              config.ServerKindStreamableHTTP,
 		URL:               addURL,
 		BearerTokenEnvVar: addBearerEnv,
 		Scopes:            addScopes,
@@ -178,7 +174,7 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 	}
 
 	// Add server (this enforces name uniqueness)
-	if _, err := cfg.AddServer(srv); err != nil {
+	if err := cfg.AddServer(name, srv); err != nil {
 		return err
 	}
 

@@ -17,16 +17,16 @@ func TestToolPermissions_Show(t *testing.T) {
 	}
 
 	serverTools := map[string][]events.McpTool{
-		"s1": {
+		"Server 1": {
 			{Name: "read_file", Description: "Read a file"},
 			{Name: "write_file", Description: "Write a file"},
 		},
 	}
-	servers := []config.ServerConfig{
-		{ID: "s1", Name: "Server 1"},
+	servers := []config.ServerEntry{
+		{Name: "Server 1", Config: config.ServerConfig{Command: "cmd"}},
 	}
 	permissions := []config.ToolPermission{
-		{NamespaceID: "ns1", ServerID: "s1", ToolName: "read_file", Enabled: true},
+		{Namespace: "ns1", Server: "Server 1", ToolName: "read_file", Enabled: true},
 	}
 
 	perms.Show("ns1", serverTools, servers, permissions, false)
@@ -42,8 +42,8 @@ func TestToolPermissions_Show(t *testing.T) {
 	}
 
 	// Check original permissions were loaded
-	if !perms.originalPerms["s1:read_file"] {
-		t.Error("expected s1:read_file to be enabled in original perms")
+	if !perms.originalPerms["Server 1:read_file"] {
+		t.Error("expected Server 1:read_file to be enabled in original perms")
 	}
 }
 
@@ -52,12 +52,12 @@ func TestToolPermissions_Show_WithDenyByDefault(t *testing.T) {
 	perms := NewToolPermissions(th)
 
 	serverTools := map[string][]events.McpTool{
-		"s1": {
+		"Server 1": {
 			{Name: "read_file", Description: "Read a file"},
 		},
 	}
-	servers := []config.ServerConfig{
-		{ID: "s1", Name: "Server 1"},
+	servers := []config.ServerEntry{
+		{Name: "Server 1", Config: config.ServerConfig{Command: "cmd"}},
 	}
 
 	perms.Show("ns1", serverTools, servers, nil, true)
@@ -72,7 +72,7 @@ func TestToolPermissions_Hide(t *testing.T) {
 	perms := NewToolPermissions(th)
 
 	serverTools := map[string][]events.McpTool{
-		"s1": {{Name: "tool1"}},
+		"Server 1": {{Name: "tool1"}},
 	}
 	perms.Show("ns1", serverTools, nil, nil, false)
 
@@ -90,7 +90,7 @@ func TestToolPermissions_Hide(t *testing.T) {
 func TestToolPermItem_Interface(t *testing.T) {
 	// Test regular tool item
 	item := toolPermItem{
-		serverID:    "s1",
+		serverID:    "Server 1",
 		serverName:  "Server 1",
 		toolName:    "read_file",
 		description: "Read a file",
@@ -125,7 +125,7 @@ func TestToolPermissions_ShowDiscovering(t *testing.T) {
 	th := theme.New()
 	perms := NewToolPermissions(th)
 
-	autoStarted := []string{"s1", "s2"}
+	autoStarted := []string{"Server 1", "Server 2"}
 	perms.ShowDiscovering("ns1", autoStarted)
 
 	if !perms.IsVisible() {
@@ -139,8 +139,8 @@ func TestToolPermissions_ShowDiscovering(t *testing.T) {
 	}
 
 	got := perms.GetAutoStartedServers()
-	if len(got) != 2 || got[0] != "s1" || got[1] != "s2" {
-		t.Errorf("expected auto-started servers [s1, s2], got %v", got)
+	if len(got) != 2 || got[0] != "Server 1" || got[1] != "Server 2" {
+		t.Errorf("expected auto-started servers [Server 1, Server 2], got %v", got)
 	}
 }
 
@@ -150,7 +150,7 @@ func TestToolPermissions_FinishDiscovery(t *testing.T) {
 	perms.SetSize(100, 50)
 
 	// Start in discovering mode
-	perms.ShowDiscovering("ns1", []string{"s1"})
+	perms.ShowDiscovering("ns1", []string{"Server 1"})
 
 	if !perms.IsDiscovering() {
 		t.Fatal("should be in discovering mode")
@@ -158,13 +158,13 @@ func TestToolPermissions_FinishDiscovery(t *testing.T) {
 
 	// Finish discovery with tools
 	serverTools := map[string][]events.McpTool{
-		"s1": {
+		"Server 1": {
 			{Name: "read_file", Description: "Read a file"},
 			{Name: "write_file", Description: "Write a file"},
 		},
 	}
-	servers := []config.ServerConfig{
-		{ID: "s1", Name: "Server 1"},
+	servers := []config.ServerEntry{
+		{Name: "Server 1", Config: config.ServerConfig{Command: "cmd"}},
 	}
 
 	perms.FinishDiscovery(serverTools, servers, nil, false)
@@ -189,15 +189,15 @@ func TestToolPermissions_BulkEnableSafe(t *testing.T) {
 	perms.SetSize(100, 50)
 
 	serverTools := map[string][]events.McpTool{
-		"s1": {
+		"Server 1": {
 			{Name: "read_file", Description: "Read"},    // safe
 			{Name: "write_file", Description: "Write"},  // unsafe
 			{Name: "get_info", Description: "Get info"}, // safe
 			{Name: "custom_tool", Description: "Custom"}, // unknown
 		},
 	}
-	servers := []config.ServerConfig{
-		{ID: "s1", Name: "Server 1"},
+	servers := []config.ServerEntry{
+		{Name: "Server 1", Config: config.ServerConfig{Command: "cmd"}},
 	}
 
 	// Test with denyByDefault=true (need to explicitly allow safe tools)
@@ -205,18 +205,18 @@ func TestToolPermissions_BulkEnableSafe(t *testing.T) {
 	perms.applyBulkEnableSafe()
 
 	// Safe tools should be explicitly allowed
-	if !perms.currentPerms["s1:read_file"] {
+	if !perms.currentPerms["Server 1:read_file"] {
 		t.Error("read_file should be enabled (safe tool)")
 	}
-	if !perms.currentPerms["s1:get_info"] {
+	if !perms.currentPerms["Server 1:get_info"] {
 		t.Error("get_info should be enabled (safe tool)")
 	}
 
 	// Unsafe and unknown tools should not be in currentPerms
-	if _, exists := perms.currentPerms["s1:write_file"]; exists {
+	if _, exists := perms.currentPerms["Server 1:write_file"]; exists {
 		t.Error("write_file should not be in currentPerms (unsafe tool)")
 	}
-	if _, exists := perms.currentPerms["s1:custom_tool"]; exists {
+	if _, exists := perms.currentPerms["Server 1:custom_tool"]; exists {
 		t.Error("custom_tool should not be in currentPerms (unknown tool)")
 	}
 }
@@ -227,13 +227,13 @@ func TestToolPermissions_BulkDenyAll(t *testing.T) {
 	perms.SetSize(100, 50)
 
 	serverTools := map[string][]events.McpTool{
-		"s1": {
+		"Server 1": {
 			{Name: "read_file", Description: "Read"},
 			{Name: "write_file", Description: "Write"},
 		},
 	}
-	servers := []config.ServerConfig{
-		{ID: "s1", Name: "Server 1"},
+	servers := []config.ServerEntry{
+		{Name: "Server 1", Config: config.ServerConfig{Command: "cmd"}},
 	}
 
 	// Test with denyByDefault=false (need to explicitly deny all)
@@ -241,10 +241,10 @@ func TestToolPermissions_BulkDenyAll(t *testing.T) {
 	perms.applyBulkDenyAll()
 
 	// All tools should be explicitly denied
-	if enabled, exists := perms.currentPerms["s1:read_file"]; !exists || enabled {
+	if enabled, exists := perms.currentPerms["Server 1:read_file"]; !exists || enabled {
 		t.Error("read_file should be explicitly denied")
 	}
-	if enabled, exists := perms.currentPerms["s1:write_file"]; !exists || enabled {
+	if enabled, exists := perms.currentPerms["Server 1:write_file"]; !exists || enabled {
 		t.Error("write_file should be explicitly denied")
 	}
 }
@@ -253,7 +253,7 @@ func TestToolPermissions_DiscoveryTimeout(t *testing.T) {
 	th := theme.New()
 	perms := NewToolPermissions(th)
 
-	perms.ShowDiscovering("ns1", []string{"s1"})
+	perms.ShowDiscovering("ns1", []string{"Server 1"})
 	perms.SetDiscoveryTimeout()
 
 	if !perms.discoveryTimeout {
@@ -267,14 +267,14 @@ func TestToolPermissions_AutoStartedServersInResult(t *testing.T) {
 	perms.SetSize(100, 50)
 
 	serverTools := map[string][]events.McpTool{
-		"s1": {{Name: "tool1"}},
+		"Server 1": {{Name: "tool1"}},
 	}
-	servers := []config.ServerConfig{
-		{ID: "s1", Name: "Server 1"},
+	servers := []config.ServerEntry{
+		{Name: "Server 1", Config: config.ServerConfig{Command: "cmd"}},
 	}
 
 	// Start with auto-started servers tracked
-	perms.ShowDiscovering("ns1", []string{"s1", "s2"})
+	perms.ShowDiscovering("ns1", []string{"Server 1", "Server 2"})
 	perms.FinishDiscovery(serverTools, servers, nil, false)
 
 	// Verify auto-started servers are still tracked

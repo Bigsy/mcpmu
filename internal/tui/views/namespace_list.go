@@ -12,13 +12,14 @@ import (
 
 // NamespaceItem represents a namespace in the list.
 type NamespaceItem struct {
+	Name      string // Namespace name (map key)
 	Config    config.NamespaceConfig
 	IsDefault bool
 }
 
-func (i NamespaceItem) Title() string       { return i.Config.Name }
+func (i NamespaceItem) Title() string       { return i.Name }
 func (i NamespaceItem) Description() string { return i.Config.Description }
-func (i NamespaceItem) FilterValue() string { return i.Config.Name }
+func (i NamespaceItem) FilterValue() string { return i.Name }
 
 // NamespaceListModel is the namespace list view component.
 type NamespaceListModel struct {
@@ -135,7 +136,7 @@ func (d namespaceDelegate) Render(w io.Writer, m list.Model, index int, item lis
 	// First line: name, default indicator, deny-by-default indicator
 	var line1 string
 
-	name := ni.Config.Name
+	name := ni.Name
 	if selected {
 		name = d.theme.ItemSelected.Render(name)
 	} else {

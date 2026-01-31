@@ -16,14 +16,15 @@ import (
 
 // ServerDetailModel displays detailed information about a server.
 type ServerDetailModel struct {
-	theme    theme.Theme
-	server   *config.ServerConfig
-	status   *events.ServerStatus
-	tools    []mcp.Tool
-	viewport viewport.Model
-	width    int
-	height   int
-	focused  bool
+	theme      theme.Theme
+	serverName string // Server name (map key)
+	server     *config.ServerConfig
+	status     *events.ServerStatus
+	tools      []mcp.Tool
+	viewport   viewport.Model
+	width      int
+	height     int
+	focused    bool
 }
 
 // NewServerDetail creates a new server detail view.
@@ -36,7 +37,8 @@ func NewServerDetail(theme theme.Theme) ServerDetailModel {
 }
 
 // SetServer sets the server to display.
-func (m *ServerDetailModel) SetServer(srv *config.ServerConfig, status *events.ServerStatus, tools []mcp.Tool) {
+func (m *ServerDetailModel) SetServer(name string, srv *config.ServerConfig, status *events.ServerStatus, tools []mcp.Tool) {
+	m.serverName = name
 	m.server = srv
 	m.status = status
 	m.tools = tools
@@ -80,7 +82,7 @@ func (m *ServerDetailModel) updateContent() {
 	}
 	statusPill := m.theme.StatusPill(stateStr)
 
-	content.WriteString(m.theme.Title.Render(m.server.Name))
+	content.WriteString(m.theme.Title.Render(m.serverName))
 	content.WriteString("  ")
 	content.WriteString(statusPill)
 	content.WriteString("\n\n")

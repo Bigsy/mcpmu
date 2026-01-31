@@ -36,8 +36,6 @@ func fakeServerConfig(t *testing.T, id string, fakeCfg mcptest.FakeServerConfig)
 	}
 
 	return config.ServerConfig{
-		ID:      id,
-		Name:    "test-" + id,
 		Kind:    config.ServerKindStdio,
 		Command: os.Args[0],
 		Args:    []string{"-test.run=TestHelperProcess", "--"},
@@ -163,7 +161,7 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			}
 
 			// Start the server
-			handle, err := supervisor.Start(ctx, srvCfg)
+			handle, err := supervisor.Start(ctx, serverID, srvCfg)
 
 			// Check error expectation
 			if tc.expectError {
@@ -229,7 +227,7 @@ func TestSupervisor_CrashMidSession(t *testing.T) {
 	serverID := "crash-mid"
 	srvCfg := fakeServerConfig(t, serverID, mcptest.CrashOnNthRequestConfig(3, 1))
 
-	_, err := supervisor.Start(context.Background(), srvCfg)
+	_, err := supervisor.Start(context.Background(), serverID, srvCfg)
 	// The crash happens during tools/list, so start may or may not return error
 	// depending on timing
 	if err != nil {
@@ -268,7 +266,7 @@ func TestSupervisor_ConcurrentStartStop(t *testing.T) {
 			serverID := "concurrent-" + string(rune('a'+idx))
 			srvCfg := fakeServerConfig(t, serverID, mcptest.DefaultConfig())
 
-			_, err := supervisor.Start(context.Background(), srvCfg)
+			_, err := supervisor.Start(context.Background(), serverID, srvCfg)
 			if err != nil {
 				errors <- err
 			}
@@ -315,7 +313,7 @@ func TestSupervisor_ConcurrentStopAll_WithServers(t *testing.T) {
 	for i := 0; i < numServers; i++ {
 		serverID := "stopall-" + string(rune('a'+i))
 		srvCfg := fakeServerConfig(t, serverID, mcptest.DefaultConfig())
-		_, err := supervisor.Start(context.Background(), srvCfg)
+		_, err := supervisor.Start(context.Background(), serverID, srvCfg)
 		if err != nil {
 			t.Fatalf("start server %s: %v", serverID, err)
 		}

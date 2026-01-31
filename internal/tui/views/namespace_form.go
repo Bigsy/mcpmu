@@ -13,9 +13,11 @@ import (
 
 // NamespaceFormResult is sent when the user completes or cancels the form.
 type NamespaceFormResult struct {
-	Namespace config.NamespaceConfig
-	Submitted bool
-	IsEdit    bool
+	Name         string // Namespace name (map key)
+	OriginalName string // Original name (for rename detection in edit mode)
+	Namespace    config.NamespaceConfig
+	Submitted    bool
+	IsEdit       bool
 }
 
 // NamespaceFormModel is a form for adding/editing namespaces.
@@ -31,9 +33,9 @@ type NamespaceFormModel struct {
 
 	// Original namespace config (for edit mode)
 	originalNamespace *config.NamespaceConfig
+	originalName      string // Original name for edit mode (to detect rename)
 
 	// Form field values
-	namespaceID   string
 	name          string
 	description   string
 	denyByDefault bool
@@ -67,7 +69,7 @@ func (m *NamespaceFormModel) ShowAdd() tea.Cmd {
 	m.isEdit = false
 	m.showConfirmDiscard = false
 	m.originalNamespace = nil
-	m.namespaceID = ""
+	m.originalName = ""
 	m.name = ""
 	m.description = ""
 	m.denyByDefault = false
@@ -80,13 +82,13 @@ func (m *NamespaceFormModel) ShowAdd() tea.Cmd {
 }
 
 // ShowEdit displays the form for editing an existing namespace.
-func (m *NamespaceFormModel) ShowEdit(ns config.NamespaceConfig) tea.Cmd {
+func (m *NamespaceFormModel) ShowEdit(name string, ns config.NamespaceConfig) tea.Cmd {
 	m.visible = true
 	m.isEdit = true
 	m.showConfirmDiscard = false
 	m.originalNamespace = &ns
-	m.namespaceID = ns.ID
-	m.name = ns.Name
+	m.originalName = name
+	m.name = name
 	m.description = ns.Description
 	m.denyByDefault = ns.DenyByDefault
 	// Save initial values
@@ -180,11 +182,16 @@ func (m *NamespaceFormModel) Update(msg tea.Msg) tea.Cmd {
 				m.visible = false
 				m.showConfirmDiscard = false
 				ns := m.buildNamespaceConfig()
+				name := strings.TrimSpace(m.name)
+				originalName := m.originalName
+				isEdit := m.isEdit
 				return func() tea.Msg {
 					return NamespaceFormResult{
-						Namespace: ns,
-						Submitted: true,
-						IsEdit:    m.isEdit,
+						Name:         name,
+						OriginalName: originalName,
+						Namespace:    ns,
+						Submitted:    true,
+						IsEdit:       isEdit,
 					}
 				}
 			case "n", "N":
@@ -225,11 +232,16 @@ func (m *NamespaceFormModel) Update(msg tea.Msg) tea.Cmd {
 	if m.form.State == huh.StateCompleted {
 		m.visible = false
 		ns := m.buildNamespaceConfig()
+		name := strings.TrimSpace(m.name)
+		originalName := m.originalName
+		isEdit := m.isEdit
 		return func() tea.Msg {
 			return NamespaceFormResult{
-				Namespace: ns,
-				Submitted: true,
-				IsEdit:    m.isEdit,
+				Name:         name,
+				OriginalName: originalName,
+				Namespace:    ns,
+				Submitted:    true,
+				IsEdit:       isEdit,
 			}
 		}
 	}
@@ -251,8 +263,6 @@ func (m NamespaceFormModel) buildNamespaceConfig() config.NamespaceConfig {
 		ns = *m.originalNamespace
 	}
 
-	ns.ID = m.namespaceID
-	ns.Name = strings.TrimSpace(m.name)
 	ns.Description = strings.TrimSpace(m.description)
 	ns.DenyByDefault = m.denyByDefault
 

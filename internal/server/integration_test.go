@@ -50,8 +50,8 @@ func TestServer_ManagerTool_ServersList(t *testing.T) {
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Test Server 1", Kind: config.ServerKindStdio, Enabled: &enabled, Command: "echo"},
-			"srv2": {ID: "srv2", Name: "Test Server 2", Kind: config.ServerKindStdio, Enabled: &enabled, Command: "cat"},
+			"srv1": {Kind: config.ServerKindStdio, Enabled: &enabled, Command: "echo"},
+			"srv2": {Kind: config.ServerKindStdio, Enabled: &enabled, Command: "cat"},
 		},
 	}
 
@@ -115,18 +115,15 @@ func TestServer_ManagerTool_ServersList(t *testing.T) {
 	if !strings.Contains(text, "srv2") {
 		t.Errorf("Response should contain srv2: %s", text)
 	}
-	if !strings.Contains(text, "Test Server 1") {
-		t.Errorf("Response should contain server names: %s", text)
-	}
 }
 
 func TestServer_ManagerTool_NamespacesList(t *testing.T) {
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
-		Namespaces: []config.NamespaceConfig{
-			{ID: "work", Name: "Work Tools", Description: "Tools for work projects", ServerIDs: []string{"srv1"}},
-			{ID: "personal", Name: "Personal Tools", ServerIDs: []string{"srv2", "srv3"}},
+		Namespaces: map[string]config.NamespaceConfig{
+			"work":     {Description: "Tools for work projects", ServerIDs: []string{"srv1"}},
+			"personal": {ServerIDs: []string{"srv2", "srv3"}},
 		},
 	}
 
@@ -185,8 +182,8 @@ func TestServer_ManagerTool_NamespacesList(t *testing.T) {
 	if !strings.Contains(text, "personal") {
 		t.Errorf("Response should contain personal namespace: %s", text)
 	}
-	if !strings.Contains(text, "Work Tools") {
-		t.Errorf("Response should contain namespace names: %s", text)
+	if !strings.Contains(text, "Tools for work projects") {
+		t.Errorf("Response should contain namespace description: %s", text)
 	}
 }
 
@@ -246,14 +243,14 @@ func TestServer_ToolsCall_PermissionDenied(t *testing.T) {
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Test Server", Kind: config.ServerKindStdio, Enabled: &enabled, Command: "echo"},
+			"srv1": {Kind: config.ServerKindStdio, Enabled: &enabled, Command: "echo"},
 		},
-		Namespaces: []config.NamespaceConfig{
-			{ID: "ns01", Name: "restricted", DenyByDefault: true, ServerIDs: []string{"srv1"}},
+		Namespaces: map[string]config.NamespaceConfig{
+			"restricted": {DenyByDefault: true, ServerIDs: []string{"srv1"}},
 		},
 		ToolPermissions: []config.ToolPermission{
-			{NamespaceID: "ns01", ServerID: "srv1", ToolName: "allowed_tool", Enabled: true},
-			{NamespaceID: "ns01", ServerID: "srv1", ToolName: "denied_tool", Enabled: false},
+			{Namespace: "restricted", Server: "srv1", ToolName: "allowed_tool", Enabled: true},
+			{Namespace: "restricted", Server: "srv1", ToolName: "denied_tool", Enabled: false},
 		},
 	}
 
@@ -324,7 +321,7 @@ func TestServer_ToolsCall_NoNamespace_AllowsAll(t *testing.T) {
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
-			"srv1": {ID: "srv1", Name: "Test Server", Kind: config.ServerKindStdio, Enabled: &enabled, Command: "echo"},
+			"srv1": {Kind: config.ServerKindStdio, Enabled: &enabled, Command: "echo"},
 		},
 		// No namespaces - should allow all tools
 	}
@@ -392,7 +389,7 @@ func TestEndToEnd_WithRealBinary(t *testing.T) {
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
-		Namespaces:    []config.NamespaceConfig{},
+		Namespaces:    map[string]config.NamespaceConfig{},
 	}
 	cfgData, _ := json.Marshal(cfg)
 	if err := os.WriteFile(tmpConfig, cfgData, 0644); err != nil {
@@ -534,8 +531,6 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
 			"srv1": {
-				ID:      "srv1",
-				Name:    "File Server",
 				Kind:    config.ServerKindStdio,
 				Enabled: &enabled,
 				Command: os.Args[0],
@@ -546,8 +541,6 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 				},
 			},
 			"srv2": {
-				ID:      "srv2",
-				Name:    "Time Server",
 				Kind:    config.ServerKindStdio,
 				Enabled: &enabled,
 				Command: os.Args[0],
@@ -558,10 +551,8 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 				},
 			},
 		},
-		Namespaces: []config.NamespaceConfig{
-			{
-				ID:            "rest",
-				Name:          "restricted",
+		Namespaces: map[string]config.NamespaceConfig{
+			"restricted": {
 				Description:   "Restricted namespace for testing",
 				DenyByDefault: true,
 				ServerIDs:     []string{"srv1", "srv2"},
@@ -569,11 +560,11 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 		},
 		ToolPermissions: []config.ToolPermission{
 			// Explicitly allow read_file from srv1
-			{NamespaceID: "rest", ServerID: "srv1", ToolName: "read_file", Enabled: true},
+			{Namespace: "restricted", Server: "srv1", ToolName: "read_file", Enabled: true},
 			// Explicitly deny delete_file from srv1
-			{NamespaceID: "rest", ServerID: "srv1", ToolName: "delete_file", Enabled: false},
+			{Namespace: "restricted", Server: "srv1", ToolName: "delete_file", Enabled: false},
 			// Explicitly allow get_time from srv2
-			{NamespaceID: "rest", ServerID: "srv2", ToolName: "get_time", Enabled: true},
+			{Namespace: "restricted", Server: "srv2", ToolName: "get_time", Enabled: true},
 			// write_file and set_timezone have no explicit permission -> denied by DenyByDefault
 		},
 	}

@@ -15,20 +15,21 @@ import (
 
 // ServerItem represents a server in the list.
 type ServerItem struct {
+	Name       string // Server name (map key)
 	Config     config.ServerConfig
 	Status     events.ServerStatus
-	Namespaces []string // Names of namespaces this server belongs to
+	Namespaces []string       // Names of namespaces this server belongs to
 	AuthStatus mcp.AuthStatus // Authentication status for HTTP servers
 }
 
-func (i ServerItem) Title() string       { return i.Config.Name }
+func (i ServerItem) Title() string { return i.Name }
 func (i ServerItem) Description() string {
 	if i.Config.IsHTTP() {
 		return i.Config.URL
 	}
 	return i.Config.Command
 }
-func (i ServerItem) FilterValue() string { return i.Config.Name }
+func (i ServerItem) FilterValue() string { return i.Name }
 
 // ServerListModel is the server list view component.
 type ServerListModel struct {
@@ -149,7 +150,7 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	// First line: name, status pill
 	var line1 strings.Builder
 
-	name := si.Config.Name
+	name := si.Name
 	var styledName string
 	switch {
 	case !enabled && selected:

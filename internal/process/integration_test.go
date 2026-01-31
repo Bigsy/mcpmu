@@ -18,8 +18,6 @@ import (
 // Uses the test binary as a fake MCP server via TestHelperProcess.
 func serverConfig(id string) config.ServerConfig {
 	return config.ServerConfig{
-		ID:      id,
-		Name:    "Test " + id,
 		Kind:    config.ServerKindStdio,
 		Command: "cat", // Simple command that reads stdin and exits when closed
 		Args:    []string{},
@@ -94,8 +92,6 @@ func TestSupervisor_StartNonExistentCommand(t *testing.T) {
 	})
 
 	cfg := config.ServerConfig{
-		ID:      "nonexistent",
-		Name:    "Nonexistent",
 		Kind:    config.ServerKindStdio,
 		Command: "/nonexistent/command/that/does/not/exist",
 		Args:    []string{},
@@ -104,7 +100,7 @@ func TestSupervisor_StartNonExistentCommand(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := supervisor.Start(ctx, cfg)
+	_, err := supervisor.Start(ctx, "nonexistent", cfg)
 
 	// Should fail - either command not found or MCP init failure
 	if err == nil {

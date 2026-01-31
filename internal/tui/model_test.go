@@ -267,8 +267,9 @@ func TestModel_TestKeyInDetailStartsServer(t *testing.T) {
 	collector := testutil.NewEventCollector()
 	m.bus.Subscribe(collector.Handler)
 
-	srv := fakeServerConfig(t, "test", mcptest.DefaultConfig())
-	m.cfg.Servers[srv.ID] = srv
+	serverName := "test-server"
+	srv := fakeServerConfig(t, mcptest.DefaultConfig())
+	m.cfg.Servers[serverName] = srv
 	m.refreshServerList()
 	m.currentView = ViewDetail
 
@@ -278,12 +279,12 @@ func TestModel_TestKeyInDetailStartsServer(t *testing.T) {
 
 	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 
-	if ok := collector.WaitForState(srv.ID, events.StateRunning, 2*time.Second); !ok {
+	if ok := collector.WaitForState(serverName, events.StateRunning, 2*time.Second); !ok {
 		t.Fatal("expected server to reach running state after pressing 't' in detail view")
 	}
 }
 
-func fakeServerConfig(t *testing.T, id string, fakeCfg mcptest.FakeServerConfig) config.ServerConfig {
+func fakeServerConfig(t *testing.T, fakeCfg mcptest.FakeServerConfig) config.ServerConfig {
 	t.Helper()
 
 	cfgJSON, err := json.Marshal(fakeCfg)
@@ -292,8 +293,6 @@ func fakeServerConfig(t *testing.T, id string, fakeCfg mcptest.FakeServerConfig)
 	}
 
 	return config.ServerConfig{
-		ID:      id,
-		Name:    "test-" + id,
 		Kind:    config.ServerKindStdio,
 		Command: os.Args[0],
 		Args:    []string{"-test.run=TestHelperProcess", "--"},
@@ -331,9 +330,10 @@ func TestModel_NamespaceTab_EnterOpensDetail(t *testing.T) {
 	m.width = 80
 	m.height = 24
 
-	// Add a namespace (ID will be auto-generated)
-	ns := config.NamespaceConfig{Name: "Test Namespace", ServerIDs: []string{}}
-	nsID, err := m.cfg.AddNamespace(ns)
+	// Add a namespace
+	nsName := "test-namespace"
+	ns := config.NamespaceConfig{ServerIDs: []string{}}
+	err := m.cfg.AddNamespace(nsName, ns)
 	if err != nil {
 		t.Fatalf("failed to add namespace: %v", err)
 	}
@@ -347,8 +347,8 @@ func TestModel_NamespaceTab_EnterOpensDetail(t *testing.T) {
 	if m.currentView != ViewDetail {
 		t.Errorf("expected ViewDetail, got %v", m.currentView)
 	}
-	if m.detailNamespaceID != nsID {
-		t.Errorf("expected detailNamespaceID %q, got %q", nsID, m.detailNamespaceID)
+	if m.detailNamespaceID != nsName {
+		t.Errorf("expected detailNamespaceID %q, got %q", nsName, m.detailNamespaceID)
 	}
 }
 
@@ -358,8 +358,8 @@ func TestModel_NamespaceTab_EscapeFromDetail(t *testing.T) {
 	m.height = 24
 
 	// Add a namespace and go to detail
-	ns := config.NamespaceConfig{Name: "Test Namespace", ServerIDs: []string{}}
-	_, err := m.cfg.AddNamespace(ns)
+	ns := config.NamespaceConfig{ServerIDs: []string{}}
+	err := m.cfg.AddNamespace("test-namespace", ns)
 	if err != nil {
 		t.Fatalf("failed to add namespace: %v", err)
 	}
@@ -388,8 +388,9 @@ func TestModel_NamespaceTab_SetDefault(t *testing.T) {
 	m.height = 24
 
 	// Add a namespace
-	ns := config.NamespaceConfig{Name: "Test Namespace", ServerIDs: []string{}}
-	nsID, err := m.cfg.AddNamespace(ns)
+	nsName := "Test Namespace"
+	ns := config.NamespaceConfig{ServerIDs: []string{}}
+	err := m.cfg.AddNamespace(nsName, ns)
 	if err != nil {
 		t.Fatalf("failed to add namespace: %v", err)
 	}
@@ -400,8 +401,8 @@ func TestModel_NamespaceTab_SetDefault(t *testing.T) {
 
 	// Press 'D' to set as default
 	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
-	if m.cfg.DefaultNamespaceID != nsID {
-		t.Errorf("expected default namespace %q, got %q", nsID, m.cfg.DefaultNamespaceID)
+	if m.cfg.DefaultNamespace != nsName {
+		t.Errorf("expected default namespace %q, got %q", nsName, m.cfg.DefaultNamespace)
 	}
 }
 
@@ -411,14 +412,14 @@ func TestModel_NamespaceDetail_ServerPicker(t *testing.T) {
 	m.height = 24
 
 	// Add a server and namespace
-	srv := config.ServerConfig{Name: "Server 1", Kind: config.ServerKindStdio, Command: "test"}
-	_, err := m.cfg.AddServer(srv)
+	srv := config.ServerConfig{Kind: config.ServerKindStdio, Command: "test"}
+	err := m.cfg.AddServer("Server 1", srv)
 	if err != nil {
 		t.Fatalf("failed to add server: %v", err)
 	}
 
-	ns := config.NamespaceConfig{Name: "Test Namespace", ServerIDs: []string{}}
-	_, err = m.cfg.AddNamespace(ns)
+	ns := config.NamespaceConfig{ServerIDs: []string{}}
+	err = m.cfg.AddNamespace("Test Namespace", ns)
 	if err != nil {
 		t.Fatalf("failed to add namespace: %v", err)
 	}
@@ -444,14 +445,14 @@ func TestModel_RefreshServerList_IncludesNamespaces(t *testing.T) {
 	m := newTestModel(t)
 
 	// Add servers
-	srv1 := config.ServerConfig{Name: "Server 1", Kind: config.ServerKindStdio, Command: "test1"}
-	srv2 := config.ServerConfig{Name: "Server 2", Kind: config.ServerKindStdio, Command: "test2"}
-	srv1ID, _ := m.cfg.AddServer(srv1)
-	_, _ = m.cfg.AddServer(srv2)
+	srv1 := config.ServerConfig{Kind: config.ServerKindStdio, Command: "test1"}
+	srv2 := config.ServerConfig{Kind: config.ServerKindStdio, Command: "test2"}
+	_ = m.cfg.AddServer("Server 1", srv1)
+	_ = m.cfg.AddServer("Server 2", srv2)
 
 	// Add namespace with srv1 assigned
-	ns := config.NamespaceConfig{Name: "Production", ServerIDs: []string{srv1ID}}
-	_, err := m.cfg.AddNamespace(ns)
+	ns := config.NamespaceConfig{ServerIDs: []string{"Server 1"}}
+	err := m.cfg.AddNamespace("Production", ns)
 	if err != nil {
 		t.Fatalf("failed to add namespace: %v", err)
 	}
@@ -465,7 +466,7 @@ func TestModel_RefreshServerList_IncludesNamespaces(t *testing.T) {
 	}
 
 	// The first server should have namespace info
-	if item.Config.ID == srv1ID {
+	if item.Name == "Server 1" {
 		if len(item.Namespaces) != 1 || item.Namespaces[0] != "Production" {
 			t.Errorf("expected server to have namespace 'Production', got %v", item.Namespaces)
 		}
@@ -478,8 +479,8 @@ func TestModel_HandleNamespaceFormResult_Add(t *testing.T) {
 	m.height = 24
 
 	result := views.NamespaceFormResult{
+		Name: "New Namespace",
 		Namespace: config.NamespaceConfig{
-			Name:        "New Namespace",
 			Description: "A new namespace",
 		},
 		Submitted: true,
@@ -492,8 +493,12 @@ func TestModel_HandleNamespaceFormResult_Add(t *testing.T) {
 	if len(m.cfg.Namespaces) != 1 {
 		t.Errorf("expected 1 namespace, got %d", len(m.cfg.Namespaces))
 	}
-	if m.cfg.Namespaces[0].Name != "New Namespace" {
-		t.Errorf("expected name 'New Namespace', got %q", m.cfg.Namespaces[0].Name)
+	ns := m.cfg.GetNamespace("New Namespace")
+	if ns == nil {
+		t.Fatal("expected namespace 'New Namespace' to exist")
+	}
+	if ns.Description != "A new namespace" {
+		t.Errorf("expected description 'A new namespace', got %q", ns.Description)
 	}
 }
 
@@ -516,28 +521,28 @@ func TestModel_HandleServerPickerResult(t *testing.T) {
 	m := newTestModel(t)
 
 	// Setup: add servers and namespace
-	srv1 := config.ServerConfig{Name: "Server 1", Kind: config.ServerKindStdio, Command: "test"}
-	srv2 := config.ServerConfig{Name: "Server 2", Kind: config.ServerKindStdio, Command: "test"}
-	srv1ID, _ := m.cfg.AddServer(srv1)
-	srv2ID, _ := m.cfg.AddServer(srv2)
+	srv1 := config.ServerConfig{Kind: config.ServerKindStdio, Command: "test"}
+	srv2 := config.ServerConfig{Kind: config.ServerKindStdio, Command: "test"}
+	_ = m.cfg.AddServer("Server 1", srv1)
+	_ = m.cfg.AddServer("Server 2", srv2)
 
-	ns := config.NamespaceConfig{Name: "Test", ServerIDs: []string{}}
-	nsID, err := m.cfg.AddNamespace(ns)
+	ns := config.NamespaceConfig{ServerIDs: []string{}}
+	err := m.cfg.AddNamespace("Test", ns)
 	if err != nil {
 		t.Fatalf("failed to add namespace: %v", err)
 	}
 
-	m.detailNamespaceID = nsID
+	m.detailNamespaceID = "Test"
 
 	result := views.ServerPickerResult{
-		SelectedIDs: []string{srv1ID, srv2ID},
+		SelectedIDs: []string{"Server 1", "Server 2"},
 		Submitted:   true,
 	}
 
 	m, _ = updateModel(m, result)
 
 	// Check servers were assigned
-	nsAfter := m.cfg.FindNamespaceByID(nsID)
+	nsAfter := m.cfg.GetNamespace("Test")
 	if nsAfter == nil {
 		t.Fatal("expected namespace to exist")
 	}
@@ -550,21 +555,21 @@ func TestModel_HandleToolPermissionsResult(t *testing.T) {
 	m := newTestModel(t)
 
 	// Setup: add server and namespace
-	srv := config.ServerConfig{Name: "Server 1", Kind: config.ServerKindStdio, Command: "test"}
-	srvID, _ := m.cfg.AddServer(srv)
+	srv := config.ServerConfig{Kind: config.ServerKindStdio, Command: "test"}
+	_ = m.cfg.AddServer("Server 1", srv)
 
-	ns := config.NamespaceConfig{Name: "Test", ServerIDs: []string{srvID}}
-	nsID, err := m.cfg.AddNamespace(ns)
+	ns := config.NamespaceConfig{ServerIDs: []string{"Server 1"}}
+	err := m.cfg.AddNamespace("Test", ns)
 	if err != nil {
 		t.Fatalf("failed to add namespace: %v", err)
 	}
 
-	m.detailNamespaceID = nsID
+	m.detailNamespaceID = "Test"
 
 	result := views.ToolPermissionsResult{
 		Changes: map[string]bool{
-			srvID + ":read_file":  true,
-			srvID + ":write_file": false,
+			"Server 1:read_file":  true,
+			"Server 1:write_file": false,
 		},
 		Submitted: true,
 	}
@@ -572,19 +577,19 @@ func TestModel_HandleToolPermissionsResult(t *testing.T) {
 	m, _ = updateModel(m, result)
 
 	// Check permissions were set
-	perms := m.cfg.GetToolPermissionsForNamespace(nsID)
+	perms := m.cfg.GetToolPermissionsForNamespace("Test")
 	if len(perms) != 2 {
 		t.Errorf("expected 2 permissions, got %d", len(perms))
 	}
 
 	// Check read_file is enabled
-	readEnabled, found := m.cfg.GetToolPermission(nsID, srvID, "read_file")
+	readEnabled, found := m.cfg.GetToolPermission("Test", "Server 1", "read_file")
 	if !found || !readEnabled {
 		t.Error("expected read_file to be enabled")
 	}
 
 	// Check write_file is disabled
-	writeEnabled, found := m.cfg.GetToolPermission(nsID, srvID, "write_file")
+	writeEnabled, found := m.cfg.GetToolPermission("Test", "Server 1", "write_file")
 	if !found || writeEnabled {
 		t.Error("expected write_file to be disabled")
 	}

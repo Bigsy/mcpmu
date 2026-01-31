@@ -21,13 +21,13 @@ type ServerPickerResult struct {
 
 // serverPickerItem represents a server in the picker list.
 type serverPickerItem struct {
-	server   config.ServerConfig
-	selected bool
+	name   string // Server name (map key)
+	config config.ServerConfig
 }
 
-func (i serverPickerItem) Title() string       { return i.server.Name }
-func (i serverPickerItem) Description() string { return i.server.Command }
-func (i serverPickerItem) FilterValue() string { return i.server.Name }
+func (i serverPickerItem) Title() string       { return i.name }
+func (i serverPickerItem) Description() string { return i.config.Command }
+func (i serverPickerItem) FilterValue() string { return i.name }
 
 // ServerPickerModel is a multi-select server picker.
 type ServerPickerModel struct {
@@ -76,18 +76,18 @@ func NewServerPicker(th theme.Theme) ServerPickerModel {
 }
 
 // Show displays the picker with the given servers and initial selection.
-func (m *ServerPickerModel) Show(servers []config.ServerConfig, selectedIDs []string) {
+func (m *ServerPickerModel) Show(servers []config.ServerEntry, selectedNames []string) {
 	m.visible = true
 	m.selected = make(map[string]bool)
-	for _, id := range selectedIDs {
-		m.selected[id] = true
+	for _, name := range selectedNames {
+		m.selected[name] = true
 	}
 
 	items := make([]list.Item, len(servers))
-	for i, srv := range servers {
+	for i, entry := range servers {
 		items[i] = serverPickerItem{
-			server:   srv,
-			selected: m.selected[srv.ID],
+			name:   entry.Name,
+			config: entry.Config,
 		}
 	}
 	m.list.SetItems(items)
@@ -153,7 +153,7 @@ func (m *ServerPickerModel) Update(msg tea.Msg) tea.Cmd {
 			// Toggle selection
 			if item := m.list.SelectedItem(); item != nil {
 				si := item.(serverPickerItem)
-				m.selected[si.server.ID] = !m.selected[si.server.ID]
+				m.selected[si.name] = !m.selected[si.name]
 				// Update delegate
 				m.list.SetDelegate(newServerPickerDelegateWithSelection(m.theme, m.selected))
 			}
@@ -235,27 +235,22 @@ func (d serverPickerDelegate) Render(w io.Writer, m list.Model, index int, item 
 	}
 
 	checkbox := "[ ]"
-	if d.selected[si.server.ID] {
+	if d.selected[si.name] {
 		checkbox = "[x]"
-	}
-
-	name := si.server.Name
-	if name == "" {
-		name = si.server.Command
 	}
 
 	var line strings.Builder
 	line.WriteString(cursor)
-	if d.selected[si.server.ID] {
+	if d.selected[si.name] {
 		line.WriteString(d.theme.Success.Render(checkbox))
 	} else {
 		line.WriteString(d.theme.Muted.Render(checkbox))
 	}
 	line.WriteString(" ")
 	if index == m.Index() {
-		line.WriteString(d.theme.ItemSelected.Render(name))
+		line.WriteString(d.theme.ItemSelected.Render(si.name))
 	} else {
-		line.WriteString(d.theme.Item.Render(name))
+		line.WriteString(d.theme.Item.Render(si.name))
 	}
 
 	fmt.Fprint(w, line.String())

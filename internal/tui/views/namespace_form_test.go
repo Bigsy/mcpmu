@@ -33,13 +33,11 @@ func TestNamespaceForm_ShowEdit(t *testing.T) {
 	form := NewNamespaceForm(th)
 
 	ns := config.NamespaceConfig{
-		ID:            "ns1",
-		Name:          "Production",
 		Description:   "Production servers",
 		DenyByDefault: true,
 	}
 
-	form.ShowEdit(ns)
+	form.ShowEdit("production", ns)
 
 	if !form.IsVisible() {
 		t.Error("form should be visible after ShowEdit")
@@ -47,11 +45,11 @@ func TestNamespaceForm_ShowEdit(t *testing.T) {
 	if !form.isEdit {
 		t.Error("isEdit should be true for edit mode")
 	}
-	if form.namespaceID != "ns1" {
-		t.Errorf("expected ID 'ns1', got %q", form.namespaceID)
+	if form.originalName != "production" {
+		t.Errorf("expected originalName 'production', got %q", form.originalName)
 	}
-	if form.name != "Production" {
-		t.Errorf("expected name 'Production', got %q", form.name)
+	if form.name != "production" {
+		t.Errorf("expected name 'production', got %q", form.name)
 	}
 	if form.description != "Production servers" {
 		t.Errorf("expected description 'Production servers', got %q", form.description)
@@ -65,12 +63,9 @@ func TestNamespaceForm_IsDirty(t *testing.T) {
 	th := theme.New()
 	form := NewNamespaceForm(th)
 
-	ns := config.NamespaceConfig{
-		ID:   "ns1",
-		Name: "Original",
-	}
+	ns := config.NamespaceConfig{}
 
-	form.ShowEdit(ns)
+	form.ShowEdit("original", ns)
 
 	// Initially not dirty
 	if form.isDirty() {
@@ -78,13 +73,13 @@ func TestNamespaceForm_IsDirty(t *testing.T) {
 	}
 
 	// Change name
-	form.name = "Modified"
+	form.name = "modified"
 	if !form.isDirty() {
 		t.Error("form should be dirty after name change")
 	}
 
 	// Reset
-	form.name = "Original"
+	form.name = "original"
 	if form.isDirty() {
 		t.Error("form should not be dirty after resetting name")
 	}
@@ -100,20 +95,12 @@ func TestNamespaceForm_BuildConfig(t *testing.T) {
 	th := theme.New()
 	form := NewNamespaceForm(th)
 
-	form.namespaceID = "ns1"
 	form.name = "  Test Namespace  "
 	form.description = "  Test description  "
 	form.denyByDefault = true
 
 	cfg := form.buildNamespaceConfig()
 
-	if cfg.ID != "ns1" {
-		t.Errorf("expected ID 'ns1', got %q", cfg.ID)
-	}
-	// Name should be trimmed
-	if cfg.Name != "Test Namespace" {
-		t.Errorf("expected trimmed name 'Test Namespace', got %q", cfg.Name)
-	}
 	// Description should be trimmed
 	if cfg.Description != "Test description" {
 		t.Errorf("expected trimmed description 'Test description', got %q", cfg.Description)
