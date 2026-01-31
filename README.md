@@ -12,6 +12,12 @@ A TUI application and MCP server for managing MCP (Model Context Protocol) serve
 - **Custom headers**: Add static or env-sourced HTTP headers
 - **OAuth scopes**: Configure OAuth scopes for servers that support it
 
+<img width="798" height="560" alt="image" src="https://github.com/user-attachments/assets/d7eb8ef0-6249-43e6-9019-8b4ee07a23d7" />
+
+
+<img width="797" height="561" alt="image" src="https://github.com/user-attachments/assets/a7cab86e-e006-4a17-bd7e-4c9d2bd7a9ed" />
+
+
 ## Installation
 
 ### Homebrew (macOS/Linux)
