@@ -12,10 +12,16 @@ Key differentiators:
 
 ## Features
 
+- **Stdio process management** — Spawn and supervise local MCP servers (npx, binaries, scripts)
+- **Streamable HTTP/SSE** — Connect to remote MCP endpoints with full SSE support
+- **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`
+- **Namespace profiles** — Create isolated server groups (work, personal, project) with independent configurations
+- **Tool permissions** — Allow/deny specific tools per namespace; deny-by-default mode available
 - **Bearer token auth** — Authenticate to HTTP servers via environment variables
 - **Custom headers** — Add static or env-sourced HTTP headers
 - **OAuth support** — Built-in OAuth flow with configurable scopes
-- **Tool permissions** — Allow/deny specific tools per namespace
+- **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
+- **Lazy or eager startup** — Start servers on-demand or pre-start everything at init
 
 <img width="798" height="560" alt="image" src="https://github.com/user-attachments/assets/d7eb8ef0-6249-43e6-9019-8b4ee07a23d7" />
 
