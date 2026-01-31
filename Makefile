@@ -1,4 +1,4 @@
-.PHONY: build install test test-v test-integration lint clean run debug
+.PHONY: build install test test-v test-integration lint check clean run debug
 
 build:
 	go build -o mcpmu ./cmd/mcpmu
@@ -19,6 +19,8 @@ test-integration:
 
 lint:
 	golangci-lint run
+
+check: lint test
 
 clean:
 	rm -f mcpmu

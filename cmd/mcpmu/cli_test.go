@@ -73,20 +73,6 @@ func runCLI(binary, configPath string, args ...string) (string, string, error) {
 	return stdout.String(), stderr.String(), err
 }
 
-func getServerByName(t *testing.T, configPath, name string) *config.ServerConfig {
-	t.Helper()
-
-	cfg, err := config.LoadFrom(configPath)
-	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
-	}
-	srv := cfg.GetServer(name)
-	if srv == nil {
-		t.Fatalf("server %q not found in config", name)
-	}
-	return srv
-}
-
 // getServerName verifies the server exists and returns its name (which is also the ID now)
 func getServerName(t *testing.T, configPath, name string) string {
 	t.Helper()

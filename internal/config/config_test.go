@@ -816,7 +816,7 @@ func TestToolPermission_FieldNames(t *testing.T) {
 	cfg := NewConfig()
 	cfg.Namespaces["dev"] = NamespaceConfig{}
 	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
-	cfg.SetToolPermission("dev", "srv1", "tool1", true)
+	_ = cfg.SetToolPermission("dev", "srv1", "tool1", true)
 
 	tp := cfg.ToolPermissions[0]
 
