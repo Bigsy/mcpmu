@@ -200,9 +200,9 @@ func (m NamespaceDetailModel) Update(msg tea.Msg) (NamespaceDetailModel, tea.Cmd
 
 // View implements tea.Model.
 func (m NamespaceDetailModel) View() string {
-	style := m.theme.Pane
-	if m.focused {
-		style = m.theme.PaneFocused
+	title := "Namespace"
+	if m.namespaceName != "" {
+		title = m.namespaceName
 	}
-	return style.Width(m.width - 2).Render(m.viewport.View())
+	return m.theme.RenderPane(title, m.viewport.View(), m.width, m.focused)
 }

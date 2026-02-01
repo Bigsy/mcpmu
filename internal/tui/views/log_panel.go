@@ -176,22 +176,13 @@ func (m LogPanelModel) View() string {
 		return ""
 	}
 
-	style := m.theme.Pane
-	if m.focused {
-		style = m.theme.PaneFocused
-	}
-
 	// Title with follow indicator
 	title := "Logs"
 	if m.follow {
-		title += " " + m.theme.Success.Render("[f]ollow")
+		title += " [FOLLOW]"
 	} else {
-		title += " " + m.theme.Faint.Render("[f]ollow")
+		title += " [PAUSED]"
 	}
 
-	header := m.theme.Title.Render(title) + "\n"
-	content := header + m.viewport.View()
-
-	// Width is content width; borders are outside this
-	return style.Width(m.width - 2).Render(content)
+	return m.theme.RenderPane(title, m.viewport.View(), m.width, m.focused)
 }

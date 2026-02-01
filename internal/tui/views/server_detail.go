@@ -201,13 +201,11 @@ func (m ServerDetailModel) Update(msg tea.Msg) (ServerDetailModel, tea.Cmd) {
 
 // View implements tea.Model.
 func (m ServerDetailModel) View() string {
-	style := m.theme.Pane
-	if m.focused {
-		style = m.theme.PaneFocused
+	title := "Server"
+	if m.serverName != "" {
+		title = m.serverName
 	}
-
-	// Width is content width; borders are outside this
-	return style.Width(m.width - 2).Render(m.viewport.View())
+	return m.theme.RenderPane(title, m.viewport.View(), m.width, m.focused)
 }
 
 func formatDuration(d time.Duration) string {

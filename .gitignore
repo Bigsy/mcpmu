@@ -37,7 +37,7 @@ AGENTS.md
 *.log
 
 # Planning docs (keep local, not in repo)
-PLAN.md
+PLAN*.md
 
 # Claude Code local config
 .claude/

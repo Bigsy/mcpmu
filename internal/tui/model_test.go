@@ -594,3 +594,98 @@ func TestModel_HandleToolPermissionsResult(t *testing.T) {
 		t.Error("expected write_file to be disabled")
 	}
 }
+
+func TestModel_ServerPicker_EnterClosesPicker(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 24
+
+	// Add a server and namespace
+	srv := config.ServerConfig{Kind: config.ServerKindStdio, Command: "test"}
+	err := m.cfg.AddServer("Server 1", srv)
+	if err != nil {
+		t.Fatalf("failed to add server: %v", err)
+	}
+
+	ns := config.NamespaceConfig{ServerIDs: []string{}}
+	err = m.cfg.AddNamespace("Test Namespace", ns)
+	if err != nil {
+		t.Fatalf("failed to add namespace: %v", err)
+	}
+	m.refreshServerList()
+	m.refreshNamespaceList()
+
+	// Go to namespace detail
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.currentView != ViewDetail {
+		t.Fatal("expected to be in detail view")
+	}
+
+	// Press 's' to open server picker
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if !m.serverPicker.IsVisible() {
+		t.Fatal("expected server picker to be visible")
+	}
+
+	// Press Enter to confirm (even with no changes)
+	m, cmd := updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Picker should be hidden after Enter
+	if m.serverPicker.IsVisible() {
+		t.Error("expected server picker to be hidden after Enter")
+	}
+
+	// Execute returned command to get result message
+	if cmd != nil {
+		msg := cmd()
+		// Process the result
+		m, _ = updateModel(m, msg)
+	}
+}
+
+func TestModel_ServerPicker_EscClosesPicker(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 24
+
+	// Add a server and namespace
+	srv := config.ServerConfig{Kind: config.ServerKindStdio, Command: "test"}
+	err := m.cfg.AddServer("Server 1", srv)
+	if err != nil {
+		t.Fatalf("failed to add server: %v", err)
+	}
+
+	ns := config.NamespaceConfig{ServerIDs: []string{}}
+	err = m.cfg.AddNamespace("Test Namespace", ns)
+	if err != nil {
+		t.Fatalf("failed to add namespace: %v", err)
+	}
+	m.refreshServerList()
+	m.refreshNamespaceList()
+
+	// Go to namespace detail
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Press 's' to open server picker
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if !m.serverPicker.IsVisible() {
+		t.Fatal("expected server picker to be visible")
+	}
+
+	// Press Escape to cancel
+	m, cmd := updateModel(m, tea.KeyMsg{Type: tea.KeyEsc})
+
+	// Picker should be hidden after Escape
+	if m.serverPicker.IsVisible() {
+		t.Error("expected server picker to be hidden after Escape")
+	}
+
+	// Execute returned command
+	if cmd != nil {
+		msg := cmd()
+		m, _ = updateModel(m, msg)
+	}
+}

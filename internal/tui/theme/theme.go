@@ -2,6 +2,8 @@
 package theme
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -141,4 +143,84 @@ func (t Theme) StatusPill(state string) string {
 		return pill.Background(lipgloss.Color("#374151")).
 			Foreground(lipgloss.Color("#E5E7EB")).Render("○ " + state)
 	}
+}
+
+// StatusPillAnimated renders a status pill with animated spinner for transitional states.
+func (t Theme) StatusPillAnimated(state string, spinnerFrame string) string {
+	pill := lipgloss.NewStyle().Padding(0, 1).Bold(true)
+	switch state {
+	case "starting":
+		return pill.Background(lipgloss.Color("#713F12")).
+			Foreground(lipgloss.Color("#FEF3C7")).Render(spinnerFrame + " ...")
+	case "stopping":
+		return pill.Background(lipgloss.Color("#713F12")).
+			Foreground(lipgloss.Color("#FEF3C7")).Render(spinnerFrame + " ...")
+	default:
+		return t.StatusPill(state)
+	}
+}
+
+// RenderPane renders content in a pane with btop-style header (title embedded in border).
+// Example output:
+//
+//	╭─┤ Servers ├──────────────────────────────╮
+//	│ content here                             │
+//	╰──────────────────────────────────────────╯
+func (t Theme) RenderPane(title, content string, width int, focused bool) string {
+	// Guard against very small widths that would cause panics
+	if width < 10 {
+		width = 10
+	}
+
+	borderColor := lipgloss.AdaptiveColor{Light: "#D0D7DE", Dark: "#3B4261"}
+	if focused {
+		borderColor = lipgloss.AdaptiveColor{Light: "#EA580C", Dark: "#FB923C"}
+	}
+
+	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(borderColor)
+
+	// Calculate widths (account for box drawing characters and padding)
+	contentWidth := width - 4 // 2 for borders, 2 for padding
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	// Build header: ╭─┤ Title ├───...───╮
+	titleText := titleStyle.Render(title)
+	titleWidth := lipgloss.Width(titleText)
+	// Header structure: "╭─┤ " + title + " ├" + "─" * rest + "╮"
+	// Total = 4 + titleWidth + 2 + rest + 1 = width
+	// rest = width - titleWidth - 7
+	restWidth := width - titleWidth - 7
+	if restWidth < 0 {
+		restWidth = 0
+	}
+
+	header := borderStyle.Render("╭─┤ ") + titleText + borderStyle.Render(" ├"+strings.Repeat("─", restWidth)+"╮")
+
+	// Build content with side borders
+	lines := strings.Split(content, "\n")
+	var body strings.Builder
+	for _, line := range lines {
+		lineWidth := lipgloss.Width(line)
+		padding := contentWidth - lineWidth
+		if padding < 0 {
+			padding = 0
+		}
+		body.WriteString(borderStyle.Render("│ "))
+		body.WriteString(line)
+		body.WriteString(strings.Repeat(" ", padding))
+		body.WriteString(borderStyle.Render(" │"))
+		body.WriteString("\n")
+	}
+
+	// Build footer: ╰───...───╯
+	footerWidth := width - 2
+	if footerWidth < 0 {
+		footerWidth = 0
+	}
+	footer := borderStyle.Render("╰" + strings.Repeat("─", footerWidth) + "╯")
+
+	return header + "\n" + body.String() + footer
 }

@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/mcp"
@@ -35,26 +38,43 @@ func (i ServerItem) FilterValue() string { return i.Name }
 type ServerListModel struct {
 	list     list.Model
 	theme    theme.Theme
+	spinner  spinner.Model
+	emptyMsg string
 	width    int
 	height   int
 	focused  bool
 }
 
 // NewServerList creates a new server list view.
-func NewServerList(theme theme.Theme) ServerListModel {
-	delegate := newServerDelegate(theme)
+func NewServerList(th theme.Theme) ServerListModel {
+	delegate := newServerDelegate(th, "")
 	l := list.New([]list.Item{}, delegate, 0, 0)
-	l.Title = "Servers"
+	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
 	l.SetShowHelp(false)
-	l.Styles.Title = theme.Title
 
-	return ServerListModel{
+	// Better empty state
+	emptyMsg := th.Faint.Render("    ○\n  No servers configured\n\n  Press 'a' to add your first server")
+	l.SetStatusBarItemName("server", "servers")
+	l.Styles.NoItems = lipgloss.NewStyle().Padding(2, 0).MarginLeft(2)
+	l.SetShowStatusBar(false)
+	l.SetDelegate(delegate)
+
+	s := spinner.New()
+	s.Spinner = spinner.MiniDot
+
+	m := ServerListModel{
 		list:    l,
-		theme:   theme,
+		theme:   th,
+		spinner: s,
 		focused: true,
 	}
+	m.list.SetStatusBarItemName("server", "servers")
+	// Set custom empty message via styles
+	m.emptyMsg = emptyMsg
+
+	return m
 }
 
 // SetItems updates the server list items.
@@ -64,6 +84,24 @@ func (m *ServerListModel) SetItems(items []ServerItem) {
 		listItems[i] = item
 	}
 	m.list.SetItems(listItems)
+	// Update delegate with current spinner frame
+	m.list.SetDelegate(newServerDelegate(m.theme, m.spinner.View()))
+}
+
+// HasTransitionalServers returns true if any server is in a transitional state.
+func (m ServerListModel) HasTransitionalServers() bool {
+	for _, item := range m.list.Items() {
+		si, ok := item.(ServerItem)
+		if ok && (si.Status.State == events.StateStarting || si.Status.State == events.StateStopping) {
+			return true
+		}
+	}
+	return false
+}
+
+// SpinnerTick returns a command to tick the spinner.
+func (m ServerListModel) SpinnerTick() tea.Cmd {
+	return m.spinner.Tick
 }
 
 // SetSize sets the dimensions of the list.
@@ -110,28 +148,45 @@ func (m ServerListModel) Init() tea.Cmd {
 
 // Update implements tea.Model.
 func (m ServerListModel) Update(msg tea.Msg) (ServerListModel, tea.Cmd) {
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
+	var cmds []tea.Cmd
+
+	// Handle spinner tick messages
+	if _, ok := msg.(spinner.TickMsg); ok {
+		var spinnerCmd tea.Cmd
+		m.spinner, spinnerCmd = m.spinner.Update(msg)
+		if spinnerCmd != nil {
+			cmds = append(cmds, spinnerCmd)
+		}
+		// Update the delegate with new spinner frame
+		m.list.SetDelegate(newServerDelegate(m.theme, m.spinner.View()))
+	}
+
+	var listCmd tea.Cmd
+	m.list, listCmd = m.list.Update(msg)
+	if listCmd != nil {
+		cmds = append(cmds, listCmd)
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
 // View implements tea.Model.
 func (m ServerListModel) View() string {
-	style := m.theme.Pane
-	if m.focused {
-		style = m.theme.PaneFocused
+	content := m.list.View()
+	if len(m.list.Items()) == 0 && m.emptyMsg != "" {
+		content = m.emptyMsg
 	}
-	// Width is content width; borders are outside this
-	return style.Width(m.width - 2).Render(m.list.View())
+	return m.theme.RenderPane("Servers", content, m.width, m.focused)
 }
 
 // serverDelegate is a custom delegate for rendering server items.
 type serverDelegate struct {
-	theme theme.Theme
+	theme        theme.Theme
+	spinnerFrame string
 }
 
-func newServerDelegate(theme theme.Theme) serverDelegate {
-	return serverDelegate{theme: theme}
+func newServerDelegate(th theme.Theme, spinnerFrame string) serverDelegate {
+	return serverDelegate{theme: th, spinnerFrame: spinnerFrame}
 }
 
 func (d serverDelegate) Height() int                             { return 2 }
@@ -147,10 +202,22 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	selected := index == m.Index()
 	enabled := si.Config.IsEnabled()
 
-	// First line: name, status pill
+	// Column widths
+	const nameWidth = 18
+
+	// First line: cursor + name + status + tools + uptime + badges
 	var line1 strings.Builder
 
-	name := si.Name
+	// Cursor
+	if selected {
+		line1.WriteString(d.theme.Primary.Render(">"))
+		line1.WriteString(" ")
+	} else {
+		line1.WriteString("  ")
+	}
+
+	// Name (fixed width)
+	name := truncateString(si.Name, nameWidth)
 	var styledName string
 	switch {
 	case !enabled && selected:
@@ -162,51 +229,46 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	default:
 		styledName = d.theme.Item.Render(name)
 	}
+	line1.WriteString(padRight(styledName, nameWidth))
 
-	if selected {
-		line1.WriteString(d.theme.Primary.Render(">"))
-		line1.WriteString(" ")
+	// Status pill
+	var statePill string
+	if d.spinnerFrame != "" && (si.Status.State == events.StateStarting || si.Status.State == events.StateStopping) {
+		statePill = d.theme.StatusPillAnimated(si.Status.State.String(), d.spinnerFrame)
 	} else {
-		line1.WriteString("  ")
+		statePill = d.theme.StatusPill(si.Status.State.String())
 	}
-
-	line1.WriteString(styledName)
-
-	// Server type indicator (http badge for HTTP servers)
-	if si.Config.IsHTTP() {
-		line1.WriteString("  ")
-		line1.WriteString(d.theme.Faint.Render("[http]"))
-	}
-
-	// Status pill - always show runtime state, add disabled indicator if applicable
-	statePill := d.theme.StatusPill(si.Status.State.String())
-	line1.WriteString("  ")
+	line1.WriteString(" ")
 	line1.WriteString(statePill)
+
+	// Tool count (compact)
+	if si.Status.ToolCount > 0 {
+		line1.WriteString(" ")
+		line1.WriteString(d.theme.Faint.Render(fmt.Sprintf("◉%d", si.Status.ToolCount)))
+	}
+
+	// Uptime for running servers
+	if si.Status.State == events.StateRunning && si.Status.StartedAt != nil {
+		uptime := time.Since(*si.Status.StartedAt)
+		line1.WriteString(" ")
+		line1.WriteString(d.theme.Faint.Render("↑" + formatUptime(uptime)))
+	}
+
+	// Disabled indicator
 	if !enabled {
 		line1.WriteString(" ")
 		line1.WriteString(d.theme.Faint.Render("[disabled]"))
 	}
 
-	// Auth status for HTTP servers
+	// HTTP badge
 	if si.Config.IsHTTP() {
 		line1.WriteString(" ")
-		authBadge := formatAuthBadge(si, d.theme)
-		line1.WriteString(authBadge)
+		line1.WriteString(d.theme.Faint.Render("[http]"))
+		line1.WriteString(" ")
+		line1.WriteString(formatAuthBadge(si, d.theme))
 	}
 
-	// Namespace badges on first line
-	if len(si.Namespaces) > 0 {
-		line1.WriteString("  ")
-		for i, ns := range si.Namespaces {
-			if i > 0 {
-				line1.WriteString(" ")
-			}
-			// Short namespace indicator
-			line1.WriteString(d.theme.Faint.Render("[" + ns + "]"))
-		}
-	}
-
-	// Second line: command/URL (truncated), tool count
+	// Second line: command/URL + namespace badges
 	var line2 strings.Builder
 	line2.WriteString("   ")
 
@@ -219,18 +281,71 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 			cmdOrURL += " " + strings.Join(si.Config.Args, " ")
 		}
 	}
-	maxCmdLen := 40
+	maxCmdLen := 45
 	if len(cmdOrURL) > maxCmdLen {
 		cmdOrURL = cmdOrURL[:maxCmdLen-3] + "..."
 	}
 	line2.WriteString(d.theme.Muted.Render(cmdOrURL))
 
-	if si.Status.ToolCount > 0 {
+	// Namespace badges on second line
+	if len(si.Namespaces) > 0 {
 		line2.WriteString("  ")
-		line2.WriteString(d.theme.Faint.Render(fmt.Sprintf("%d tools", si.Status.ToolCount)))
+		for i, ns := range si.Namespaces {
+			if i > 0 {
+				line2.WriteString(" ")
+			}
+			line2.WriteString(d.theme.Faint.Render("[" + ns + "]"))
+		}
 	}
 
 	_, _ = fmt.Fprint(w, line1.String()+"\n"+line2.String())
+}
+
+// truncateString truncates a string to maxLen visual width, adding "…" if needed.
+func truncateString(s string, maxLen int) string {
+	if lipgloss.Width(s) <= maxLen {
+		return s
+	}
+	// Truncate rune by rune until we fit
+	runes := []rune(s)
+	for i := len(runes) - 1; i >= 0; i-- {
+		truncated := string(runes[:i]) + "…"
+		if lipgloss.Width(truncated) <= maxLen {
+			return truncated
+		}
+	}
+	// Fallback: just return ellipsis if nothing fits
+	if maxLen >= 1 {
+		return "…"
+	}
+	return ""
+}
+
+// padRight pads a string with spaces to reach the target width.
+func padRight(s string, width int) string {
+	currentWidth := lipgloss.Width(s)
+	if currentWidth >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-currentWidth)
+}
+
+// formatUptime formats a duration as a compact uptime string.
+func formatUptime(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+	if hours >= 24 {
+		days := hours / 24
+		hours = hours % 24
+		return fmt.Sprintf("%dd%dh", days, hours)
+	}
+	return fmt.Sprintf("%dh%dm", hours, mins)
 }
 
 // formatAuthBadge returns a styled auth status badge for HTTP servers.

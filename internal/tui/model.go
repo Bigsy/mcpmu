@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -345,6 +346,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.waitForEvent())
 
+	case spinner.TickMsg:
+		// Handle spinner tick - update server list
+		// serverList.Update already schedules the next tick via m.spinner.Update(msg)
+		var cmd tea.Cmd
+		m.serverList, cmd = m.serverList.Update(msg)
+		if cmd != nil {
+			// Only keep the tick command if servers are still in transitional state
+			if m.serverList.HasTransitionalServers() {
+				cmds = append(cmds, cmd)
+			}
+			// Otherwise drop the tick command to stop the spinner
+		}
+		// Return early to avoid double-updating serverList in child component section below
+		return m, tea.Batch(cmds...)
+
 	default:
 		// Handle toast timer messages
 		var cmd tea.Cmd
@@ -396,16 +412,26 @@ func (m *Model) handleEvent(e events.Event) tea.Cmd {
 
 		// Show toast for state changes - use the server ID which is now the display name
 		serverName := evt.ServerID()
+		var cmds []tea.Cmd
+
+		// Start spinner tick when entering transitional state
+		if evt.NewState == events.StateStarting || evt.NewState == events.StateStopping {
+			cmds = append(cmds, m.serverList.SpinnerTick())
+		}
 
 		switch evt.NewState {
 		case events.StateRunning:
-			return m.toast.ShowSuccess(fmt.Sprintf("Server \"%s\" started", serverName))
+			cmds = append(cmds, m.toast.ShowSuccess(fmt.Sprintf("Server \"%s\" started", serverName)))
 		case events.StateStopped:
 			if evt.OldState == events.StateRunning {
-				return m.toast.ShowInfo(fmt.Sprintf("Server \"%s\" stopped", serverName))
+				cmds = append(cmds, m.toast.ShowInfo(fmt.Sprintf("Server \"%s\" stopped", serverName)))
 			}
 		case events.StateError, events.StateCrashed:
-			return m.toast.ShowError(fmt.Sprintf("Server \"%s\" failed", serverName))
+			cmds = append(cmds, m.toast.ShowError(fmt.Sprintf("Server \"%s\" failed", serverName)))
+		}
+
+		if len(cmds) > 0 {
+			return tea.Batch(cmds...)
 		}
 
 	case events.ToolsUpdatedEvent:
@@ -1143,39 +1169,83 @@ func (m Model) updateWithNamespaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateWithServerPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m.updateModal(msg, modalUpdateConfig{
-		setSize: func(w, h int) {
-			m.serverPicker.SetSize(w, h)
-		},
-		handleResult: func(msg tea.Msg) (bool, Model) {
-			if result, ok := msg.(views.ServerPickerResult); ok {
-				newModel, _ := m.handleServerPickerResult(result)
-				return true, newModel.(Model)
-			}
-			return false, m
-		},
-		updateForm: func(msg tea.Msg) tea.Cmd {
-			return m.serverPicker.Update(msg)
-		},
-	})
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if key.Matches(msg, m.keys.CtrlC) {
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateLayout()
+		m.serverPicker.SetSize(msg.Width, msg.Height)
+	case views.ServerPickerResult:
+		return m.handleServerPickerResult(msg)
+	}
+
+	// Update the picker directly on m (not via closure) so visibility changes persist
+	if cmd := m.serverPicker.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	// Handle events
+	if evt, ok := msg.(events.Event); ok {
+		if cmd := m.handleEvent(evt); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.waitForEvent())
+	}
+
+	// Toast updates
+	var toastCmd tea.Cmd
+	m.toast, toastCmd = m.toast.Update(msg)
+	if toastCmd != nil {
+		cmds = append(cmds, toastCmd)
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
 func (m Model) updateWithToolPerms(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m.updateModal(msg, modalUpdateConfig{
-		setSize: func(w, h int) {
-			m.toolPerms.SetSize(w, h)
-		},
-		handleResult: func(msg tea.Msg) (bool, Model) {
-			if result, ok := msg.(views.ToolPermissionsResult); ok {
-				newModel, _ := m.handleToolPermissionsResult(result)
-				return true, newModel.(Model)
-			}
-			return false, m
-		},
-		updateForm: func(msg tea.Msg) tea.Cmd {
-			return m.toolPerms.Update(msg)
-		},
-	})
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if key.Matches(msg, m.keys.CtrlC) {
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateLayout()
+		m.toolPerms.SetSize(msg.Width, msg.Height)
+	case views.ToolPermissionsResult:
+		return m.handleToolPermissionsResult(msg)
+	}
+
+	// Update the tool perms directly on m (not via closure) so visibility changes persist
+	if cmd := m.toolPerms.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	// Handle events
+	if evt, ok := msg.(events.Event); ok {
+		if cmd := m.handleEvent(evt); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.waitForEvent())
+	}
+
+	// Toast updates
+	var toastCmd tea.Cmd
+	m.toast, toastCmd = m.toast.Update(msg)
+	if toastCmd != nil {
+		cmds = append(cmds, toastCmd)
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
 // ============================================================================

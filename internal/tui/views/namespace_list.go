@@ -23,27 +23,30 @@ func (i NamespaceItem) FilterValue() string { return i.Name }
 
 // NamespaceListModel is the namespace list view component.
 type NamespaceListModel struct {
-	list    list.Model
-	theme   theme.Theme
-	width   int
-	height  int
-	focused bool
+	list     list.Model
+	theme    theme.Theme
+	emptyMsg string
+	width    int
+	height   int
+	focused  bool
 }
 
 // NewNamespaceList creates a new namespace list view.
 func NewNamespaceList(th theme.Theme) NamespaceListModel {
 	delegate := newNamespaceDelegate(th)
 	l := list.New([]list.Item{}, delegate, 0, 0)
-	l.Title = "Namespaces"
+	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
 	l.SetShowHelp(false)
-	l.Styles.Title = th.Title
+
+	emptyMsg := th.Faint.Render("    ○\n  No namespaces configured\n\n  Press 'a' to create a namespace")
 
 	return NamespaceListModel{
-		list:    l,
-		theme:   th,
-		focused: true,
+		list:     l,
+		theme:    th,
+		emptyMsg: emptyMsg,
+		focused:  true,
 	}
 }
 
@@ -105,11 +108,11 @@ func (m NamespaceListModel) Update(msg tea.Msg) (NamespaceListModel, tea.Cmd) {
 
 // View implements tea.Model.
 func (m NamespaceListModel) View() string {
-	style := m.theme.Pane
-	if m.focused {
-		style = m.theme.PaneFocused
+	content := m.list.View()
+	if len(m.list.Items()) == 0 && m.emptyMsg != "" {
+		content = m.emptyMsg
 	}
-	return style.Width(m.width - 2).Render(m.list.View())
+	return m.theme.RenderPane("Namespaces", content, m.width, m.focused)
 }
 
 // namespaceDelegate is a custom delegate for rendering namespace items.
