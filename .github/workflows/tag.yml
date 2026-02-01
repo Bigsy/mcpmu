@@ -4,9 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g., 0.1.0) - leave empty to auto-increment patch'
+        description: 'Version (e.g., 0.1.0) - leave empty to auto-increment'
         required: false
         type: string
+      bump_type:
+        description: 'Version bump type (if version not specified)'
+        required: true
+        type: choice
+        options:
+          - minor
+          - patch
+          - major
+        default: minor
 
 permissions:
   contents: write
@@ -15,6 +24,8 @@ jobs:
   tag:
     name: Create Tag
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,7 +42,7 @@ jobs:
             fi
             echo "VERSION=$INPUT_VERSION" >> $GITHUB_OUTPUT
           else
-            # Auto-increment patch version
+            # Auto-increment based on bump type
             LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1)
             if [ -z "$LATEST" ]; then
               echo "VERSION=0.1.0" >> $GITHUB_OUTPUT
@@ -41,12 +52,23 @@ jobs:
               MAJOR=$(echo "$CURRENT" | cut -d. -f1)
               MINOR=$(echo "$CURRENT" | cut -d. -f2)
               PATCH=$(echo "$CURRENT" | cut -d. -f3)
-              PATCH=$((PATCH + 1))
-              echo "VERSION=$MAJOR.$MINOR.$PATCH" >> $GITHUB_OUTPUT
+
+              case "$BUMP_TYPE" in
+                major)
+                  echo "VERSION=$((MAJOR + 1)).0.0" >> $GITHUB_OUTPUT
+                  ;;
+                minor)
+                  echo "VERSION=$MAJOR.$((MINOR + 1)).0" >> $GITHUB_OUTPUT
+                  ;;
+                patch)
+                  echo "VERSION=$MAJOR.$MINOR.$((PATCH + 1))" >> $GITHUB_OUTPUT
+                  ;;
+              esac
             fi
           fi
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          BUMP_TYPE: ${{ inputs.bump_type }}
 
       - name: Check tag doesn't exist
         run: |
@@ -66,3 +88,12 @@ jobs:
           echo "Created tag v$VERSION"
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
+
+  release:
+    name: Release
+    needs: tag
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: v${{ needs.tag.outputs.version }}
+    permissions:
+      contents: write

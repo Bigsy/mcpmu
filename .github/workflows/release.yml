@@ -10,6 +10,12 @@ on:
         description: 'Version to release (e.g., 0.1.0)'
         required: true
         type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag to release'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -28,12 +34,15 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "VERSION=v${{ inputs.version }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ inputs.tag }}" ]; then
+            # Called from workflow_call
+            echo "VERSION=${{ inputs.tag }}" >> $GITHUB_OUTPUT
           else
             echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
       - name: Create and push tag (workflow_dispatch only)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.tag == ''
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
