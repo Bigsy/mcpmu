@@ -12,10 +12,10 @@ on:
         required: true
         type: choice
         options:
-          - minor
           - patch
+          - minor
           - major
-        default: minor
+        default: patch
 
 permissions:
   contents: write
