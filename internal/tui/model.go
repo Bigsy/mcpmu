@@ -382,14 +382,7 @@ func (m *Model) handleEvent(e events.Event) tea.Cmd {
 	case events.StatusChangedEvent:
 		m.serverStatuses[evt.ServerID()] = evt.Status
 		m.refreshServerList()
-
-		// Refresh detail view if showing this server
-		if m.currentView == ViewDetail && m.detailServerID == evt.ServerID() {
-			if srv, ok := m.cfg.GetServer(evt.ServerID()); ok {
-				tools := m.convertTools(m.serverTools[evt.ServerID()])
-				m.serverDetail.SetServer(evt.ServerID(), &srv, &evt.Status, tools)
-			}
-		}
+		m.refreshDetailViewIfShowing(evt.ServerID())
 
 		// Show toast for state changes - use the server ID which is now the display name
 		serverName := evt.ServerID()
@@ -413,15 +406,7 @@ func (m *Model) handleEvent(e events.Event) tea.Cmd {
 			m.serverStatuses[evt.ServerID()] = status
 		}
 		m.refreshServerList()
-
-		// Refresh detail view if showing this server
-		if m.currentView == ViewDetail && m.detailServerID == evt.ServerID() {
-			if srv, ok := m.cfg.GetServer(evt.ServerID()); ok {
-				status := m.serverStatuses[evt.ServerID()]
-				tools := m.convertTools(evt.Tools)
-				m.serverDetail.SetServer(evt.ServerID(), &srv, &status, tools)
-			}
-		}
+		m.refreshDetailViewIfShowing(evt.ServerID())
 
 		// Check if we're in discovery mode and this completes it
 		if m.toolPerms.IsDiscovering() {
@@ -804,6 +789,20 @@ func (m *Model) refreshServerList() {
 		}
 	}
 	m.serverList.SetItems(items)
+}
+
+// refreshDetailViewIfShowing updates the detail view if currently showing the specified server.
+func (m *Model) refreshDetailViewIfShowing(serverID string) {
+	if m.currentView != ViewDetail || m.detailServerID != serverID {
+		return
+	}
+	srv, ok := m.cfg.GetServer(serverID)
+	if !ok {
+		return
+	}
+	status := m.serverStatuses[serverID]
+	tools := m.convertTools(m.serverTools[serverID])
+	m.serverDetail.SetServer(serverID, &srv, &status, tools)
 }
 
 func (m *Model) convertTools(mcpTools []events.McpTool) []mcp.Tool {
