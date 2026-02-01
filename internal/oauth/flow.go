@@ -186,17 +186,10 @@ func (f *Flow) buildAuthorizationURL(redirectURI string) string {
 	return f.metadata.AuthorizationEndpoint + "?" + params.Encode()
 }
 
-// exchangeCode exchanges the authorization code for tokens.
-func (f *Flow) exchangeCode(ctx context.Context, code, redirectURI string) (*TokenResponse, error) {
-	params := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {redirectURI},
-		"client_id":     {f.clientID},
-		"code_verifier": {f.pkce.Verifier},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", f.metadata.TokenEndpoint, strings.NewReader(params.Encode()))
+// doTokenRequest performs a token endpoint request with the given params.
+// This is the common HTTP request/response handling shared by exchangeCode and RefreshToken.
+func doTokenRequest(ctx context.Context, tokenEndpoint string, params url.Values) (*TokenResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", tokenEndpoint, strings.NewReader(params.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -233,6 +226,19 @@ func (f *Flow) exchangeCode(ctx context.Context, code, redirectURI string) (*Tok
 	return &tokens, nil
 }
 
+// exchangeCode exchanges the authorization code for tokens.
+func (f *Flow) exchangeCode(ctx context.Context, code, redirectURI string) (*TokenResponse, error) {
+	params := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+		"client_id":     {f.clientID},
+		"code_verifier": {f.pkce.Verifier},
+	}
+
+	return doTokenRequest(ctx, f.metadata.TokenEndpoint, params)
+}
+
 // RefreshToken refreshes an access token using a refresh token.
 func RefreshToken(ctx context.Context, tokenEndpoint, clientID, refreshToken string) (*TokenResponse, error) {
 	params := url.Values{
@@ -241,41 +247,7 @@ func RefreshToken(ctx context.Context, tokenEndpoint, clientID, refreshToken str
 		"refresh_token": {refreshToken},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", tokenEndpoint, strings.NewReader(params.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("MCP-Protocol-Version", MCPProtocolVersion)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token endpoint returned HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var tokens TokenResponse
-	if err := json.Unmarshal(body, &tokens); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-
-	if tokens.AccessToken == "" {
-		return nil, fmt.Errorf("response missing access_token")
-	}
-
-	return &tokens, nil
+	return doTokenRequest(ctx, tokenEndpoint, params)
 }
 
 // openBrowser opens the default browser to a URL.
