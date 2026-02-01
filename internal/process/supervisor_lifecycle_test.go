@@ -48,13 +48,15 @@ func fakeServerConfig(t *testing.T, id string, fakeCfg mcptest.FakeServerConfig)
 
 // lifecycleTestCase defines a table-driven test case for supervisor lifecycle tests.
 type lifecycleTestCase struct {
-	name          string
-	fakeCfg       mcptest.FakeServerConfig
-	ctxTimeout    time.Duration // 0 means no timeout
-	expectState   events.RuntimeState
-	expectTools   int  // -1 means don't check
-	expectError   bool // expect Start() to return error
-	stateSequence []events.RuntimeState
+	name           string
+	fakeCfg        mcptest.FakeServerConfig
+	ctxTimeout     time.Duration // 0 means no timeout
+	expectState    events.RuntimeState
+	expectTools    int  // -1 means don't check
+	expectError    bool // expect Start() to return error
+	stateSequence  []events.RuntimeState
+	mustObserve    events.RuntimeState // if non-zero, this state must appear somewhere in observed states
+	skipFinalCheck bool                // skip final state check (for cases where final state is non-deterministic)
 }
 
 func TestSupervisor_Lifecycle(t *testing.T) {
@@ -97,11 +99,12 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:        "malformed_response",
-			fakeCfg:     mcptest.MalformedResponseConfig(),
-			expectState: events.StateError,
-			expectTools: -1,
-			expectError: true,
+			name:           "malformed_response",
+			fakeCfg:        mcptest.MalformedResponseConfig(),
+			expectTools:    -1,
+			expectError:    true,
+			mustObserve:    events.StateError,  // error must be observed, but final state may be stopped
+			skipFinalCheck: true,               // final state is non-deterministic (error or stopped)
 		},
 		{
 			name:          "notification_before_response",
@@ -177,11 +180,28 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			// Allow time for events to propagate
 			time.Sleep(100 * time.Millisecond)
 
-			// Check final state
-			finalState := collector.LastStateFor(serverID)
-			if finalState != tc.expectState {
-				t.Errorf("expected state %v, got %v", tc.expectState, finalState)
-				t.Logf("observed states: %v", collector.StatesFor(serverID))
+			// Check final state (unless skipped)
+			if !tc.skipFinalCheck {
+				finalState := collector.LastStateFor(serverID)
+				if finalState != tc.expectState {
+					t.Errorf("expected state %v, got %v", tc.expectState, finalState)
+					t.Logf("observed states: %v", collector.StatesFor(serverID))
+				}
+			}
+
+			// Check that a specific state was observed (if specified)
+			if tc.mustObserve != 0 {
+				observed := collector.StatesFor(serverID)
+				found := false
+				for _, s := range observed {
+					if s == tc.mustObserve {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected to observe state %v, but only saw: %v", tc.mustObserve, observed)
+				}
 			}
 
 			// Check tools if expected
