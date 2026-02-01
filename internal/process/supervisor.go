@@ -226,25 +226,7 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 	s.emitStatus(name, events.StateRunning, cmd.Process.Pid, nil, "")
 
 	// Discover tools in background (non-blocking)
-	go func() {
-		defer handle.signalToolsReady()
-		toolsCtx, toolsCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer toolsCancel()
-		tools, err := client.ListTools(toolsCtx)
-		if err != nil {
-			s.bus.Publish(events.NewErrorEvent(name, err, "Failed to list tools"))
-			return
-		}
-		handle.SetTools(tools)
-		mcpTools := make([]events.McpTool, len(tools))
-		for i, t := range tools {
-			mcpTools[i] = events.McpTool{
-				Name:        t.Name,
-				Description: t.Description,
-			}
-		}
-		s.bus.Publish(events.NewToolsUpdatedEvent(name, mcpTools))
-	}()
+	go s.discoverToolsAsync(handle, client, name)
 
 	return handle, nil
 }
@@ -353,25 +335,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 	s.emitStatus(name, events.StateRunning, 0, nil, "")
 
 	// Discover tools in background (non-blocking)
-	go func() {
-		defer handle.signalToolsReady()
-		toolsCtx, toolsCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer toolsCancel()
-		tools, err := client.ListTools(toolsCtx)
-		if err != nil {
-			s.bus.Publish(events.NewErrorEvent(name, err, "Failed to list tools"))
-			return
-		}
-		handle.SetTools(tools)
-		mcpTools := make([]events.McpTool, len(tools))
-		for i, t := range tools {
-			mcpTools[i] = events.McpTool{
-				Name:        t.Name,
-				Description: t.Description,
-			}
-		}
-		s.bus.Publish(events.NewToolsUpdatedEvent(name, mcpTools))
-	}()
+	go s.discoverToolsAsync(handle, client, name)
 
 	return handle, nil
 }
@@ -465,6 +429,32 @@ func (s *Supervisor) emitStatus(id string, state events.RuntimeState, pid int, l
 		Error:    errMsg,
 	}
 	s.bus.Publish(events.NewStatusChangedEvent(id, events.StateIdle, state, status))
+}
+
+// discoverToolsAsync discovers tools from an MCP server in the background.
+// It signals the handle when discovery is complete (whether successful or not).
+func (s *Supervisor) discoverToolsAsync(handle *Handle, client *mcp.Client, name string) {
+	defer handle.signalToolsReady()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		s.bus.Publish(events.NewErrorEvent(name, err, "Failed to list tools"))
+		return
+	}
+
+	handle.SetTools(tools)
+
+	mcpTools := make([]events.McpTool, len(tools))
+	for i, t := range tools {
+		mcpTools[i] = events.McpTool{
+			Name:        t.Name,
+			Description: t.Description,
+		}
+	}
+	s.bus.Publish(events.NewToolsUpdatedEvent(name, mcpTools))
 }
 
 // buildEnv creates the environment for a subprocess with PATH augmentation.

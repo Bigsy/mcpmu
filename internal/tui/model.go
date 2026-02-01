@@ -1045,8 +1045,19 @@ func (m Model) renderConfirmOverlay(base string) string {
 // Modal form update handlers
 // ============================================================================
 
-func (m Model) updateWithServerForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+// modalUpdateConfig holds the callbacks for modal-specific behavior.
+type modalUpdateConfig struct {
+	setSize      func(width, height int)         // Called on WindowSizeMsg to resize the modal
+	handleResult func(msg tea.Msg) (bool, Model) // Returns (handled, updatedModel) if msg is the result type
+	updateForm   func(msg tea.Msg) tea.Cmd       // Updates the modal form component
+}
+
+// updateModal is the common update handler for all modal forms.
+// It handles: Ctrl+C quit, window resize, result messages, form updates,
+// event handling, and toast updates.
+func (m Model) updateModal(msg tea.Msg, cfg modalUpdateConfig) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if key.Matches(msg, m.keys.CtrlC) {
@@ -1056,15 +1067,14 @@ func (m Model) updateWithServerForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateLayout()
-		m.helpOverlay.SetSize(msg.Width, msg.Height)
-		m.serverForm.SetSize(msg.Width, msg.Height)
-		m.confirmDlg.SetSize(msg.Width, msg.Height)
-		m.toast.SetSize(msg.Width, msg.Height)
-	case views.ServerFormResult:
-		return m.handleServerFormResult(msg)
+		cfg.setSize(msg.Width, msg.Height)
+	default:
+		if handled, updatedModel := cfg.handleResult(msg); handled {
+			return updatedModel, nil
+		}
 	}
 
-	if cmd := m.serverForm.Update(msg); cmd != nil {
+	if cmd := cfg.updateForm(msg); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 
@@ -1082,116 +1092,81 @@ func (m Model) updateWithServerForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m Model) updateWithServerForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	return m.updateModal(msg, modalUpdateConfig{
+		setSize: func(w, h int) {
+			m.helpOverlay.SetSize(w, h)
+			m.serverForm.SetSize(w, h)
+			m.confirmDlg.SetSize(w, h)
+			m.toast.SetSize(w, h)
+		},
+		handleResult: func(msg tea.Msg) (bool, Model) {
+			if result, ok := msg.(views.ServerFormResult); ok {
+				newModel, _ := m.handleServerFormResult(result)
+				return true, newModel.(Model)
+			}
+			return false, m
+		},
+		updateForm: func(msg tea.Msg) tea.Cmd {
+			return m.serverForm.Update(msg)
+		},
+	})
 }
 
 func (m Model) updateWithNamespaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.CtrlC) {
-			return m, tea.Quit
-		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.updateLayout()
-		m.namespaceForm.SetSize(msg.Width, msg.Height)
-	case views.NamespaceFormResult:
-		return m.handleNamespaceFormResult(msg)
-	}
-
-	if cmd := m.namespaceForm.Update(msg); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
-	if evt, ok := msg.(events.Event); ok {
-		if cmd := m.handleEvent(evt); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		cmds = append(cmds, m.waitForEvent())
-	}
-
-	var toastCmd tea.Cmd
-	m.toast, toastCmd = m.toast.Update(msg)
-	if toastCmd != nil {
-		cmds = append(cmds, toastCmd)
-	}
-
-	return m, tea.Batch(cmds...)
+	return m.updateModal(msg, modalUpdateConfig{
+		setSize: func(w, h int) {
+			m.namespaceForm.SetSize(w, h)
+		},
+		handleResult: func(msg tea.Msg) (bool, Model) {
+			if result, ok := msg.(views.NamespaceFormResult); ok {
+				newModel, _ := m.handleNamespaceFormResult(result)
+				return true, newModel.(Model)
+			}
+			return false, m
+		},
+		updateForm: func(msg tea.Msg) tea.Cmd {
+			return m.namespaceForm.Update(msg)
+		},
+	})
 }
 
 func (m Model) updateWithServerPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.CtrlC) {
-			return m, tea.Quit
-		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.updateLayout()
-		m.serverPicker.SetSize(msg.Width, msg.Height)
-	case views.ServerPickerResult:
-		return m.handleServerPickerResult(msg)
-	}
-
-	if cmd := m.serverPicker.Update(msg); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
-	if evt, ok := msg.(events.Event); ok {
-		if cmd := m.handleEvent(evt); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		cmds = append(cmds, m.waitForEvent())
-	}
-
-	// Keep toast timers working while modal is open
-	var toastCmd tea.Cmd
-	m.toast, toastCmd = m.toast.Update(msg)
-	if toastCmd != nil {
-		cmds = append(cmds, toastCmd)
-	}
-
-	return m, tea.Batch(cmds...)
+	return m.updateModal(msg, modalUpdateConfig{
+		setSize: func(w, h int) {
+			m.serverPicker.SetSize(w, h)
+		},
+		handleResult: func(msg tea.Msg) (bool, Model) {
+			if result, ok := msg.(views.ServerPickerResult); ok {
+				newModel, _ := m.handleServerPickerResult(result)
+				return true, newModel.(Model)
+			}
+			return false, m
+		},
+		updateForm: func(msg tea.Msg) tea.Cmd {
+			return m.serverPicker.Update(msg)
+		},
+	})
 }
 
 func (m Model) updateWithToolPerms(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.CtrlC) {
-			return m, tea.Quit
-		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.updateLayout()
-		m.toolPerms.SetSize(msg.Width, msg.Height)
-	case views.ToolPermissionsResult:
-		return m.handleToolPermissionsResult(msg)
-	}
-
-	if cmd := m.toolPerms.Update(msg); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
-	if evt, ok := msg.(events.Event); ok {
-		if cmd := m.handleEvent(evt); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		cmds = append(cmds, m.waitForEvent())
-	}
-
-	// Keep toast timers working while modal is open
-	var toastCmd tea.Cmd
-	m.toast, toastCmd = m.toast.Update(msg)
-	if toastCmd != nil {
-		cmds = append(cmds, toastCmd)
-	}
-
-	return m, tea.Batch(cmds...)
+	return m.updateModal(msg, modalUpdateConfig{
+		setSize: func(w, h int) {
+			m.toolPerms.SetSize(w, h)
+		},
+		handleResult: func(msg tea.Msg) (bool, Model) {
+			if result, ok := msg.(views.ToolPermissionsResult); ok {
+				newModel, _ := m.handleToolPermissionsResult(result)
+				return true, newModel.(Model)
+			}
+			return false, m
+		},
+		updateForm: func(msg tea.Msg) tea.Cmd {
+			return m.toolPerms.Update(msg)
+		},
+	})
 }
 
 // ============================================================================
