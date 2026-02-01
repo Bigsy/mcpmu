@@ -125,8 +125,9 @@ func TestBus_ChannelOverflow_DropsEvents(t *testing.T) {
 
 	// Capture log output
 	var logBuf bytes.Buffer
+	originalOutput := log.Writer()
 	log.SetOutput(&logBuf)
-	defer log.SetOutput(nil)
+	defer log.SetOutput(originalOutput)
 
 	// Fill the buffer completely
 	for i := 0; i < 100; i++ {
@@ -163,8 +164,9 @@ func TestBus_ChannelOverflow_CountsDrops(t *testing.T) {
 
 	// Capture log output
 	var logBuf bytes.Buffer
+	originalOutput := log.Writer()
 	log.SetOutput(&logBuf)
-	defer log.SetOutput(nil)
+	defer log.SetOutput(originalOutput)
 
 	// Publish more events than the buffer can hold
 	for i := 0; i < 20; i++ {
@@ -272,8 +274,10 @@ func TestBus_ConcurrentPublish(t *testing.T) {
 	bus := NewBus()
 	defer bus.Close()
 
-	const numGoroutines = 10
-	const eventsPerGoroutine = 20
+	// Use fewer events than buffer capacity (100) to avoid drops
+	// The point of this test is concurrent safety, not overflow behavior
+	const numGoroutines = 5
+	const eventsPerGoroutine = 10
 	totalEvents := numGoroutines * eventsPerGoroutine
 
 	var receivedCount atomic.Int32
@@ -369,8 +373,9 @@ func TestBus_DropMessageIncludesEventType(t *testing.T) {
 	}
 
 	var logBuf bytes.Buffer
+	originalOutput := log.Writer()
 	log.SetOutput(&logBuf)
-	defer log.SetOutput(nil)
+	defer log.SetOutput(originalOutput)
 
 	// Fill buffer
 	bus.Publish(newTestEvent(1, "server-1"))
