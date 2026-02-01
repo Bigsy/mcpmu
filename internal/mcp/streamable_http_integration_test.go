@@ -309,6 +309,114 @@ func TestStreamableHTTPTransport_UnauthorizedError(t *testing.T) {
 	}
 }
 
+func TestStreamableHTTPTransport_ForbiddenError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, "Forbidden")
+	}))
+	defer server.Close()
+
+	config := StreamableHTTPConfig{URL: server.URL}
+	transport := NewStreamableHTTPTransport(config)
+
+	ctx := context.Background()
+	err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`))
+
+	if err == nil {
+		t.Fatal("expected error for forbidden request")
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "unauthorized") {
+		t.Errorf("did not expect unauthorized error for 403, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "403") {
+		t.Errorf("expected error to contain status code 403, got: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "forbidden") {
+		t.Errorf("expected error to contain 'forbidden', got: %v", err)
+	}
+}
+
+func TestStreamableHTTPTransport_SessionIDUpdatedOnError_AllowsRetry(t *testing.T) {
+	const (
+		session1 = "sid-1"
+		session2 = "sid-2"
+	)
+
+	var (
+		mu      sync.Mutex
+		rotated bool
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// First request succeeds and establishes a session.
+		gotSID := r.Header.Get("Mcp-Session-Id")
+		if gotSID == "" {
+			w.Header().Set("Mcp-Session-Id", session1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+			return
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		// Second request sees old session; simulate expiration and rotate to a new session ID.
+		if gotSID == session1 && !rotated {
+			rotated = true
+			w.Header().Set("Mcp-Session-Id", session2)
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = fmt.Fprint(w, "session expired")
+			return
+		}
+
+		// Third request retries with the new session ID and succeeds.
+		if gotSID == session2 && rotated {
+			w.Header().Set("Mcp-Session-Id", session2)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":3,"result":{}}`)
+			return
+		}
+
+		http.Error(w, "unexpected session id: "+gotSID, http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	transport := NewStreamableHTTPTransport(StreamableHTTPConfig{URL: server.URL})
+	defer func() { _ = transport.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Establish initial session.
+	if err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`)); err != nil {
+		t.Fatalf("Send (initial) failed: %v", err)
+	}
+	if transport.SessionID() != session1 {
+		t.Fatalf("SessionID (after initial): got %q, want %q", transport.SessionID(), session1)
+	}
+	if _, err := transport.Receive(ctx); err != nil {
+		t.Fatalf("Receive (initial) failed: %v", err)
+	}
+
+	// Session expires mid-conversation. Send returns an auth error but should still capture the rotated session ID.
+	if err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":2,"method":"test"}`)); err == nil {
+		t.Fatal("expected error for expired session")
+	}
+	if transport.SessionID() != session2 {
+		t.Fatalf("SessionID (after expiry): got %q, want %q", transport.SessionID(), session2)
+	}
+
+	// Caller can retry and succeed with updated session ID.
+	if err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":3,"method":"test"}`)); err != nil {
+		t.Fatalf("Send (retry) failed: %v", err)
+	}
+	if _, err := transport.Receive(ctx); err != nil {
+		t.Fatalf("Receive (retry) failed: %v", err)
+	}
+}
+
 func TestStreamableHTTPTransport_SSEInlineResponse(t *testing.T) {
 	// Server that returns SSE-formatted response to POST
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
