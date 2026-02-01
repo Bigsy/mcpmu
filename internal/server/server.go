@@ -460,7 +460,7 @@ func (s *Server) watchConfig(ctx context.Context, configPath string) {
 		log.Printf("Failed to create config watcher: %v", err)
 		return
 	}
-	defer watcher.Close()
+	defer func() { _ = watcher.Close() }()
 
 	// Watch parent directory to catch atomic renames
 	dir := filepath.Dir(configPath)

@@ -146,7 +146,7 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 		select {
 		case m.eventCh <- e:
 		default:
-			// Channel full, drop event
+			log.Printf("Warning: TUI event channel full, dropping event type=%s server=%s", e.Type(), e.ServerID())
 		}
 	})
 
@@ -478,9 +478,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 		}
 		if m.logPanel.IsFocused() {
 			m.logPanel.SetFocused(false)
-			if m.activeTab == TabServers {
+			switch m.activeTab {
+			case TabServers:
 				m.serverList.SetFocused(true)
-			} else if m.activeTab == TabNamespaces {
+			case TabNamespaces:
 				m.namespaceList.SetFocused(true)
 			}
 			return true, m, nil

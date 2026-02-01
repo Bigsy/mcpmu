@@ -180,5 +180,5 @@ func (d namespaceDelegate) Render(w io.Writer, m list.Model, index int, item lis
 		line2 += d.theme.Faint.Render("No servers assigned")
 	}
 
-	fmt.Fprint(w, line1+"\n"+line2)
+	_, _ = fmt.Fprint(w, line1+"\n"+line2)
 }

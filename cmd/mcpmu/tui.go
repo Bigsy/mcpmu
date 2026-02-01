@@ -43,7 +43,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		if err == nil {
 			log.SetOutput(logFile)
 			log.SetFlags(log.LstdFlags | log.Lshortfile)
-			defer logFile.Close()
+			defer func() { _ = logFile.Close() }()
 			log.Println("=== mcpmu TUI starting (debug mode) ===")
 		}
 	} else {

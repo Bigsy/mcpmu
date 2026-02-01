@@ -35,8 +35,8 @@ func TestAuthPrecedence_BearerTokenTakesPriority(t *testing.T) {
 	}
 
 	// Set bearer token env var
-	os.Setenv("TEST_BEARER_TOKEN", "bearer-token-value")
-	defer os.Unsetenv("TEST_BEARER_TOKEN")
+	_ = os.Setenv("TEST_BEARER_TOKEN", "bearer-token-value")
+	defer func() { _ = os.Unsetenv("TEST_BEARER_TOKEN") }()
 
 	// Verify bearer token is available
 	bearerToken := os.Getenv("TEST_BEARER_TOKEN")

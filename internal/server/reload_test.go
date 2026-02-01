@@ -270,8 +270,8 @@ func TestServer_ReloadChannel_ReceivesNewConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create pipe: %v", err)
 	}
-	defer pipeReader.Close()
-	defer pipeWriter.Close()
+	defer func() { _ = pipeReader.Close() }()
+	defer func() { _ = pipeWriter.Close() }()
 
 	var stdout bytes.Buffer
 	srv, err := New(Options{
@@ -361,8 +361,8 @@ func TestServer_WatchConfig_DetectsFileChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create pipe: %v", err)
 	}
-	defer pipeReader.Close()
-	defer pipeWriter.Close()
+	defer func() { _ = pipeReader.Close() }()
+	defer func() { _ = pipeWriter.Close() }()
 
 	var stdout bytes.Buffer
 	srv, err := New(Options{
@@ -451,8 +451,8 @@ func TestServer_WatchConfig_IgnoresParseErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create pipe: %v", err)
 	}
-	defer pipeReader.Close()
-	defer pipeWriter.Close()
+	defer func() { _ = pipeReader.Close() }()
+	defer func() { _ = pipeWriter.Close() }()
 
 	var stdout bytes.Buffer
 	srv, err := New(Options{

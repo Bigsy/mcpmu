@@ -103,7 +103,7 @@ func (m *MockMCPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send a keep-alive comment
-	fmt.Fprint(w, ": keep-alive\n\n")
+	_, _ = fmt.Fprint(w, ": keep-alive\n\n")
 	flusher.Flush()
 
 	// Keep connection open until client disconnects
@@ -166,7 +166,7 @@ func TestStreamableHTTPTransport_Connect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	// Per MCP spec 2025-03-26, session ID comes from Initialize response header,
 	// not from SSE endpoint event. Just verify Connect() succeeds.
@@ -187,7 +187,7 @@ func TestStreamableHTTPTransport_SendReceive(t *testing.T) {
 	if err := transport.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	// Send initialize request
 	initReq := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
@@ -213,7 +213,7 @@ func TestStreamableHTTPTransport_BearerAuth(t *testing.T) {
 		receivedAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
 	}))
 	defer server.Close()
 
@@ -240,7 +240,7 @@ func TestStreamableHTTPTransport_CustomHeaders(t *testing.T) {
 		receivedHeaders = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
 	}))
 	defer server.Close()
 
@@ -273,7 +273,7 @@ func TestStreamableHTTPTransport_MCPProtocolVersion(t *testing.T) {
 		receivedVersion = r.Header.Get("MCP-Protocol-Version")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
 	}))
 	defer server.Close()
 
@@ -291,7 +291,7 @@ func TestStreamableHTTPTransport_MCPProtocolVersion(t *testing.T) {
 func TestStreamableHTTPTransport_UnauthorizedError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, "Unauthorized")
+		_, _ = fmt.Fprint(w, "Unauthorized")
 	}))
 	defer server.Close()
 
@@ -314,7 +314,7 @@ func TestStreamableHTTPTransport_SSEInlineResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "id: 1\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"test\":true}}\n\n")
+		_, _ = fmt.Fprint(w, "id: 1\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"test\":true}}\n\n")
 	}))
 	defer server.Close()
 
@@ -363,7 +363,7 @@ func TestStreamableHTTPTransport_CloseWhileSendInFlight_NoPanic(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
 	}))
 	defer server.Close()
 
@@ -476,12 +476,12 @@ func (m *LegacySSEMockServer) handleSSEStream(w http.ResponseWriter, r *http.Req
 	}
 
 	// Send endpoint event with session ID as query parameter (like Atlassian)
-	fmt.Fprintf(w, "event: endpoint\n")
-	fmt.Fprintf(w, "data: /v1/sse?sessionId=%s\n\n", m.sessionID)
+	_, _ = fmt.Fprintf(w, "event: endpoint\n")
+	_, _ = fmt.Fprintf(w, "data: /v1/sse?sessionId=%s\n\n", m.sessionID)
 	flusher.Flush()
 
 	// Send keep-alive
-	fmt.Fprint(w, ": keep-alive\n\n")
+	_, _ = fmt.Fprint(w, ": keep-alive\n\n")
 	flusher.Flush()
 
 	// Keep connection open
@@ -585,7 +585,7 @@ func TestLegacySSE_EndpointEvent(t *testing.T) {
 	if err := transport.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	// Verify session ID was captured from endpoint event
 	if transport.SessionID() != "legacy-session-456" {
@@ -606,7 +606,7 @@ func TestLegacySSE_Initialize(t *testing.T) {
 	if err := transport.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	client := NewClient(transport)
 
@@ -636,7 +636,7 @@ func TestLegacySSE_ListTools(t *testing.T) {
 	if err := transport.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	client := NewClient(transport)
 
@@ -670,7 +670,7 @@ func TestLegacySSE_CallTool(t *testing.T) {
 	if err := transport.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	client := NewClient(transport)
 
@@ -702,7 +702,7 @@ func TestLegacySSE_SessionIDRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400 Bad Request, got %d", resp.StatusCode)

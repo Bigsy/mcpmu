@@ -123,7 +123,7 @@ func (s *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 	// Show success/error page to user
 	if result.Error != "" {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, `<!DOCTYPE html>
+		_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head><title>mcpmu - Authorization Failed</title></head>
 <body style="font-family: sans-serif; padding: 40px; text-align: center;">
@@ -138,7 +138,7 @@ func (s *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 
 	if result.Code == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, `<!DOCTYPE html>
+		_, _ = fmt.Fprint(w, `<!DOCTYPE html>
 <html>
 <head><title>mcpmu - Error</title></head>
 <body style="font-family: sans-serif; padding: 40px; text-align: center;">
@@ -151,7 +151,7 @@ func (s *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, `<!DOCTYPE html>
+	_, _ = fmt.Fprint(w, `<!DOCTYPE html>
 <html>
 <head><title>mcpmu - Authorization Complete</title></head>
 <body style="font-family: sans-serif; padding: 40px; text-align: center;">

@@ -253,5 +253,5 @@ func (d serverPickerDelegate) Render(w io.Writer, m list.Model, index int, item 
 		line.WriteString(d.theme.Item.Render(si.name))
 	}
 
-	fmt.Fprint(w, line.String())
+	_, _ = fmt.Fprint(w, line.String())
 }

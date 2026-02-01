@@ -254,7 +254,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 
 	// Determine authentication
 	var bearerToken string
-	var authStatus mcp.AuthStatus = mcp.AuthStatusNone
+	authStatus := mcp.AuthStatusNone
 
 	// Check bearer token first (highest priority)
 	if srv.BearerTokenEnvVar != "" {
@@ -662,7 +662,7 @@ func (h *Handle) Stop() error {
 	}))
 
 	// Close MCP client first
-	h.client.Close()
+	_ = h.client.Close()
 
 	if h.kind == HandleKindStdio {
 		// Stdio: send SIGTERM to process
@@ -682,7 +682,7 @@ func (h *Handle) Stop() error {
 	} else {
 		// HTTP: close transport
 		if h.httpTransport != nil {
-			h.httpTransport.Close()
+			_ = h.httpTransport.Close()
 		}
 		// Signal done
 		close(h.done)

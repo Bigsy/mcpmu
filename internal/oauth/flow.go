@@ -206,7 +206,7 @@ func (f *Flow) exchangeCode(ctx context.Context, code, redirectURI string) (*Tok
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {
@@ -251,7 +251,7 @@ func RefreshToken(ctx context.Context, tokenEndpoint, clientID, refreshToken str
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {

@@ -75,7 +75,7 @@ func TestCallbackServer_Callback(t *testing.T) {
 			t.Errorf("Callback request failed: %v", err)
 			return
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -114,7 +114,7 @@ func TestCallbackServer_ErrorCallback(t *testing.T) {
 			t.Errorf("Callback request failed: %v", err)
 			return
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

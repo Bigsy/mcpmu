@@ -584,7 +584,7 @@ func (d toolPermDelegate) Render(w io.Writer, m list.Model, index int, item list
 	if ti.isHeader {
 		// Server header
 		header := d.theme.Title.Render("─── " + ti.serverName + " ───")
-		fmt.Fprint(w, header)
+		_, _ = fmt.Fprint(w, header)
 		return
 	}
 
@@ -622,5 +622,5 @@ func (d toolPermDelegate) Render(w io.Writer, m list.Model, index int, item list
 		suffix = d.theme.Faint.Render(" (default)")
 	}
 
-	fmt.Fprintf(w, "%s%s %s%s", cursor, checkbox, name, suffix)
+	_, _ = fmt.Fprintf(w, "%s%s %s%s", cursor, checkbox, name, suffix)
 }

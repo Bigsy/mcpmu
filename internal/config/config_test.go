@@ -120,7 +120,7 @@ func TestSave_CreatesDirectory(t *testing.T) {
 
 	// Remove the config directory if it exists
 	path, _ := ConfigPath()
-	os.RemoveAll(filepath.Dir(path))
+	_ = os.RemoveAll(filepath.Dir(path))
 
 	cfg := NewConfig()
 	err := Save(cfg)

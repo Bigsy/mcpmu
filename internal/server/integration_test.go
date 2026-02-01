@@ -39,8 +39,8 @@ func TestServer_ToolsDiscoveryFromUpstream(t *testing.T) {
 	// directly with a config that points to the fake server binary
 
 	// Close these since we're not using them directly in this test
-	stdin.Close()
-	stdout.Close()
+	_ = stdin.Close()
+	_ = stdout.Close()
 
 	t.Skip("Full integration test requires building and spawning the real binary - see TestServer_ToolsListWithMockedSupervisor instead")
 }

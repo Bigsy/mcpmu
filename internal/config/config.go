@@ -114,7 +114,7 @@ func SaveTo(cfg *Config, path string) error {
 
 	// Atomic rename
 	if err := os.Rename(tmpFile, path); err != nil {
-		os.Remove(tmpFile) // Clean up temp file on failure
+		_ = os.Remove(tmpFile) // Clean up temp file on failure
 		return fmt.Errorf("rename config: %w", err)
 	}
 

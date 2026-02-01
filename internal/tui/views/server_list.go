@@ -230,7 +230,7 @@ func (d serverDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		line2.WriteString(d.theme.Faint.Render(fmt.Sprintf("%d tools", si.Status.ToolCount)))
 	}
 
-	fmt.Fprint(w, line1.String()+"\n"+line2.String())
+	_, _ = fmt.Fprint(w, line1.String()+"\n"+line2.String())
 }
 
 // formatAuthBadge returns a styled auth status badge for HTTP servers.

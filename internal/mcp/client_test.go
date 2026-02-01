@@ -31,8 +31,8 @@ func runFakeServer(ctx context.Context, serverIn io.Reader, serverOut io.Writer,
 
 func TestClient_HappyPath(t *testing.T) {
 	serverIn, serverOut, clientIn, clientOut := testPipe()
-	defer clientIn.Close()
-	defer clientOut.Close()
+	defer func() { _ = clientIn.Close() }()
+	defer func() { _ = clientOut.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -76,7 +76,7 @@ func TestClient_HappyPath(t *testing.T) {
 	}
 
 	// Close client - this closes the pipes and server should exit
-	client.Close()
+	_ = client.Close()
 
 	// Wait for server to exit
 	select {
@@ -91,8 +91,8 @@ func TestClient_HappyPath(t *testing.T) {
 
 func TestClient_NotificationBeforeResponse(t *testing.T) {
 	serverIn, serverOut, clientIn, clientOut := testPipe()
-	defer clientIn.Close()
-	defer clientOut.Close()
+	defer func() { _ = clientIn.Close() }()
+	defer func() { _ = clientOut.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -121,14 +121,14 @@ func TestClient_NotificationBeforeResponse(t *testing.T) {
 		t.Errorf("expected 1 tool, got %d", len(tools))
 	}
 
-	client.Close()
+	_ = client.Close()
 	<-serverDone
 }
 
 func TestClient_MismatchedIDFirst(t *testing.T) {
 	serverIn, serverOut, clientIn, clientOut := testPipe()
-	defer clientIn.Close()
-	defer clientOut.Close()
+	defer func() { _ = clientIn.Close() }()
+	defer func() { _ = clientOut.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -149,14 +149,14 @@ func TestClient_MismatchedIDFirst(t *testing.T) {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
-	client.Close()
+	_ = client.Close()
 	<-serverDone
 }
 
 func TestClient_JSONRPCError(t *testing.T) {
 	serverIn, serverOut, clientIn, clientOut := testPipe()
-	defer clientIn.Close()
-	defer clientOut.Close()
+	defer func() { _ = clientIn.Close() }()
+	defer func() { _ = clientOut.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -178,14 +178,14 @@ func TestClient_JSONRPCError(t *testing.T) {
 	}
 	t.Logf("Got expected error: %v", err)
 
-	client.Close()
+	_ = client.Close()
 	<-serverDone
 }
 
 func TestClient_EmptyToolList(t *testing.T) {
 	serverIn, serverOut, clientIn, clientOut := testPipe()
-	defer clientIn.Close()
-	defer clientOut.Close()
+	defer func() { _ = clientIn.Close() }()
+	defer func() { _ = clientOut.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -211,14 +211,14 @@ func TestClient_EmptyToolList(t *testing.T) {
 		t.Errorf("expected 0 tools, got %d", len(tools))
 	}
 
-	client.Close()
+	_ = client.Close()
 	<-serverDone
 }
 
 func TestClient_LargeToolList(t *testing.T) {
 	serverIn, serverOut, clientIn, clientOut := testPipe()
-	defer clientIn.Close()
-	defer clientOut.Close()
+	defer func() { _ = clientIn.Close() }()
+	defer func() { _ = clientOut.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -253,7 +253,7 @@ func TestClient_LargeToolList(t *testing.T) {
 		t.Errorf("expected 100 tools, got %d", len(resultTools))
 	}
 
-	client.Close()
+	_ = client.Close()
 	<-serverDone
 }
 

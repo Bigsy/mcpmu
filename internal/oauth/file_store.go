@@ -148,7 +148,7 @@ func (s *FileStore) save(creds []*Credential) error {
 
 	// Atomic rename
 	if err := os.Rename(tmpPath, s.path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename credentials: %w", err)
 	}
 

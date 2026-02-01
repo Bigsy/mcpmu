@@ -1,6 +1,7 @@
 package events
 
 import (
+	"log"
 	"sync"
 )
 
@@ -76,7 +77,7 @@ func (b *Bus) Publish(event Event) {
 	select {
 	case b.ch <- event:
 	default:
-		// Channel full, drop event (should be rare with buffer)
+		log.Printf("Warning: event bus channel full, dropping event type=%s server=%s", event.Type(), event.ServerID())
 	}
 }
 

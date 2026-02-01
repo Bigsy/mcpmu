@@ -178,7 +178,7 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 	if err != nil {
 		return fmt.Errorf("send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Capture session ID from response
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
@@ -293,7 +293,7 @@ func (t *StreamableHTTPTransport) Close() error {
 	// Close SSE connection to unblock reads
 	t.mu.Lock()
 	if t.sseConn != nil {
-		t.sseConn.Close()
+		_ = t.sseConn.Close()
 		t.sseConn = nil
 	}
 	t.mu.Unlock()
@@ -524,12 +524,12 @@ func isValidEnvVarName(s string) bool {
 		isLetter := (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
 		isDigit := b >= '0' && b <= '9'
 		if i == 0 {
-			if !(isLetter || b == '_') {
+			if !isLetter && b != '_' {
 				return false
 			}
 			continue
 		}
-		if !(isLetter || isDigit || b == '_') {
+		if !isLetter && !isDigit && b != '_' {
 			return false
 		}
 	}
