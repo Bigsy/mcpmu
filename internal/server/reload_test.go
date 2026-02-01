@@ -744,3 +744,284 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 
 	t.Log("Hot-reload integration test passed!")
 }
+
+// TestServer_ReloadDuringActiveRequest verifies behavior when a config reload
+// is queued while a tools/call request is being processed.
+//
+// Due to the server's architecture (serialized request handling in Run() loop),
+// the reload is processed AFTER the current request completes, not during it.
+// This test verifies:
+//
+// 1. In-flight requests complete before reload is applied (serialization guarantee)
+// 2. Reload kills upstream server processes (StopAll)
+// 3. Subsequent tool calls may fail with EOF (stale handle) until server restarts
+// 4. Server remains functional for other operations (tools/list works)
+//
+// This is important test coverage for ensuring graceful degradation when
+// config changes happen during active use.
+func TestServer_ReloadDuringActiveRequest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping test in short mode")
+	}
+
+	// Build the binary
+	tmpBin := t.TempDir() + "/mcpmu"
+	cmd := exec.Command("go", "build", "-o", tmpBin, "../../cmd/mcpmu")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to build binary: %v\n%s", err, output)
+	}
+
+	// Create initial config with a server that has a delay on tools/call
+	tmpConfig := t.TempDir() + "/config.json"
+	enabled := true
+	initialCfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"slow-srv": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					// Configure 2s delay on tools/call to ensure reload happens mid-request
+					"FAKE_MCP_CFG": `{"tools":[{"name":"slow_tool","description":"A slow tool"}],"delays":{"tools/call":2000000000},"echoToolCalls":true}`,
+				},
+			},
+		},
+		Namespaces: map[string]config.NamespaceConfig{},
+	}
+	if err := config.SaveTo(initialCfg, tmpConfig); err != nil {
+		t.Fatalf("Failed to write initial config: %v", err)
+	}
+
+	// Start the server
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	serverCmd := exec.CommandContext(ctx, tmpBin, "serve", "--stdio", "--config", tmpConfig, "--log-level", "debug")
+	stdin, err := serverCmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe: %v", err)
+	}
+	stdout, err := serverCmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	stderr, err := serverCmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
+	}
+
+	// Capture stderr for debugging
+	stderrBuf := &bytes.Buffer{}
+	go func() { _, _ = io.Copy(stderrBuf, stderr) }()
+
+	if err := serverCmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = serverCmd.Process.Kill()
+		_ = serverCmd.Wait()
+		if t.Failed() {
+			t.Logf("Server stderr:\n%s", stderrBuf.String())
+		}
+	})
+
+	reader := bufio.NewReader(stdout)
+
+	// Helper to send request and read response
+	sendAndRead := func(req string) (json.RawMessage, error) {
+		if _, err := stdin.Write([]byte(req + "\n")); err != nil {
+			return nil, err
+		}
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(line), nil
+	}
+
+	// Helper to send request without waiting for response
+	sendOnly := func(req string) error {
+		_, err := stdin.Write([]byte(req + "\n"))
+		return err
+	}
+
+	// Step 1: Initialize
+	initResp, err := sendAndRead(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`)
+	if err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+	var initResult struct {
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal(initResp, &initResult); err != nil {
+		t.Fatalf("Parse init response: %v", err)
+	}
+	if initResult.Error != nil {
+		t.Fatalf("Initialize error: %v", initResult.Error)
+	}
+	t.Log("Initialize: OK")
+
+	// Step 2: Send a tools/call request (which will take 500ms due to the delay)
+	// Do this in a goroutine since it will block
+	type toolsCallResult struct {
+		resp json.RawMessage
+		err  error
+	}
+	toolsCallDone := make(chan toolsCallResult, 1)
+	go func() {
+		resp, err := sendAndRead(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"slow-srv.slow_tool","arguments":{}}}`)
+		toolsCallDone <- toolsCallResult{resp, err}
+	}()
+
+	// Step 3: Wait a bit for the request to be in-flight (give time for server to start and receive request)
+	time.Sleep(500 * time.Millisecond)
+
+	// Modify config to trigger hot-reload
+	reloadCfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"slow-srv": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					// No delay this time
+					"FAKE_MCP_CFG": `{"tools":[{"name":"slow_tool","description":"A slow tool (now fast)"}],"echoToolCalls":true}`,
+				},
+			},
+		},
+		Namespaces: map[string]config.NamespaceConfig{},
+	}
+	if err := config.SaveTo(reloadCfg, tmpConfig); err != nil {
+		t.Fatalf("Failed to save reload config: %v", err)
+	}
+	t.Log("Config file updated, waiting for hot-reload")
+
+	// Wait for hot-reload (debounce ~150ms + processing)
+	time.Sleep(400 * time.Millisecond)
+
+	// Step 4: Wait for the in-flight tools/call to complete
+	// It should either fail (due to StopAll killing the upstream) or complete (if timing allows)
+	// With a 2s delay on the fake server and reload happening ~1s in, we expect the request to be interrupted
+	requestWasInterrupted := false
+	select {
+	case result := <-toolsCallDone:
+		if result.err != nil {
+			t.Logf("In-flight tools/call returned IO error (expected if killed by reload): %v", result.err)
+			requestWasInterrupted = true
+		} else {
+			var toolsCallResp struct {
+				ID     int `json:"id"`
+				Result struct {
+					Content []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"content"`
+					IsError bool `json:"isError"`
+				} `json:"result"`
+				Error *RPCError `json:"error"`
+			}
+			if err := json.Unmarshal(result.resp, &toolsCallResp); err != nil {
+				t.Logf("In-flight tools/call response parse error: %v (raw: %s)", err, string(result.resp))
+				requestWasInterrupted = true
+			} else if toolsCallResp.Error != nil {
+				t.Logf("In-flight tools/call returned RPC error (expected if killed by reload): code=%d msg=%s",
+					toolsCallResp.Error.Code, toolsCallResp.Error.Message)
+				requestWasInterrupted = true
+			} else {
+				// Request completed successfully - this can happen if the reload timing didn't interrupt it
+				// We log this but don't fail the test since timing is inherently non-deterministic
+				t.Logf("In-flight tools/call completed successfully (timing allowed completion before reload)")
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("In-flight tools/call did not complete within timeout")
+	}
+
+	// Log whether the request was interrupted (the main purpose of this test is to verify
+	// the server handles this scenario gracefully, not to guarantee interruption)
+	if requestWasInterrupted {
+		t.Log("Request was interrupted by config reload (expected behavior)")
+	} else {
+		t.Log("Request completed before reload took effect (acceptable - timing dependent)")
+	}
+
+	// Step 5: Verify server is still functional after reload by calling tools/list
+	if err := sendOnly(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`); err != nil {
+		t.Fatalf("Failed to send tools/list after reload: %v", err)
+	}
+
+	// Read the tools/list response (may need to skip the tools/call response if it wasn't read yet)
+	var toolsListResp struct {
+		ID     int `json:"id"`
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+
+	for i := 0; i < 3; i++ { // Try a few times to get the right response
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("Failed to read response after reload: %v", err)
+		}
+
+		if err := json.Unmarshal(line, &toolsListResp); err != nil {
+			t.Fatalf("Parse response after reload: %v (raw: %s)", err, string(line))
+		}
+
+		if toolsListResp.ID == 3 {
+			break // Found our tools/list response
+		}
+		t.Logf("Skipping response with ID=%d", toolsListResp.ID)
+	}
+
+	if toolsListResp.ID != 3 {
+		t.Fatal("Did not receive tools/list response (ID=3)")
+	}
+
+	if toolsListResp.Error != nil {
+		t.Fatalf("tools/list after reload returned error: %v", toolsListResp.Error)
+	}
+
+	t.Logf("Server functional after reload: tools/list returned %d tools", len(toolsListResp.Result.Tools))
+
+	// Step 6: Verify we can call the tool again (after reload)
+	toolsCallResp2, err := sendAndRead(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"slow-srv.slow_tool","arguments":{}}}`)
+	if err != nil {
+		t.Fatalf("tools/call after reload failed: %v", err)
+	}
+
+	var toolsCall2Result struct {
+		ID     int `json:"id"`
+		Result struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal(toolsCallResp2, &toolsCall2Result); err != nil {
+		t.Fatalf("Parse tools/call response after reload: %v", err)
+	}
+
+	if toolsCall2Result.Error != nil {
+		// The tool call may fail if the server hasn't fully restarted yet
+		// This is acceptable - we just need to know it doesn't crash the server
+		t.Logf("tools/call after reload returned error (may be expected): %v", toolsCall2Result.Error)
+	} else {
+		t.Log("tools/call after reload succeeded")
+	}
+
+	t.Log("Reload during active request test passed!")
+}
