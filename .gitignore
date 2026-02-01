@@ -1,0 +1,43 @@
+# Binaries
+/mcpmu
+/mcpmu-race
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+.lsp/
+.clj-kondo/
+AGENTS.md
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Environment and credentials
+.env*
+.credentials.json
+
+# Logs
+*.log
+
+# Planning docs (keep local, not in repo)
+PLAN.md
+
+# Claude Code local config
+.claude/

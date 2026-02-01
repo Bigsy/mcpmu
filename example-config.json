@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "servers": {
+    "fs": {
+      "id": "fs",
+      "name": "Filesystem",
+      "kind": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "cwd": ""
+    },
+    "mem": {
+      "id": "mem",
+      "name": "Memory",
+      "kind": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "cwd": ""
+    }
+  },
+  "namespaces": [],
+  "toolPermissions": []
+}

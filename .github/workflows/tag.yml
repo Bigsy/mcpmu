@@ -1,0 +1,99 @@
+name: Tag Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g., 0.1.0) - leave empty to auto-increment'
+        required: false
+        type: string
+      bump_type:
+        description: 'Version bump type (if version not specified)'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Create Tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            # Validate provided version
+            if [[ ! "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Error: Version must be in format X.Y.Z (e.g., 0.1.0)"
+              exit 1
+            fi
+            echo "VERSION=$INPUT_VERSION" >> $GITHUB_OUTPUT
+          else
+            # Auto-increment based on bump type
+            LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+            if [ -z "$LATEST" ]; then
+              echo "VERSION=0.1.0" >> $GITHUB_OUTPUT
+            else
+              # Strip 'v' prefix and split
+              CURRENT=${LATEST#v}
+              MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+              MINOR=$(echo "$CURRENT" | cut -d. -f2)
+              PATCH=$(echo "$CURRENT" | cut -d. -f3)
+
+              case "$BUMP_TYPE" in
+                major)
+                  echo "VERSION=$((MAJOR + 1)).0.0" >> $GITHUB_OUTPUT
+                  ;;
+                minor)
+                  echo "VERSION=$MAJOR.$((MINOR + 1)).0" >> $GITHUB_OUTPUT
+                  ;;
+                patch)
+                  echo "VERSION=$MAJOR.$MINOR.$((PATCH + 1))" >> $GITHUB_OUTPUT
+                  ;;
+              esac
+            fi
+          fi
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          BUMP_TYPE: ${{ inputs.bump_type }}
+
+      - name: Check tag doesn't exist
+        run: |
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Error: Tag v$VERSION already exists"
+            exit 1
+          fi
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
+          echo "Created tag v$VERSION"
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+
+  release:
+    name: Release
+    needs: tag
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: v${{ needs.tag.outputs.version }}
+    permissions:
+      contents: write
