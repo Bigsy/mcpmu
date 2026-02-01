@@ -2,6 +2,7 @@
 package oauth
 
 import (
+	"errors"
 	"time"
 )
 
@@ -27,6 +28,42 @@ type Credential struct {
 
 	// Scopes are the granted OAuth scopes.
 	Scopes []string `json:"scopes,omitempty"`
+}
+
+// Validate checks that all required fields are set and valid.
+func (c *Credential) Validate() error {
+	if c.ServerURL == "" {
+		return errors.New("credential: ServerURL is required")
+	}
+	if c.ClientID == "" {
+		return errors.New("credential: ClientID is required")
+	}
+	if c.AccessToken == "" {
+		return errors.New("credential: AccessToken is required")
+	}
+	if c.ExpiresAt <= 0 {
+		return errors.New("credential: ExpiresAt must be a positive timestamp")
+	}
+	return nil
+}
+
+// NewCredential creates a new Credential with validation.
+// ServerName is optional (may be empty).
+// RefreshToken and Scopes are optional.
+func NewCredential(serverName, serverURL, clientID, accessToken, refreshToken string, expiresAt time.Time, scopes []string) (*Credential, error) {
+	cred := &Credential{
+		ServerName:   serverName,
+		ServerURL:    serverURL,
+		ClientID:     clientID,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresAt:    expiresAt.UnixMilli(),
+		Scopes:       scopes,
+	}
+	if err := cred.Validate(); err != nil {
+		return nil, err
+	}
+	return cred, nil
 }
 
 // IsExpired returns true if the access token has expired.

@@ -66,7 +66,9 @@ func TestFileStore_Update(t *testing.T) {
 	cred := &Credential{
 		ServerName:  "test-server",
 		ServerURL:   "https://mcp.example.com/mcp",
+		ClientID:    "client-123",
 		AccessToken: "token-1",
+		ExpiresAt:   time.Now().Add(time.Hour).UnixMilli(),
 	}
 
 	// Initial put
@@ -106,7 +108,9 @@ func TestFileStore_Delete(t *testing.T) {
 	cred := &Credential{
 		ServerName:  "test-server",
 		ServerURL:   "https://mcp.example.com/mcp",
+		ClientID:    "client-123",
 		AccessToken: "token",
+		ExpiresAt:   time.Now().Add(time.Hour).UnixMilli(),
 	}
 
 	// Put
@@ -138,7 +142,9 @@ func TestFileStore_List(t *testing.T) {
 		cred := &Credential{
 			ServerName:  "server-" + string(rune('a'+i)),
 			ServerURL:   url,
+			ClientID:    "client-" + string(rune('a'+i)),
 			AccessToken: "token-" + string(rune('a'+i)),
+			ExpiresAt:   time.Now().Add(time.Hour).UnixMilli(),
 		}
 		if err := store.Put(cred); err != nil {
 			t.Fatalf("Put %s failed: %v", url, err)
@@ -162,7 +168,9 @@ func TestFileStore_Permissions(t *testing.T) {
 	cred := &Credential{
 		ServerName:  "test",
 		ServerURL:   "https://test.com",
+		ClientID:    "client-123",
 		AccessToken: "token",
+		ExpiresAt:   time.Now().Add(time.Hour).UnixMilli(),
 	}
 
 	if err := store.Put(cred); err != nil {

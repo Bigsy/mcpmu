@@ -56,6 +56,10 @@ func (s *FileStore) Get(serverURL string) (*Credential, error) {
 
 // Put stores credentials for a server.
 func (s *FileStore) Put(cred *Credential) error {
+	if err := cred.Validate(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

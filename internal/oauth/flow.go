@@ -147,14 +147,18 @@ func (f *Flow) Run(ctx context.Context) error {
 		scopes = strings.Split(tokens.Scope, " ")
 	}
 
-	cred := &Credential{
-		ServerName:   f.config.ServerName,
-		ServerURL:    f.config.ServerURL,
-		ClientID:     f.clientID,
-		AccessToken:  tokens.AccessToken,
-		RefreshToken: tokens.RefreshToken,
-		ExpiresAt:    time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second).UnixMilli(),
-		Scopes:       scopes,
+	expiresAt := time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second)
+	cred, err := NewCredential(
+		f.config.ServerName,
+		f.config.ServerURL,
+		f.clientID,
+		tokens.AccessToken,
+		tokens.RefreshToken,
+		expiresAt,
+		scopes,
+	)
+	if err != nil {
+		return fmt.Errorf("create credential: %w", err)
 	}
 
 	if err := f.config.Store.Put(cred); err != nil {
