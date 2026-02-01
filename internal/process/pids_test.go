@@ -227,3 +227,225 @@ func TestVerifyResult_Constants(t *testing.T) {
 		seen[r] = true
 	}
 }
+
+// TestPIDTracker_PIDReuse_DetectedViaStartTicks tests that when a PID is reused
+// by a different process (detected via different start ticks), we correctly
+// identify this and don't kill the wrong process.
+func TestPIDTracker_PIDReuse_DetectedViaStartTicks(t *testing.T) {
+	skipIfPsUnavailable(t)
+	testutil.SetupTestHome(t)
+
+	pt, err := NewPIDTracker()
+	if err != nil {
+		t.Fatalf("NewPIDTracker failed: %v", err)
+	}
+
+	// Use current process PID but with a DIFFERENT ProcessStartTicks
+	// This simulates PID reuse: we tracked a process that died, and
+	// a new process now has the same PID but a different start time.
+	currentPID := os.Getpid()
+	actualTicks, err := getProcessStartTicks(currentPID)
+	if err != nil {
+		t.Fatalf("getProcessStartTicks failed: %v", err)
+	}
+
+	// Record a fake entry with the same PID but different start ticks
+	// This represents the "old" process that died and whose PID was reused
+	pt.pids["reused-server"] = pidEntry{
+		PID:               currentPID,
+		Command:           "/some/old/command",
+		Args:              []string{"old-arg"},
+		StartedAt:         time.Now().Add(-time.Hour),
+		ProcessStartTicks: actualTicks + 99999, // Different from actual!
+	}
+
+	// Run cleanup - should detect PID reuse and NOT kill the process
+	killed := pt.CleanupOrphans()
+
+	// Should NOT have killed anything - the process exists but isn't ours
+	if killed != 0 {
+		t.Errorf("expected 0 killed (PID reuse detected), got %d", killed)
+	}
+
+	// Entry should be removed from tracking (it's a stale entry)
+	if _, ok := pt.pids["reused-server"]; ok {
+		t.Error("expected reused-server to be removed from tracking after PID reuse detection")
+	}
+}
+
+// TestPIDTracker_VerifyProcessOwnership_PIDReuse directly tests the
+// verifyProcessOwnership function returns verifyConfirmedReused when
+// start ticks don't match.
+func TestPIDTracker_VerifyProcessOwnership_PIDReuse(t *testing.T) {
+	skipIfPsUnavailable(t)
+	testutil.SetupTestHome(t)
+
+	pt, err := NewPIDTracker()
+	if err != nil {
+		t.Fatalf("NewPIDTracker failed: %v", err)
+	}
+
+	currentPID := os.Getpid()
+	actualTicks, err := getProcessStartTicks(currentPID)
+	if err != nil {
+		t.Fatalf("getProcessStartTicks failed: %v", err)
+	}
+
+	// Entry with mismatched start ticks (simulating PID reuse)
+	entry := pidEntry{
+		PID:               currentPID,
+		Command:           "/any/command",
+		Args:              nil,
+		StartedAt:         time.Now().Add(-time.Hour),
+		ProcessStartTicks: actualTicks + 12345, // Wrong ticks!
+	}
+
+	result := pt.verifyProcessOwnership(entry)
+
+	if result != verifyConfirmedReused {
+		t.Errorf("expected verifyConfirmedReused, got %v", result)
+	}
+}
+
+// TestPIDTracker_VerifyProcessOwnership_ConfirmedOwned tests that when
+// start ticks match, the process is correctly identified as owned.
+func TestPIDTracker_VerifyProcessOwnership_ConfirmedOwned(t *testing.T) {
+	skipIfPsUnavailable(t)
+	testutil.SetupTestHome(t)
+
+	pt, err := NewPIDTracker()
+	if err != nil {
+		t.Fatalf("NewPIDTracker failed: %v", err)
+	}
+
+	currentPID := os.Getpid()
+	actualTicks, err := getProcessStartTicks(currentPID)
+	if err != nil {
+		t.Fatalf("getProcessStartTicks failed: %v", err)
+	}
+
+	// Get actual cmdline for matching
+	cmdline, err := getProcessCmdline(currentPID)
+	if err != nil || len(cmdline) == 0 {
+		t.Skipf("Cannot get cmdline: %v", err)
+	}
+
+	// Entry with matching start ticks and matching command
+	entry := pidEntry{
+		PID:               currentPID,
+		Command:           cmdline[0], // Use actual command
+		Args:              nil,
+		StartedAt:         time.Now(),
+		ProcessStartTicks: actualTicks, // Correct ticks!
+	}
+
+	result := pt.verifyProcessOwnership(entry)
+
+	if result != verifyConfirmedOwned {
+		t.Errorf("expected verifyConfirmedOwned, got %v", result)
+	}
+}
+
+// TestPIDTracker_VerifyProcessOwnership_StartTicksMatchCmdlineDiffers tests
+// that even when cmdline doesn't match but start ticks do match, we still
+// consider it our process (handles interpreter wrappers like npx->node).
+func TestPIDTracker_VerifyProcessOwnership_StartTicksMatchCmdlineDiffers(t *testing.T) {
+	skipIfPsUnavailable(t)
+	testutil.SetupTestHome(t)
+
+	pt, err := NewPIDTracker()
+	if err != nil {
+		t.Fatalf("NewPIDTracker failed: %v", err)
+	}
+
+	currentPID := os.Getpid()
+	actualTicks, err := getProcessStartTicks(currentPID)
+	if err != nil {
+		t.Fatalf("getProcessStartTicks failed: %v", err)
+	}
+
+	// Entry with matching start ticks but DIFFERENT command
+	// This simulates npx starting node with a different cmdline
+	entry := pidEntry{
+		PID:               currentPID,
+		Command:           "/usr/bin/npx",             // What we launched
+		Args:              []string{"@anthropic/mcp"}, // Our args
+		StartedAt:         time.Now(),
+		ProcessStartTicks: actualTicks, // Correct ticks!
+	}
+
+	result := pt.verifyProcessOwnership(entry)
+
+	// Should still be confirmed owned because start ticks match
+	// The implementation is conservative and trusts start ticks
+	if result != verifyConfirmedOwned {
+		t.Errorf("expected verifyConfirmedOwned (start ticks match), got %v", result)
+	}
+}
+
+// TestPIDTracker_CleanupOrphans_MultiplePIDStates tests CleanupOrphans with
+// a mix of process states: gone, reused, and owned.
+func TestPIDTracker_CleanupOrphans_MultiplePIDStates(t *testing.T) {
+	skipIfPsUnavailable(t)
+	testutil.SetupTestHome(t)
+
+	pt, err := NewPIDTracker()
+	if err != nil {
+		t.Fatalf("NewPIDTracker failed: %v", err)
+	}
+
+	currentPID := os.Getpid()
+	actualTicks, err := getProcessStartTicks(currentPID)
+	if err != nil {
+		t.Fatalf("getProcessStartTicks failed: %v", err)
+	}
+
+	// 1. Process gone (non-existent PID)
+	pt.pids["gone-server"] = pidEntry{
+		PID:               999999,
+		Command:           "/fake/cmd",
+		StartedAt:         time.Now().Add(-time.Hour),
+		ProcessStartTicks: 12345,
+	}
+
+	// 2. PID reused (exists but different start ticks)
+	pt.pids["reused-server"] = pidEntry{
+		PID:               currentPID,
+		Command:           "/old/cmd",
+		StartedAt:         time.Now().Add(-time.Hour),
+		ProcessStartTicks: actualTicks + 99999, // Wrong ticks
+	}
+
+	// 3. Uncertain (no start ticks, command mismatch)
+	pt.pids["uncertain-server"] = pidEntry{
+		PID:               currentPID,
+		Command:           "/different/command/entirely",
+		StartedAt:         time.Now().Add(-time.Hour),
+		ProcessStartTicks: 0, // No ticks recorded
+	}
+
+	killed := pt.CleanupOrphans()
+
+	// Gone and reused should be removed, uncertain should increment retry
+	if killed != 0 {
+		t.Errorf("expected 0 killed, got %d", killed)
+	}
+
+	// Gone: removed
+	if _, ok := pt.pids["gone-server"]; ok {
+		t.Error("gone-server should be removed")
+	}
+
+	// Reused: removed (PID reuse detected)
+	if _, ok := pt.pids["reused-server"]; ok {
+		t.Error("reused-server should be removed (PID reuse detected)")
+	}
+
+	// Uncertain: still tracked with incremented retry count
+	entry, ok := pt.pids["uncertain-server"]
+	if !ok {
+		t.Error("uncertain-server should still be tracked")
+	} else if entry.RetryCount != 1 {
+		t.Errorf("expected RetryCount 1, got %d", entry.RetryCount)
+	}
+}
