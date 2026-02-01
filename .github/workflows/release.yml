@@ -32,17 +32,22 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "VERSION=v${{ inputs.version }}" >> $GITHUB_OUTPUT
-          elif [ -n "${{ inputs.tag }}" ]; then
+          if [ -n "$TAG" ]; then
             # Called from workflow_call
-            echo "VERSION=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "VERSION=$TAG" >> $GITHUB_OUTPUT
+          elif [ -n "$VERSION_INPUT" ]; then
+            # Called from workflow_dispatch
+            echo "VERSION=v$VERSION_INPUT" >> $GITHUB_OUTPUT
           else
+            # Triggered by tag push
             echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION_INPUT: ${{ inputs.version }}
 
       - name: Create and push tag (workflow_dispatch only)
-        if: github.event_name == 'workflow_dispatch' && inputs.tag == ''
+        if: inputs.tag == '' && inputs.version != ''
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
