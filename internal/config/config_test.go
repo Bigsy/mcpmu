@@ -263,7 +263,10 @@ func TestConfig_UpdateServer(t *testing.T) {
 		t.Fatalf("UpdateServer failed: %v", err)
 	}
 
-	srv := cfg.GetServer("test")
+	srv, ok := cfg.GetServer("test")
+	if !ok {
+		t.Fatal("expected to find server 'test'")
+	}
 	if srv.Command != "cat" {
 		t.Errorf("expected command 'cat', got %q", srv.Command)
 	}
@@ -320,7 +323,10 @@ func TestConfig_DeleteServer_CleansUpReferences(t *testing.T) {
 	}
 
 	// Check namespace reference was removed
-	ns := cfg.GetNamespace("ns1")
+	ns, ok := cfg.GetNamespace("ns1")
+	if !ok {
+		t.Fatal("expected to find namespace 'ns1'")
+	}
 	if len(ns.ServerIDs) != 1 || ns.ServerIDs[0] != "srv2" {
 		t.Error("expected srv1 to be removed from namespace")
 	}
@@ -353,7 +359,10 @@ func TestConfig_RenameServer(t *testing.T) {
 	}
 
 	// Check namespace reference was updated
-	ns := cfg.GetNamespace("ns1")
+	ns, ok := cfg.GetNamespace("ns1")
+	if !ok {
+		t.Fatal("expected to find namespace 'ns1'")
+	}
 	found := false
 	for _, sid := range ns.ServerIDs {
 		if sid == "new-name" {
@@ -399,8 +408,8 @@ func TestConfig_GetServer(t *testing.T) {
 		Command: "echo",
 	}
 
-	srv := cfg.GetServer("test")
-	if srv == nil {
+	srv, ok := cfg.GetServer("test")
+	if !ok {
 		t.Fatal("expected server to be found")
 	}
 	if srv.Command != "echo" {
@@ -408,9 +417,9 @@ func TestConfig_GetServer(t *testing.T) {
 	}
 
 	// Non-existent
-	srv = cfg.GetServer("nonexistent")
-	if srv != nil {
-		t.Error("expected nil for non-existent server")
+	_, ok = cfg.GetServer("nonexistent")
+	if ok {
+		t.Error("expected false for non-existent server")
 	}
 }
 
@@ -482,17 +491,17 @@ func TestConfig_GetNamespace(t *testing.T) {
 	cfg := NewConfig()
 	cfg.Namespaces["development"] = NamespaceConfig{Description: "Dev env"}
 
-	ns := cfg.GetNamespace("development")
-	if ns == nil {
+	ns, ok := cfg.GetNamespace("development")
+	if !ok {
 		t.Fatal("expected namespace to be found")
 	}
 	if ns.Description != "Dev env" {
 		t.Errorf("expected description 'Dev env', got %q", ns.Description)
 	}
 
-	ns = cfg.GetNamespace("nonexistent")
-	if ns != nil {
-		t.Error("expected nil for non-existent namespace")
+	_, ok = cfg.GetNamespace("nonexistent")
+	if ok {
+		t.Error("expected false for non-existent namespace")
 	}
 }
 
@@ -505,7 +514,10 @@ func TestConfig_UpdateNamespace(t *testing.T) {
 		t.Fatalf("UpdateNamespace failed: %v", err)
 	}
 
-	ns := cfg.GetNamespace("development")
+	ns, ok := cfg.GetNamespace("development")
+	if !ok {
+		t.Fatal("expected to find namespace 'development'")
+	}
 	if ns.Description != "New" {
 		t.Errorf("expected description 'New', got %q", ns.Description)
 	}
@@ -615,7 +627,10 @@ func TestConfig_AssignServerToNamespace(t *testing.T) {
 		t.Fatalf("AssignServerToNamespace failed: %v", err)
 	}
 
-	ns := cfg.GetNamespace("dev")
+	ns, ok := cfg.GetNamespace("dev")
+	if !ok {
+		t.Fatal("expected to find namespace 'dev'")
+	}
 	if len(ns.ServerIDs) != 1 || ns.ServerIDs[0] != "srv1" {
 		t.Error("expected server to be assigned")
 	}
@@ -625,7 +640,7 @@ func TestConfig_AssignServerToNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second AssignServerToNamespace failed: %v", err)
 	}
-	ns = cfg.GetNamespace("dev")
+	ns, _ = cfg.GetNamespace("dev")
 	if len(ns.ServerIDs) != 1 {
 		t.Error("expected no duplicate assignment")
 	}
@@ -657,7 +672,10 @@ func TestConfig_UnassignServerFromNamespace(t *testing.T) {
 		t.Fatalf("UnassignServerFromNamespace failed: %v", err)
 	}
 
-	ns := cfg.GetNamespace("dev")
+	ns, ok := cfg.GetNamespace("dev")
+	if !ok {
+		t.Fatal("expected to find namespace 'dev'")
+	}
 	if len(ns.ServerIDs) != 1 || ns.ServerIDs[0] != "srv2" {
 		t.Error("expected server to be unassigned")
 	}
@@ -840,5 +858,213 @@ func TestValidateName_RejectsDots(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), ".") {
 		t.Errorf("expected error to mention dot, got: %v", err)
+	}
+}
+
+// ============================================================================
+// ServerConfig Validation Tests
+// ============================================================================
+
+func TestServerConfig_Validate_StdioValid(t *testing.T) {
+	srv := ServerConfig{
+		Command: "echo",
+		Args:    []string{"hello"},
+	}
+	if err := srv.Validate(); err != nil {
+		t.Errorf("expected valid stdio config, got error: %v", err)
+	}
+}
+
+func TestServerConfig_Validate_HTTPValid(t *testing.T) {
+	srv := ServerConfig{
+		URL:               "https://example.com/mcp",
+		BearerTokenEnvVar: "MY_TOKEN",
+	}
+	if err := srv.Validate(); err != nil {
+		t.Errorf("expected valid http config, got error: %v", err)
+	}
+}
+
+func TestServerConfig_Validate_BothCommandAndURL(t *testing.T) {
+	srv := ServerConfig{
+		Command: "echo",
+		URL:     "https://example.com/mcp",
+	}
+	err := srv.Validate()
+	if err == nil {
+		t.Error("expected error when both command and url are set")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected error to mention mutually exclusive, got: %v", err)
+	}
+}
+
+func TestServerConfig_Validate_NeitherCommandNorURL(t *testing.T) {
+	srv := ServerConfig{
+		Cwd: "/tmp",
+	}
+	err := srv.Validate()
+	if err == nil {
+		t.Error("expected error when neither command nor url is set")
+	}
+	if !strings.Contains(err.Error(), "must set either") {
+		t.Errorf("expected error to mention must set either, got: %v", err)
+	}
+}
+
+func TestServerConfig_Validate_KindMismatch(t *testing.T) {
+	// Kind says stdio but URL is set
+	srv := ServerConfig{
+		Kind: ServerKindStdio,
+		URL:  "https://example.com/mcp",
+	}
+	err := srv.Validate()
+	if err == nil {
+		t.Error("expected error for kind mismatch")
+	}
+
+	// Kind says HTTP but command is set
+	srv = ServerConfig{
+		Kind:    ServerKindStreamableHTTP,
+		Command: "echo",
+	}
+	err = srv.Validate()
+	if err == nil {
+		t.Error("expected error for kind mismatch")
+	}
+}
+
+func TestServerConfig_Validate_HTTPFieldsOnStdio(t *testing.T) {
+	tests := []struct {
+		name string
+		srv  ServerConfig
+	}{
+		{
+			name: "bearer_token_env_var",
+			srv:  ServerConfig{Command: "echo", BearerTokenEnvVar: "TOKEN"},
+		},
+		{
+			name: "http_headers",
+			srv:  ServerConfig{Command: "echo", HTTPHeaders: map[string]string{"X-Custom": "value"}},
+		},
+		{
+			name: "env_http_headers",
+			srv:  ServerConfig{Command: "echo", EnvHTTPHeaders: map[string]string{"X-Custom": "ENV_VAR"}},
+		},
+		{
+			name: "scopes",
+			srv:  ServerConfig{Command: "echo", Scopes: []string{"read", "write"}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.srv.Validate()
+			if err == nil {
+				t.Errorf("expected error for %s on stdio server", tc.name)
+			}
+		})
+	}
+}
+
+func TestServerConfig_Validate_StdioFieldsOnHTTP(t *testing.T) {
+	srv := ServerConfig{
+		URL:  "https://example.com/mcp",
+		Args: []string{"arg1", "arg2"},
+	}
+	err := srv.Validate()
+	if err == nil {
+		t.Error("expected error for args on http server")
+	}
+	if !strings.Contains(err.Error(), "args is only valid for stdio") {
+		t.Errorf("expected error to mention args, got: %v", err)
+	}
+}
+
+func TestConfig_Validate_AllServers(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["valid-stdio"] = ServerConfig{Command: "echo"}
+	cfg.Servers["valid-http"] = ServerConfig{URL: "https://example.com/mcp"}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected config to be valid, got error: %v", err)
+	}
+}
+
+func TestConfig_Validate_InvalidServer(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["valid"] = ServerConfig{Command: "echo"}
+	cfg.Servers["invalid"] = ServerConfig{} // Neither command nor URL
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected error for invalid server")
+	}
+	if !strings.Contains(err.Error(), "invalid") {
+		t.Errorf("expected error to mention server name, got: %v", err)
+	}
+}
+
+func TestLoad_InvalidServerConfig(t *testing.T) {
+	home := testutil.SetupTestHome(t)
+
+	// Write a config with invalid server (both command and url)
+	configJSON := `{
+		"schemaVersion": 1,
+		"servers": {
+			"invalid-server": {
+				"command": "echo",
+				"url": "https://example.com/mcp"
+			}
+		}
+	}`
+
+	configPath := filepath.Join(home, ".config", "mcpmu", "config.json")
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load()
+	if err == nil {
+		t.Error("expected error for invalid config")
+	}
+	if !strings.Contains(err.Error(), "invalid config") {
+		t.Errorf("expected error to mention invalid config, got: %v", err)
+	}
+}
+
+func TestAddServer_ValidatesConfig(t *testing.T) {
+	cfg := NewConfig()
+
+	// Valid server should succeed
+	err := cfg.AddServer("valid", ServerConfig{Command: "echo"})
+	if err != nil {
+		t.Errorf("expected valid server to be added, got error: %v", err)
+	}
+
+	// Invalid server (no command or url) should fail
+	err = cfg.AddServer("invalid", ServerConfig{})
+	if err == nil {
+		t.Error("expected error for invalid server config")
+	}
+	if !strings.Contains(err.Error(), "invalid server config") {
+		t.Errorf("expected error to mention invalid server config, got: %v", err)
+	}
+}
+
+func TestUpdateServer_ValidatesConfig(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["test"] = ServerConfig{Command: "echo"}
+
+	// Valid update should succeed
+	err := cfg.UpdateServer("test", ServerConfig{Command: "cat"})
+	if err != nil {
+		t.Errorf("expected valid update, got error: %v", err)
+	}
+
+	// Invalid update should fail
+	err = cfg.UpdateServer("test", ServerConfig{})
+	if err == nil {
+		t.Error("expected error for invalid server config")
 	}
 }

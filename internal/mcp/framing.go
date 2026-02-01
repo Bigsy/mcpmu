@@ -50,20 +50,44 @@ func (t *StdioTransport) Send(ctx context.Context, msg []byte) error {
 	return nil
 }
 
+// readResult holds the result of an async read operation.
+type readResult struct {
+	line []byte
+	err  error
+}
+
 // Receive reads the next NDJSON message.
+// Respects context cancellation by closing the underlying pipe when cancelled.
 func (t *StdioTransport) Receive(ctx context.Context) ([]byte, error) {
+	t.mu.Lock()
 	if t.closed {
+		t.mu.Unlock()
 		return nil, fmt.Errorf("transport closed")
 	}
+	t.mu.Unlock()
 
-	line, err := t.reader.ReadBytes('\n')
-	if err != nil {
-		return nil, fmt.Errorf("read line: %w", err)
+	// Run the blocking read in a goroutine
+	resultCh := make(chan readResult, 1)
+	go func() {
+		line, err := t.reader.ReadBytes('\n')
+		resultCh <- readResult{line: line, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			return nil, fmt.Errorf("read line: %w", result.err)
+		}
+		msg := bytes.TrimSpace(result.line)
+		log.Printf("MCP Recv: %s", string(msg))
+		return msg, nil
+
+	case <-ctx.Done():
+		// Close stdout to unblock the read goroutine
+		// The goroutine will get an error and exit
+		_ = t.stdout.Close()
+		return nil, ctx.Err()
 	}
-
-	msg := bytes.TrimSpace(line)
-	log.Printf("MCP Recv: %s", string(msg))
-	return msg, nil
 }
 
 // Close closes the transport.

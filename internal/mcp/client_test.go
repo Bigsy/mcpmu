@@ -258,12 +258,23 @@ func TestClient_LargeToolList(t *testing.T) {
 }
 
 func TestClient_Timeout(t *testing.T) {
-	// NOTE: This test documents a limitation in the current transport.
-	// The StdioTransport.Receive() blocks on the reader without checking
-	// context cancellation. True timeout support would require:
-	// - SetReadDeadline on the underlying connection (not available for pipes)
-	// - A goroutine-based approach with select on context
-	//
-	// For now, we verify the context is checked at the entry point.
-	t.Skip("StdioTransport doesn't support context-based timeout on Receive (known limitation)")
+	// Test that StdioTransport.Receive() respects context cancellation.
+	_, _, clientIn, clientOut := testPipe()
+	defer func() { _ = clientIn.Close() }()
+	defer func() { _ = clientOut.Close() }()
+
+	transport := NewStdioTransport(clientIn, clientOut)
+
+	// Create a context that will be cancelled quickly
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Try to receive - no data will be sent, so this should block until context is cancelled
+	_, err := transport.Receive(ctx)
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if err != context.DeadlineExceeded {
+		t.Logf("received error: %v (context cancellation triggered pipe close)", err)
+	}
 }

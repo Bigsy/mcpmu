@@ -3,6 +3,8 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -140,6 +142,62 @@ func (s *ServerConfig) SetEnabled(enabled bool) {
 	s.Enabled = &enabled
 }
 
+// Validate checks that the ServerConfig is in a valid state.
+// Returns an error if:
+// - Both Command and URL are set (mutually exclusive)
+// - Neither Command nor URL is set (must have one)
+// - Kind is explicitly set but doesn't match the fields
+func (s ServerConfig) Validate() error {
+	hasCommand := s.Command != ""
+	hasURL := s.URL != ""
+
+	// Must have exactly one of Command or URL
+	if hasCommand && hasURL {
+		return errors.New("cannot set both command and url: stdio and http are mutually exclusive")
+	}
+	if !hasCommand && !hasURL {
+		return errors.New("must set either command (for stdio) or url (for http)")
+	}
+
+	// If Kind is explicitly set, it must match the fields
+	if s.Kind != "" {
+		if s.Kind == ServerKindStdio && hasURL {
+			return fmt.Errorf("kind is %q but url is set", s.Kind)
+		}
+		if s.Kind == ServerKindStreamableHTTP && hasCommand {
+			return fmt.Errorf("kind is %q but command is set", s.Kind)
+		}
+	}
+
+	// Stdio-specific validation
+	if hasCommand {
+		// Args without command doesn't make sense, but Args with command is fine
+		// URL-related fields shouldn't be set
+		if s.BearerTokenEnvVar != "" {
+			return errors.New("bearer_token_env_var is only valid for http servers")
+		}
+		if len(s.HTTPHeaders) > 0 {
+			return errors.New("http_headers is only valid for http servers")
+		}
+		if len(s.EnvHTTPHeaders) > 0 {
+			return errors.New("env_http_headers is only valid for http servers")
+		}
+		if len(s.Scopes) > 0 {
+			return errors.New("scopes is only valid for http servers")
+		}
+	}
+
+	// HTTP-specific validation
+	if hasURL {
+		// Command-related fields shouldn't be set
+		if len(s.Args) > 0 {
+			return errors.New("args is only valid for stdio servers")
+		}
+	}
+
+	return nil
+}
+
 // ServerEntries returns the servers as name/config pairs, sorted by name for display.
 func (c *Config) ServerEntries() []ServerEntry {
 	entries := make([]ServerEntry, 0, len(c.Servers))
@@ -170,20 +228,16 @@ func (c *Config) NamespaceEntries() []NamespaceEntry {
 	return entries
 }
 
-// GetServer returns a server by name, or nil if not found.
-func (c *Config) GetServer(name string) *ServerConfig {
-	if s, ok := c.Servers[name]; ok {
-		return &s
-	}
-	return nil
+// GetServer returns a server by name and whether it was found.
+func (c *Config) GetServer(name string) (ServerConfig, bool) {
+	s, ok := c.Servers[name]
+	return s, ok
 }
 
-// GetNamespace returns a namespace by name, or nil if not found.
-func (c *Config) GetNamespace(name string) *NamespaceConfig {
-	if ns, ok := c.Namespaces[name]; ok {
-		return &ns
-	}
-	return nil
+// GetNamespace returns a namespace by name and whether it was found.
+func (c *Config) GetNamespace(name string) (NamespaceConfig, bool) {
+	ns, ok := c.Namespaces[name]
+	return ns, ok
 }
 
 // MarshalJSON implements custom JSON marshaling.
@@ -194,4 +248,15 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 	}{
 		Alias: (*Alias)(c),
 	})
+}
+
+// Validate checks that all servers in the config are valid.
+// Returns an error describing the first invalid server found.
+func (c *Config) Validate() error {
+	for name, srv := range c.Servers {
+		if err := srv.Validate(); err != nil {
+			return fmt.Errorf("server %q: %w", name, err)
+		}
+	}
+	return nil
 }

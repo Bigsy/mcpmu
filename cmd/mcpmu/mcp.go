@@ -76,8 +76,8 @@ func runMCPLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	// Find server
-	srv := cfg.GetServer(serverName)
-	if srv == nil {
+	srv, ok := cfg.GetServer(serverName)
+	if !ok {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 
@@ -144,8 +144,8 @@ func runMCPLogout(cmd *cobra.Command, args []string) error {
 	}
 
 	// Find server
-	srv := cfg.GetServer(serverName)
-	if srv == nil {
+	srv, ok := cfg.GetServer(serverName)
+	if !ok {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 

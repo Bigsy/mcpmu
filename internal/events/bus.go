@@ -85,9 +85,3 @@ func (b *Bus) Publish(event Event) {
 func (b *Bus) Close() {
 	close(b.done)
 }
-
-// Channel returns a channel that receives all events.
-// Useful for Bubble Tea integration.
-func (b *Bus) Channel() <-chan Event {
-	return b.ch
-}

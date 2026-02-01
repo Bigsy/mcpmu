@@ -253,8 +253,7 @@ func runNamespaceRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check namespace exists
-	ns := cfg.GetNamespace(name)
-	if ns == nil {
+	if _, ok := cfg.GetNamespace(name); !ok {
 		return fmt.Errorf("namespace %q not found", name)
 	}
 
@@ -319,12 +318,12 @@ func runNamespaceAssign(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	if cfg.GetNamespace(namespaceName) == nil {
+	if _, ok := cfg.GetNamespace(namespaceName); !ok {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	// Lookup server by name
-	if cfg.GetServer(serverName) == nil {
+	if _, ok := cfg.GetServer(serverName); !ok {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 
@@ -373,12 +372,12 @@ func runNamespaceUnassign(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	if cfg.GetNamespace(namespaceName) == nil {
+	if _, ok := cfg.GetNamespace(namespaceName); !ok {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	// Lookup server by name (optional - might want to unassign even if server was removed)
-	if cfg.GetServer(serverName) == nil {
+	if _, ok := cfg.GetServer(serverName); !ok {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 
@@ -426,7 +425,7 @@ func runNamespaceDefault(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	if cfg.GetNamespace(name) == nil {
+	if _, ok := cfg.GetNamespace(name); !ok {
 		return fmt.Errorf("namespace %q not found", name)
 	}
 
@@ -485,14 +484,14 @@ func runNamespaceSetDenyDefault(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	ns := cfg.GetNamespace(namespaceName)
-	if ns == nil {
+	ns, ok := cfg.GetNamespace(namespaceName)
+	if !ok {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	ns.DenyByDefault = denyByDefault
 
-	if err := cfg.UpdateNamespace(namespaceName, *ns); err != nil {
+	if err := cfg.UpdateNamespace(namespaceName, ns); err != nil {
 		return err
 	}
 

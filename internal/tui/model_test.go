@@ -493,8 +493,8 @@ func TestModel_HandleNamespaceFormResult_Add(t *testing.T) {
 	if len(m.cfg.Namespaces) != 1 {
 		t.Errorf("expected 1 namespace, got %d", len(m.cfg.Namespaces))
 	}
-	ns := m.cfg.GetNamespace("New Namespace")
-	if ns == nil {
+	ns, ok := m.cfg.GetNamespace("New Namespace")
+	if !ok {
 		t.Fatal("expected namespace 'New Namespace' to exist")
 	}
 	if ns.Description != "A new namespace" {
@@ -542,8 +542,8 @@ func TestModel_HandleServerPickerResult(t *testing.T) {
 	m, _ = updateModel(m, result)
 
 	// Check servers were assigned
-	nsAfter := m.cfg.GetNamespace("Test")
-	if nsAfter == nil {
+	nsAfter, ok := m.cfg.GetNamespace("Test")
+	if !ok {
 		t.Fatal("expected namespace to exist")
 	}
 	if len(nsAfter.ServerIDs) != 2 {

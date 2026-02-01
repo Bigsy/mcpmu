@@ -67,6 +67,11 @@ func LoadFrom(path string) (*Config, error) {
 		cfg.Namespaces = make(map[string]NamespaceConfig)
 	}
 
+	// Validate all servers
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
 	return &cfg, nil
 }
 
@@ -134,11 +139,16 @@ func ValidateName(name string) error {
 }
 
 // AddServer adds a new server to the config with the given name.
-// Returns an error if a server with that name already exists.
+// Returns an error if a server with that name already exists or if the config is invalid.
 func (c *Config) AddServer(name string, srv ServerConfig) error {
 	// Validate name
 	if err := ValidateName(name); err != nil {
 		return fmt.Errorf("invalid name: %w", err)
+	}
+
+	// Validate server config
+	if err := srv.Validate(); err != nil {
+		return fmt.Errorf("invalid server config: %w", err)
 	}
 
 	// Check for duplicate name
@@ -155,6 +165,12 @@ func (c *Config) UpdateServer(name string, srv ServerConfig) error {
 	if _, exists := c.Servers[name]; !exists {
 		return fmt.Errorf("server %q not found", name)
 	}
+
+	// Validate server config
+	if err := srv.Validate(); err != nil {
+		return fmt.Errorf("invalid server config: %w", err)
+	}
+
 	c.Servers[name] = srv
 	return nil
 }
@@ -329,7 +345,7 @@ func (c *Config) AssignServerToNamespace(namespaceName, serverName string) error
 	}
 
 	// Check server exists
-	if c.GetServer(serverName) == nil {
+	if _, ok := c.GetServer(serverName); !ok {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 
@@ -366,7 +382,7 @@ func (c *Config) SetToolPermission(namespaceName, serverName, toolName string, e
 	}
 
 	// Validate server exists
-	if c.GetServer(serverName) == nil {
+	if _, ok := c.GetServer(serverName); !ok {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 

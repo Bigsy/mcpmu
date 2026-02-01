@@ -65,8 +65,8 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 	}
 
 	// Validate server exists
-	srv := r.cfg.GetServer(serverName)
-	if srv == nil {
+	srv, ok := r.cfg.GetServer(serverName)
+	if !ok {
 		return nil, ErrServerNotFound(serverName)
 	}
 
@@ -78,7 +78,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 		startCtx, cancel := context.WithTimeout(ctx, LazyStartTimeout)
 		defer cancel()
 
-		handle, err = r.supervisor.Start(startCtx, serverName, *srv)
+		handle, err = r.supervisor.Start(startCtx, serverName, srv)
 		if err != nil {
 			return nil, ErrServerFailedToStart(serverName, err.Error())
 		}
@@ -173,8 +173,8 @@ func (r *Router) handleServersStart(ctx context.Context, arguments json.RawMessa
 	}
 
 	serverName := args.ServerID // server_id now means server name
-	srv := r.cfg.GetServer(serverName)
-	if srv == nil {
+	srv, ok := r.cfg.GetServer(serverName)
+	if !ok {
 		return nil, ErrServerNotFound(serverName)
 	}
 
@@ -185,7 +185,7 @@ func (r *Router) handleServersStart(ctx context.Context, arguments json.RawMessa
 	}
 
 	// Start the server
-	handle, err := r.supervisor.Start(ctx, serverName, *srv)
+	handle, err := r.supervisor.Start(ctx, serverName, srv)
 	if err != nil {
 		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}
@@ -208,8 +208,7 @@ func (r *Router) handleServersStop(ctx context.Context, arguments json.RawMessag
 	}
 
 	serverName := args.ServerID
-	srv := r.cfg.GetServer(serverName)
-	if srv == nil {
+	if _, ok := r.cfg.GetServer(serverName); !ok {
 		return nil, ErrServerNotFound(serverName)
 	}
 
@@ -237,8 +236,8 @@ func (r *Router) handleServersRestart(ctx context.Context, arguments json.RawMes
 	}
 
 	serverName := args.ServerID
-	srv := r.cfg.GetServer(serverName)
-	if srv == nil {
+	srv, ok := r.cfg.GetServer(serverName)
+	if !ok {
 		return nil, ErrServerNotFound(serverName)
 	}
 
@@ -251,7 +250,7 @@ func (r *Router) handleServersRestart(ctx context.Context, arguments json.RawMes
 	}
 
 	// Start the server
-	handle, err := r.supervisor.Start(ctx, serverName, *srv)
+	handle, err := r.supervisor.Start(ctx, serverName, srv)
 	if err != nil {
 		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}
@@ -284,8 +283,7 @@ func (r *Router) handleServerLogs(ctx context.Context, arguments json.RawMessage
 	}
 
 	serverName := args.ServerID
-	srv := r.cfg.GetServer(serverName)
-	if srv == nil {
+	if _, ok := r.cfg.GetServer(serverName); !ok {
 		return nil, ErrServerNotFound(serverName)
 	}
 

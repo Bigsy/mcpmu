@@ -402,6 +402,9 @@ func (s *Supervisor) Get(id string) *Handle {
 }
 
 // StopAll stops all running servers gracefully.
+// Logs any errors that occur during shutdown but does not return them,
+// as this is typically called during application shutdown where we want
+// to attempt stopping all servers regardless of individual failures.
 func (s *Supervisor) StopAll() {
 	s.mu.RLock()
 	ids := make([]string, 0, len(s.handles))
@@ -415,7 +418,9 @@ func (s *Supervisor) StopAll() {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			_ = s.Stop(id)
+			if err := s.Stop(id); err != nil {
+				log.Printf("Warning: failed to stop server %q: %v", id, err)
+			}
 		}(id)
 	}
 	wg.Wait()

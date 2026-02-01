@@ -80,7 +80,7 @@ func getServerName(t *testing.T, configPath, name string) string {
 	if err != nil {
 		t.Fatalf("failed to load config: %v", err)
 	}
-	if cfg.GetServer(name) == nil {
+	if _, ok := cfg.GetServer(name); !ok {
 		t.Fatalf("server %q not found in config", name)
 	}
 	return name

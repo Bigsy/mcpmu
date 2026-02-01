@@ -126,8 +126,8 @@ func (a *Aggregator) GetTool(name string) (AggregatedTool, bool) {
 // discoverServerTools starts a server (if needed) and retrieves its tools.
 // serverName is the server's map key (identifier).
 func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string) ([]AggregatedTool, error) {
-	srv := a.cfg.GetServer(serverName)
-	if srv == nil {
+	srv, ok := a.cfg.GetServer(serverName)
+	if !ok {
 		return nil, fmt.Errorf("server not found: %s", serverName)
 	}
 
@@ -144,7 +144,7 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string)
 		timeoutCtx, cancel := context.WithTimeout(ctx, ToolDiscoveryTimeout)
 		defer cancel()
 
-		handle, err = a.supervisor.Start(timeoutCtx, serverName, *srv)
+		handle, err = a.supervisor.Start(timeoutCtx, serverName, srv)
 		if err != nil {
 			return nil, fmt.Errorf("start server: %w", err)
 		}

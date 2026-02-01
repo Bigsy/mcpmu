@@ -54,10 +54,9 @@ type Server struct {
 	router     *Router
 
 	// Active namespace (resolved at init)
-	activeNamespaceName string                  // Name of the active namespace
-	activeNamespace     *config.NamespaceConfig // Cached pointer (may be stale after config reload)
-	activeServerNames   []string                // Server names in the active namespace (or all if no namespace)
-	selectionMethod     SelectionMethod         // How the namespace was selected
+	activeNamespaceName string          // Name of the active namespace
+	activeServerNames   []string        // Server names in the active namespace (or all if no namespace)
+	selectionMethod     SelectionMethod // How the namespace was selected
 
 	// Protocol state
 	initialized bool
@@ -349,8 +348,8 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 		}
 
 		// Check if server is enabled
-		srv := s.cfg.GetServer(serverName)
-		if srv == nil {
+		srv, ok := s.cfg.GetServer(serverName)
+		if !ok {
 			return nil, ErrServerNotFound(serverName)
 		}
 		if !srv.IsEnabled() {
@@ -376,7 +375,6 @@ func (s *Server) resolveNamespace() *RPCError {
 	if namespaceArg != "" {
 		if ns, exists := cfg.Namespaces[namespaceArg]; exists {
 			s.activeNamespaceName = namespaceArg
-			s.activeNamespace = &ns
 			s.activeServerNames = ns.ServerIDs
 			s.selectionMethod = SelectionFlag
 			log.Printf("Using namespace %q with %d servers (selection: flag)", namespaceArg, len(s.activeServerNames))
@@ -389,7 +387,6 @@ func (s *Server) resolveNamespace() *RPCError {
 	if cfg.DefaultNamespace != "" {
 		if ns, exists := cfg.Namespaces[cfg.DefaultNamespace]; exists {
 			s.activeNamespaceName = cfg.DefaultNamespace
-			s.activeNamespace = &ns
 			s.activeServerNames = ns.ServerIDs
 			s.selectionMethod = SelectionDefault
 			log.Printf("Using default namespace %q with %d servers (selection: default)", cfg.DefaultNamespace, len(s.activeServerNames))
@@ -402,7 +399,6 @@ func (s *Server) resolveNamespace() *RPCError {
 	if len(cfg.Namespaces) == 1 {
 		for name, ns := range cfg.Namespaces {
 			s.activeNamespaceName = name
-			s.activeNamespace = &ns
 			s.activeServerNames = ns.ServerIDs
 			s.selectionMethod = SelectionOnly
 			log.Printf("Using only namespace %q with %d servers (selection: only)", name, len(s.activeServerNames))
@@ -413,7 +409,6 @@ func (s *Server) resolveNamespace() *RPCError {
 	// Rule 4: If 0 namespaces, expose all enabled servers
 	if len(cfg.Namespaces) == 0 {
 		s.activeNamespaceName = ""
-		s.activeNamespace = nil
 		s.activeServerNames = make([]string, 0, len(cfg.Servers))
 		for name, srv := range cfg.Servers {
 			if srv.IsEnabled() {
@@ -435,11 +430,11 @@ func (s *Server) resolveNamespace() *RPCError {
 func (s *Server) startEagerServers(ctx context.Context) {
 	log.Printf("Starting %d servers eagerly", len(s.activeServerNames))
 	for _, name := range s.activeServerNames {
-		srv := s.cfg.GetServer(name)
-		if srv == nil {
+		srv, ok := s.cfg.GetServer(name)
+		if !ok {
 			continue
 		}
-		if _, err := s.supervisor.Start(ctx, name, *srv); err != nil {
+		if _, err := s.supervisor.Start(ctx, name, srv); err != nil {
 			log.Printf("Failed to start server %s: %v", name, err)
 		}
 	}
@@ -567,7 +562,6 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 		// Try to find the namespace by the original flag value
 		if ns, exists := newCfg.Namespaces[s.opts.Namespace]; exists {
 			s.activeNamespaceName = s.opts.Namespace
-			s.activeNamespace = &ns
 			s.activeServerNames = ns.ServerIDs
 			s.selectionMethod = SelectionFlag
 			keepNamespace = true
@@ -576,7 +570,6 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 		// Try to keep the same namespace by name
 		if ns, exists := newCfg.Namespaces[oldNamespaceName]; exists {
 			s.activeNamespaceName = oldNamespaceName
-			s.activeNamespace = &ns
 			s.activeServerNames = ns.ServerIDs
 			s.selectionMethod = oldSelectionMethod
 			keepNamespace = true
@@ -587,7 +580,6 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 		// Need to re-resolve namespace from scratch
 		// Clear current state first
 		s.activeNamespaceName = ""
-		s.activeNamespace = nil
 		s.activeServerNames = nil
 		s.mu.Unlock()
 
@@ -597,7 +589,6 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 			// Fall back to exposing all enabled servers
 			s.mu.Lock()
 			s.activeNamespaceName = ""
-			s.activeNamespace = nil
 			s.activeServerNames = make([]string, 0, len(newCfg.Servers))
 			for name, srv := range newCfg.Servers {
 				if srv.IsEnabled() {
@@ -667,8 +658,13 @@ func (s *Server) send(msg any) {
 
 	log.Printf("Send: %s", string(data))
 
-	_, _ = s.writer.Write(data)
-	_, _ = s.writer.Write([]byte("\n"))
+	if _, err := s.writer.Write(data); err != nil {
+		log.Printf("Failed to write response: %v", err)
+		return
+	}
+	if _, err := s.writer.Write([]byte("\n")); err != nil {
+		log.Printf("Failed to write newline: %v", err)
+	}
 }
 
 // JSON-RPC message types

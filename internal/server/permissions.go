@@ -64,8 +64,8 @@ func IsToolAllowed(cfg *config.Config, namespaceName, serverName, toolName strin
 	}
 
 	// Get namespace for DenyByDefault setting
-	ns := cfg.GetNamespace(namespaceName)
-	if ns == nil {
+	ns, ok := cfg.GetNamespace(namespaceName)
+	if !ok {
 		// Namespace not found, allow (shouldn't happen in normal use)
 		return true, ""
 	}

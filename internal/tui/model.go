@@ -385,9 +385,9 @@ func (m *Model) handleEvent(e events.Event) tea.Cmd {
 
 		// Refresh detail view if showing this server
 		if m.currentView == ViewDetail && m.detailServerID == evt.ServerID() {
-			if srv := m.cfg.GetServer(evt.ServerID()); srv != nil {
+			if srv, ok := m.cfg.GetServer(evt.ServerID()); ok {
 				tools := m.convertTools(m.serverTools[evt.ServerID()])
-				m.serverDetail.SetServer(evt.ServerID(), srv, &evt.Status, tools)
+				m.serverDetail.SetServer(evt.ServerID(), &srv, &evt.Status, tools)
 			}
 		}
 
@@ -416,10 +416,10 @@ func (m *Model) handleEvent(e events.Event) tea.Cmd {
 
 		// Refresh detail view if showing this server
 		if m.currentView == ViewDetail && m.detailServerID == evt.ServerID() {
-			if srv := m.cfg.GetServer(evt.ServerID()); srv != nil {
+			if srv, ok := m.cfg.GetServer(evt.ServerID()); ok {
 				status := m.serverStatuses[evt.ServerID()]
 				tools := m.convertTools(evt.Tools)
-				m.serverDetail.SetServer(evt.ServerID(), srv, &status, tools)
+				m.serverDetail.SetServer(evt.ServerID(), &srv, &status, tools)
 			}
 		}
 
@@ -751,8 +751,8 @@ func (m *Model) startServer(name string, srv config.ServerConfig) {
 }
 
 func (m *Model) toggleServerEnabled(id string) {
-	srv := m.cfg.GetServer(id)
-	if srv == nil {
+	srv, ok := m.cfg.GetServer(id)
+	if !ok {
 		return
 	}
 
@@ -768,7 +768,7 @@ func (m *Model) toggleServerEnabled(id string) {
 		}
 	}
 	srv.SetEnabled(newEnabled)
-	m.cfg.Servers[id] = *srv
+	m.cfg.Servers[id] = srv
 
 	// Save config synchronously (fast operation, avoids race conditions)
 	if err := config.Save(m.cfg); err != nil {
@@ -1244,8 +1244,8 @@ func (m *Model) handleNamespaceListKey(msg tea.KeyMsg) (handled bool, model tea.
 }
 
 func (m *Model) handleNamespaceDetailKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {
-	ns := m.cfg.GetNamespace(m.detailNamespaceID)
-	if ns == nil {
+	ns, ok := m.cfg.GetNamespace(m.detailNamespaceID)
+	if !ok {
 		return false, m, nil
 	}
 
@@ -1255,7 +1255,7 @@ func (m *Model) handleNamespaceDetailKey(msg tea.KeyMsg) (handled bool, model te
 		return true, m, nil
 
 	case msg.String() == "p": // Edit permissions
-		return m.startToolPermissionEditor(m.detailNamespaceID, ns)
+		return m.startToolPermissionEditor(m.detailNamespaceID, &ns)
 
 	case msg.String() == "D": // Set as default
 		m.cfg.DefaultNamespace = m.detailNamespaceID
@@ -1264,12 +1264,12 @@ func (m *Model) handleNamespaceDetailKey(msg tea.KeyMsg) (handled bool, model te
 			return true, m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 		}
 		permissions := m.cfg.GetToolPermissionsForNamespace(m.detailNamespaceID)
-		m.namespaceDetail.SetNamespace(m.detailNamespaceID, ns, true, m.cfg.ServerEntries(), permissions)
+		m.namespaceDetail.SetNamespace(m.detailNamespaceID, &ns, true, m.cfg.ServerEntries(), permissions)
 		m.refreshNamespaceList()
 		return true, m, m.toast.ShowSuccess(fmt.Sprintf("Namespace \"%s\" set as default", m.detailNamespaceID))
 
 	case key.Matches(msg, m.keys.Edit):
-		cmd := m.namespaceForm.ShowEdit(m.detailNamespaceID, *ns)
+		cmd := m.namespaceForm.ShowEdit(m.detailNamespaceID, ns)
 		return true, m, cmd
 	}
 
@@ -1292,8 +1292,8 @@ func (m *Model) startToolPermissionEditor(nsName string, ns *config.NamespaceCon
 	hasDisabledServers := false
 
 	for _, serverName := range ns.ServerIDs {
-		srv := m.cfg.GetServer(serverName)
-		if srv == nil {
+		srv, ok := m.cfg.GetServer(serverName)
+		if !ok {
 			continue
 		}
 
@@ -1312,7 +1312,7 @@ func (m *Model) startToolPermissionEditor(nsName string, ns *config.NamespaceCon
 			}
 		} else if !hasStatus || status.State == events.StateStopped || status.State == events.StateIdle {
 			// Not running - need to start
-			serversToStart = append(serversToStart, serverToStart{name: serverName, config: *srv})
+			serversToStart = append(serversToStart, serverToStart{name: serverName, config: srv})
 			autoStartedIDs = append(autoStartedIDs, serverName)
 		}
 	}
@@ -1369,16 +1369,16 @@ type permDiscoveryTimeoutMsg struct{}
 
 // checkPermissionDiscoveryComplete checks if all servers have reported tools.
 func (m *Model) checkPermissionDiscoveryComplete() {
-	ns := m.cfg.GetNamespace(m.detailNamespaceID)
-	if ns == nil {
+	ns, ok := m.cfg.GetNamespace(m.detailNamespaceID)
+	if !ok {
 		return
 	}
 
 	// Count how many servers have tools
 	toolCount := 0
 	for _, serverName := range ns.ServerIDs {
-		srv := m.cfg.GetServer(serverName)
-		if srv == nil || !srv.IsEnabled() {
+		srv, ok := m.cfg.GetServer(serverName)
+		if !ok || !srv.IsEnabled() {
 			continue
 		}
 		if tools, ok := m.serverTools[serverName]; ok && len(tools) > 0 {
@@ -1394,8 +1394,8 @@ func (m *Model) checkPermissionDiscoveryComplete() {
 
 // finishPermissionDiscovery transitions from discovery to editing mode.
 func (m *Model) finishPermissionDiscovery() {
-	ns := m.cfg.GetNamespace(m.detailNamespaceID)
-	if ns == nil {
+	ns, ok := m.cfg.GetNamespace(m.detailNamespaceID)
+	if !ok {
 		m.toolPerms.Hide()
 		return
 	}
@@ -1403,8 +1403,8 @@ func (m *Model) finishPermissionDiscovery() {
 	// Collect tools from running servers
 	serverTools := make(map[string][]events.McpTool)
 	for _, serverName := range ns.ServerIDs {
-		srv := m.cfg.GetServer(serverName)
-		if srv == nil || !srv.IsEnabled() {
+		srv, ok := m.cfg.GetServer(serverName)
+		if !ok || !srv.IsEnabled() {
 			continue
 		}
 		if tools, ok := m.serverTools[serverName]; ok && len(tools) > 0 {
@@ -1475,10 +1475,9 @@ func (m Model) handleNamespaceFormResult(result views.NamespaceFormResult) (tea.
 
 	// Update detail view if we're editing the currently displayed namespace
 	if result.IsEdit && m.currentView == ViewDetail && m.detailNamespaceID == result.Name {
-		ns := m.cfg.GetNamespace(result.Name)
-		if ns != nil {
+		if ns, ok := m.cfg.GetNamespace(result.Name); ok {
 			permissions := m.cfg.GetToolPermissionsForNamespace(result.Name)
-			m.namespaceDetail.SetNamespace(result.Name, ns, result.Name == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions)
+			m.namespaceDetail.SetNamespace(result.Name, &ns, result.Name == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions)
 		}
 	}
 
@@ -1493,14 +1492,14 @@ func (m Model) handleServerPickerResult(result views.ServerPickerResult) (tea.Mo
 		return m, nil
 	}
 
-	ns := m.cfg.GetNamespace(m.detailNamespaceID)
-	if ns == nil {
+	ns, ok := m.cfg.GetNamespace(m.detailNamespaceID)
+	if !ok {
 		return m, nil
 	}
 
 	// Update server assignments
 	ns.ServerIDs = result.SelectedIDs
-	m.cfg.Namespaces[m.detailNamespaceID] = *ns
+	m.cfg.Namespaces[m.detailNamespaceID] = ns
 
 	if err := config.Save(m.cfg); err != nil {
 		log.Printf("Failed to save config: %v", err)
@@ -1509,7 +1508,7 @@ func (m Model) handleServerPickerResult(result views.ServerPickerResult) (tea.Mo
 
 	// Refresh detail view
 	permissions := m.cfg.GetToolPermissionsForNamespace(m.detailNamespaceID)
-	m.namespaceDetail.SetNamespace(m.detailNamespaceID, ns, m.detailNamespaceID == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions)
+	m.namespaceDetail.SetNamespace(m.detailNamespaceID, &ns, m.detailNamespaceID == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions)
 	m.refreshNamespaceList()
 	m.refreshServerList() // Update server list badges
 
@@ -1557,10 +1556,9 @@ func (m Model) handleToolPermissionsResult(result views.ToolPermissionsResult) (
 	}
 
 	// Refresh detail view
-	ns := m.cfg.GetNamespace(m.detailNamespaceID)
-	if ns != nil {
+	if ns, ok := m.cfg.GetNamespace(m.detailNamespaceID); ok {
 		permissions := m.cfg.GetToolPermissionsForNamespace(m.detailNamespaceID)
-		m.namespaceDetail.SetNamespace(m.detailNamespaceID, ns, m.detailNamespaceID == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions)
+		m.namespaceDetail.SetNamespace(m.detailNamespaceID, &ns, m.detailNamespaceID == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions)
 	}
 
 	return m, m.toast.ShowSuccess("Tool permissions updated")

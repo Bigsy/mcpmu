@@ -82,12 +82,12 @@ func runPermissionSet(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	if cfg.GetNamespace(namespaceName) == nil {
+	if _, ok := cfg.GetNamespace(namespaceName); !ok {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	// Lookup server by name
-	if cfg.GetServer(serverName) == nil {
+	if _, ok := cfg.GetServer(serverName); !ok {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 
@@ -146,12 +146,12 @@ func runPermissionUnset(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	if cfg.GetNamespace(namespaceName) == nil {
+	if _, ok := cfg.GetNamespace(namespaceName); !ok {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
 	// Lookup server by name
-	if cfg.GetServer(serverName) == nil {
+	if _, ok := cfg.GetServer(serverName); !ok {
 		return fmt.Errorf("server %q not found", serverName)
 	}
 
@@ -206,8 +206,8 @@ func runPermissionList(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	ns := cfg.GetNamespace(namespaceName)
-	if ns == nil {
+	ns, ok := cfg.GetNamespace(namespaceName)
+	if !ok {
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
@@ -222,9 +222,9 @@ func runPermissionList(cmd *cobra.Command, args []string) error {
 	})
 
 	if permissionListJSON {
-		return outputPermissionsJSON(namespaceName, ns, permissions)
+		return outputPermissionsJSON(namespaceName, &ns, permissions)
 	}
-	return outputPermissionsTable(namespaceName, ns, permissions)
+	return outputPermissionsTable(namespaceName, &ns, permissions)
 }
 
 func outputPermissionsJSON(namespaceName string, ns *config.NamespaceConfig, permissions []config.ToolPermission) error {
