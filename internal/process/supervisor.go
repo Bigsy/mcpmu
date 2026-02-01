@@ -81,6 +81,10 @@ func NewSupervisorWithOptions(bus *events.Bus, opts SupervisorOptions) *Supervis
 	var tokenManager *oauth.TokenManager
 	if credStore != nil {
 		tokenManager = oauth.NewTokenManager(credStore)
+		// Set up warning handler to surface token storage failures to the user
+		tokenManager.SetWarningHandler(func(serverURL string, warning error) {
+			bus.Publish(events.NewErrorEvent(serverURL, warning, warning.Error()))
+		})
 	}
 
 	return &Supervisor{

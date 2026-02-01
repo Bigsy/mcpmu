@@ -292,10 +292,14 @@ func openBrowser(url string) error {
 	return cmd.Start()
 }
 
+// WarningHandler is called when a non-fatal error occurs that should be surfaced to the user.
+type WarningHandler func(serverURL string, warning error)
+
 // TokenManager handles automatic token refresh.
 type TokenManager struct {
-	store    CredentialStore
-	metadata map[string]*AuthorizationServerMetadata // cached by server URL
+	store         CredentialStore
+	metadata      map[string]*AuthorizationServerMetadata // cached by server URL
+	onWarning     WarningHandler
 }
 
 // NewTokenManager creates a new token manager.
@@ -304,6 +308,12 @@ func NewTokenManager(store CredentialStore) *TokenManager {
 		store:    store,
 		metadata: make(map[string]*AuthorizationServerMetadata),
 	}
+}
+
+// SetWarningHandler sets a callback for non-fatal warnings (e.g., token storage failures).
+// This allows callers to surface warnings to users without failing the operation.
+func (m *TokenManager) SetWarningHandler(handler WarningHandler) {
+	m.onWarning = handler
 }
 
 // GetAccessToken returns a valid access token for a server, refreshing if needed.
@@ -354,8 +364,12 @@ func (m *TokenManager) GetAccessToken(ctx context.Context, serverURL string) (st
 	}
 
 	if err := m.store.Put(cred); err != nil {
-		// Log but don't fail - we have the token
+		// Log but don't fail - we have the token in memory
 		log.Printf("Warning: failed to store refreshed token: %v", err)
+		// Surface to user if handler is set - they need to know re-auth will be required on restart
+		if m.onWarning != nil {
+			m.onWarning(serverURL, fmt.Errorf("failed to save refreshed token (re-login required on restart): %w", err))
+		}
 	}
 
 	return cred.AccessToken, nil
