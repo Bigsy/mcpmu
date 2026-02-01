@@ -52,7 +52,13 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load configuration
-	cfg, err := config.Load()
+	var cfg *config.Config
+	var err error
+	if configPath != "" {
+		cfg, err = config.LoadFrom(configPath)
+	} else {
+		cfg, err = config.Load()
+	}
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -83,7 +89,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	})
 
 	// Create TUI model
-	model := tui.NewModel(cfg, supervisor, bus)
+	model := tui.NewModel(cfg, supervisor, bus, configPath)
 
 	// Set up signal handling for graceful shutdown
 	sigCh := make(chan os.Signal, 1)

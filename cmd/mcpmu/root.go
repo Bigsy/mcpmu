@@ -13,6 +13,9 @@ var (
 	commit  = "unknown"
 )
 
+// configPath is the custom config file path (empty for default)
+var configPath string
+
 var rootCmd = &cobra.Command{
 	Use:   "mcpmu",
 	Short: "MCP server aggregator and manager",
@@ -34,6 +37,10 @@ func init() {
 	// Suppress errors from being printed twice
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
+
+	// Add persistent --config flag (available to all subcommands)
+	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", "",
+		"Path to config file (default: ~/.config/mcpmu/config.json)")
 
 	// Add --debug flag to root command (for default TUI mode)
 	rootCmd.Flags().BoolVar(&tuiDebug, "debug", false, "Enable debug logging to /tmp/mcpmu-debug.log")

@@ -20,7 +20,7 @@ func newTestModelWithSize(t *testing.T, width, height int) Model {
 	bus := events.NewBus()
 	supervisor := process.NewSupervisor(bus)
 
-	m := NewModel(cfg, supervisor, bus)
+	m := NewModel(cfg, supervisor, bus, "")
 	newModel, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return newModel.(Model)
 }
@@ -31,7 +31,7 @@ func TestView_Loading(t *testing.T) {
 	cfg := config.NewConfig()
 	bus := events.NewBus()
 	supervisor := process.NewSupervisor(bus)
-	m := NewModel(cfg, supervisor, bus)
+	m := NewModel(cfg, supervisor, bus, "")
 
 	// Before WindowSizeMsg, width/height are 0
 	view := m.View()
@@ -148,7 +148,7 @@ func TestView_WithServers(t *testing.T) {
 	bus := events.NewBus()
 	supervisor := process.NewSupervisor(bus)
 
-	m := NewModel(cfg, supervisor, bus)
+	m := NewModel(cfg, supervisor, bus, "")
 	newModel, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = newModel.(Model)
 

@@ -42,6 +42,7 @@ type Model struct {
 	supervisor *process.Supervisor
 	bus        *events.Bus
 	ctx        context.Context
+	configPath string // Custom config path, empty for default
 
 	// UI state
 	theme       theme.Theme
@@ -110,7 +111,7 @@ func newNamespaceFormPtr(th theme.Theme) *views.NamespaceFormModel {
 }
 
 // NewModel creates a new root model.
-func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bus) Model {
+func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bus, configPath string) Model {
 	th := theme.New()
 	keys := NewKeyBindings()
 
@@ -119,6 +120,7 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 		supervisor:      supervisor,
 		bus:             bus,
 		ctx:             context.Background(),
+		configPath:      configPath,
 		theme:           th,
 		keys:            keys,
 		activeTab:       TabServers,
@@ -155,6 +157,14 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 	m.refreshNamespaceList()
 
 	return m
+}
+
+// saveConfig saves the config to the appropriate file (custom path or default).
+func (m *Model) saveConfig() error {
+	if m.configPath != "" {
+		return config.SaveTo(m.cfg, m.configPath)
+	}
+	return config.Save(m.cfg)
 }
 
 func (m *Model) switchToTab(tab Tab) {
@@ -644,7 +654,7 @@ func (m Model) handleServerFormResult(result views.ServerFormResult) (tea.Model,
 	}
 
 	// Save config
-	if err := config.Save(m.cfg); err != nil {
+	if err := m.saveConfig(); err != nil {
 		log.Printf("Failed to save config: %v", err)
 		return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
 	}
@@ -679,7 +689,7 @@ func (m Model) handleConfirmResult(result views.ConfirmResult) (tea.Model, tea.C
 		}
 
 		// Save config
-		if err := config.Save(m.cfg); err != nil {
+		if err := m.saveConfig(); err != nil {
 			log.Printf("Failed to save config: %v", err)
 			m.pendingDeleteID = ""
 			return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
@@ -706,7 +716,7 @@ func (m Model) handleConfirmResult(result views.ConfirmResult) (tea.Model, tea.C
 			return m, m.toast.ShowError(fmt.Sprintf("Failed to delete namespace: %v", err))
 		}
 
-		if err := config.Save(m.cfg); err != nil {
+		if err := m.saveConfig(); err != nil {
 			log.Printf("Failed to save config: %v", err)
 			m.pendingDeleteNamespaceID = ""
 			return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
@@ -756,7 +766,7 @@ func (m *Model) toggleServerEnabled(id string) {
 	m.cfg.Servers[id] = srv
 
 	// Save config synchronously (fast operation, avoids race conditions)
-	if err := config.Save(m.cfg); err != nil {
+	if err := m.saveConfig(); err != nil {
 		log.Printf("Failed to save config after toggle: %v", err)
 	}
 
@@ -1204,7 +1214,7 @@ func (m *Model) handleNamespaceListKey(msg tea.KeyMsg) (handled bool, model tea.
 	case msg.String() == "D": // Set as default
 		if item := m.namespaceList.SelectedItem(); item != nil {
 			m.cfg.DefaultNamespace = item.Name
-			if err := config.Save(m.cfg); err != nil {
+			if err := m.saveConfig(); err != nil {
 				log.Printf("Failed to save config: %v", err)
 				return true, m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 			}
@@ -1233,7 +1243,7 @@ func (m *Model) handleNamespaceDetailKey(msg tea.KeyMsg) (handled bool, model te
 
 	case msg.String() == "D": // Set as default
 		m.cfg.DefaultNamespace = m.detailNamespaceID
-		if err := config.Save(m.cfg); err != nil {
+		if err := m.saveConfig(); err != nil {
 			log.Printf("Failed to save config: %v", err)
 			return true, m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 		}
@@ -1439,7 +1449,7 @@ func (m Model) handleNamespaceFormResult(result views.NamespaceFormResult) (tea.
 		}
 	}
 
-	if err := config.Save(m.cfg); err != nil {
+	if err := m.saveConfig(); err != nil {
 		log.Printf("Failed to save config: %v", err)
 		return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
 	}
@@ -1475,7 +1485,7 @@ func (m Model) handleServerPickerResult(result views.ServerPickerResult) (tea.Mo
 	ns.ServerIDs = result.SelectedIDs
 	m.cfg.Namespaces[m.detailNamespaceID] = ns
 
-	if err := config.Save(m.cfg); err != nil {
+	if err := m.saveConfig(); err != nil {
 		log.Printf("Failed to save config: %v", err)
 		return m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 	}
@@ -1524,7 +1534,7 @@ func (m Model) handleToolPermissionsResult(result views.ToolPermissionsResult) (
 		}
 	}
 
-	if err := config.Save(m.cfg); err != nil {
+	if err := m.saveConfig(); err != nil {
 		log.Printf("Failed to save config: %v", err)
 		return m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 	}

@@ -24,7 +24,7 @@ func newTestModel(t *testing.T) Model {
 	bus := events.NewBus()
 	supervisor := process.NewSupervisor(bus)
 
-	return NewModel(cfg, supervisor, bus)
+	return NewModel(cfg, supervisor, bus, "")
 }
 
 // updateModel is a helper that calls Update and returns the Model (with type assertion).
