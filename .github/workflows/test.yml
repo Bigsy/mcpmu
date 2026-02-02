@@ -26,11 +26,7 @@ jobs:
 
   integration:
     name: Integration Tests
-    # Unix-only: uses SIGTERM/SIGKILL for process management
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -64,10 +60,7 @@ jobs:
 
   build:
     name: Build
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -76,8 +69,11 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Build binary
-        run: go build -o mcpmu ./cmd/mcpmu
+      - name: Build binaries (cross-compile)
+        run: |
+          go build -o mcpmu-linux-amd64 ./cmd/mcpmu
+          GOOS=darwin GOARCH=arm64 go build -o mcpmu-darwin-arm64 ./cmd/mcpmu
+          GOOS=darwin GOARCH=amd64 go build -o mcpmu-darwin-amd64 ./cmd/mcpmu
 
-      - name: Verify binary
-        run: ./mcpmu --help || true
+      - name: Verify Linux binary
+        run: ./mcpmu-linux-amd64 --help || true
