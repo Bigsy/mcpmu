@@ -12,6 +12,7 @@ import (
 )
 
 func TestServer_Initialize(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
@@ -85,6 +86,7 @@ func TestServer_Initialize(t *testing.T) {
 }
 
 func TestServer_ToolsList_NoServers_ManagerToolsHidden(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
@@ -146,6 +148,7 @@ func TestServer_ToolsList_NoServers_ManagerToolsHidden(t *testing.T) {
 }
 
 func TestServer_ToolsList_NoServers_ManagerToolsExposed(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
@@ -212,6 +215,7 @@ func TestServer_ToolsList_NoServers_ManagerToolsExposed(t *testing.T) {
 }
 
 func TestServer_ToolsList_NotInitialized(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
@@ -258,6 +262,7 @@ func TestServer_ToolsList_NotInitialized(t *testing.T) {
 }
 
 func TestServer_MethodNotFound(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
@@ -309,6 +314,7 @@ func TestServer_MethodNotFound(t *testing.T) {
 }
 
 func TestServer_Ping(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
@@ -362,6 +368,7 @@ func TestServer_Ping(t *testing.T) {
 }
 
 func TestServer_NamespaceSelection_NoNamespaces(t *testing.T) {
+	t.Parallel()
 	enabled := true
 	cfg := &config.Config{
 		SchemaVersion: 1,
@@ -409,6 +416,7 @@ func TestServer_NamespaceSelection_NoNamespaces(t *testing.T) {
 }
 
 func TestServer_NamespaceSelection_MultipleNamespacesNoDefault(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{},
@@ -459,6 +467,7 @@ func TestServer_NamespaceSelection_MultipleNamespacesNoDefault(t *testing.T) {
 }
 
 func TestServer_NamespaceSelection_WithDefault(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion:    1,
 		DefaultNamespace: "ns1",
@@ -506,6 +515,7 @@ func TestServer_NamespaceSelection_WithDefault(t *testing.T) {
 }
 
 func TestServer_NamespaceSelection_ExplicitNamespace(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},

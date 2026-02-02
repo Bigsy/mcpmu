@@ -7,6 +7,7 @@ import (
 )
 
 func TestPermissionResult_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		result   PermissionResult
 		expected string
@@ -24,6 +25,7 @@ func TestPermissionResult_String(t *testing.T) {
 }
 
 func TestCheckPermission(t *testing.T) {
+	t.Parallel()
 	cfg := config.NewConfig()
 	cfg.Namespaces = map[string]config.NamespaceConfig{
 		"test": {},
@@ -82,6 +84,7 @@ func TestCheckPermission(t *testing.T) {
 }
 
 func TestIsToolAllowed(t *testing.T) {
+	t.Parallel()
 	cfg := config.NewConfig()
 	cfg.Namespaces = map[string]config.NamespaceConfig{
 		"allow-by-default": {},

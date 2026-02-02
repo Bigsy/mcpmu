@@ -17,6 +17,7 @@ import (
 )
 
 func TestServer_ApplyReload_SwapsConfig(t *testing.T) {
+	t.Parallel()
 	enabled := true
 	oldCfg := &config.Config{
 		SchemaVersion: 1,
@@ -70,6 +71,7 @@ func TestServer_ApplyReload_SwapsConfig(t *testing.T) {
 }
 
 func TestServer_ApplyReload_KeepsNamespaceIfStillValid(t *testing.T) {
+	t.Parallel()
 	enabled := true
 	oldCfg := &config.Config{
 		SchemaVersion: 1,
@@ -140,6 +142,7 @@ func TestServer_ApplyReload_KeepsNamespaceIfStillValid(t *testing.T) {
 }
 
 func TestServer_ApplyReload_ReSelectsNamespaceIfRemoved(t *testing.T) {
+	t.Parallel()
 	enabled := true
 	oldCfg := &config.Config{
 		SchemaVersion: 1,
@@ -202,6 +205,7 @@ func TestServer_ApplyReload_ReSelectsNamespaceIfRemoved(t *testing.T) {
 }
 
 func TestServer_ApplyReload_RebuildAggregatorAndRouter(t *testing.T) {
+	t.Parallel()
 	enabled := true
 	oldCfg := &config.Config{
 		SchemaVersion: 1,
@@ -257,6 +261,7 @@ func TestServer_ApplyReload_RebuildAggregatorAndRouter(t *testing.T) {
 }
 
 func TestServer_ReloadChannel_ReceivesNewConfig(t *testing.T) {
+	t.Parallel()
 	enabled := true
 	oldCfg := &config.Config{
 		SchemaVersion: 1,
@@ -340,6 +345,7 @@ func TestServer_ReloadChannel_ReceivesNewConfig(t *testing.T) {
 }
 
 func TestServer_WatchConfig_DetectsFileChange(t *testing.T) {
+	t.Parallel()
 	// Create temp directory and config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
@@ -430,6 +436,7 @@ func TestServer_WatchConfig_DetectsFileChange(t *testing.T) {
 }
 
 func TestServer_WatchConfig_IgnoresParseErrors(t *testing.T) {
+	t.Parallel()
 	// Create temp directory and config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
@@ -523,6 +530,7 @@ func TestServer_WatchConfig_IgnoresParseErrors(t *testing.T) {
 // 6. Sends tools/list again
 // 7. Verifies the tools list changed
 func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping end-to-end test in short mode")
 	}
@@ -760,6 +768,7 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 // This is important test coverage for ensuring graceful degradation when
 // config changes happen during active use.
 func TestServer_ReloadDuringActiveRequest(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping test in short mode")
 	}

@@ -22,6 +22,7 @@ func TestHelperProcess(t *testing.T) {
 }
 
 func TestServer_ToolsDiscoveryFromUpstream(t *testing.T) {
+	t.Parallel()
 	// Start a fake upstream MCP server
 	cfg := mcptest.FakeServerConfig{
 		Tools: []mcptest.Tool{
@@ -46,6 +47,7 @@ func TestServer_ToolsDiscoveryFromUpstream(t *testing.T) {
 }
 
 func TestServer_ManagerTool_ServersList(t *testing.T) {
+	t.Parallel()
 	enabled := true
 	cfg := &config.Config{
 		SchemaVersion: 1,
@@ -118,6 +120,7 @@ func TestServer_ManagerTool_ServersList(t *testing.T) {
 }
 
 func TestServer_ManagerTool_NamespacesList(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
@@ -188,6 +191,7 @@ func TestServer_ManagerTool_NamespacesList(t *testing.T) {
 }
 
 func TestServer_ToolsCall_UnknownTool(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
 		Servers:       map[string]config.ServerConfig{},
@@ -239,6 +243,7 @@ func TestServer_ToolsCall_UnknownTool(t *testing.T) {
 }
 
 func TestServer_ToolsCall_PermissionDenied(t *testing.T) {
+	t.Parallel()
 	enabled := true
 	cfg := &config.Config{
 		SchemaVersion: 1,
@@ -316,6 +321,7 @@ func TestServer_ToolsCall_PermissionDenied(t *testing.T) {
 }
 
 func TestServer_ToolsCall_NoNamespace_AllowsAll(t *testing.T) {
+	t.Parallel()
 	// When no namespaces are configured (selection=all), permission checks are bypassed
 	enabled := true
 	cfg := &config.Config{
@@ -373,6 +379,7 @@ func TestServer_ToolsCall_NoNamespace_AllowsAll(t *testing.T) {
 // TestEndToEnd_WithRealBinary tests the full stdio server by spawning the actual binary.
 // This test requires building the binary first.
 func TestEndToEnd_WithRealBinary(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping end-to-end test in short mode")
 	}
@@ -521,6 +528,7 @@ func TestEndToEnd_WithRealBinary(t *testing.T) {
 // 5. Verify allowed tools can be called
 // 6. Verify denied tools return permission error
 func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping end-to-end test in short mode")
 	}

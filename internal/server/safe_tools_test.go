@@ -5,6 +5,7 @@ import (
 )
 
 func TestToolClassification_String(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		class    ToolClassification
 		expected string
@@ -22,6 +23,7 @@ func TestToolClassification_String(t *testing.T) {
 }
 
 func TestClassifyTool(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		toolName string
 		expected ToolClassification
@@ -120,6 +122,7 @@ func TestClassifyTool(t *testing.T) {
 }
 
 func TestClassifyTool_StripServerPrefix(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		qualifiedName string
 		expected      ToolClassification
@@ -145,6 +148,7 @@ func TestClassifyTool_StripServerPrefix(t *testing.T) {
 }
 
 func TestStripServerPrefix(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input    string
 		expected string
@@ -168,6 +172,7 @@ func TestStripServerPrefix(t *testing.T) {
 }
 
 func TestIsSafe(t *testing.T) {
+	t.Parallel()
 	if !IsSafe("read_file") {
 		t.Error("expected read_file to be safe")
 	}
@@ -180,6 +185,7 @@ func TestIsSafe(t *testing.T) {
 }
 
 func TestIsUnsafe(t *testing.T) {
+	t.Parallel()
 	if !IsUnsafe("write_file") {
 		t.Error("expected write_file to be unsafe")
 	}
