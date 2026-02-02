@@ -21,10 +21,11 @@ import (
 // Options configures the MCP server.
 type Options struct {
 	Config             *config.Config
-	ConfigPath         string // Expanded path for hot-reload watching (empty = no watching)
-	Namespace          string // Namespace to expose (empty = auto-select)
-	EagerStart         bool   // Pre-start all servers
-	ExposeManagerTools bool   // Include mcpmu.* tools in tools/list
+	ConfigPath         string        // Expanded path for hot-reload watching (empty = no watching)
+	Namespace          string        // Namespace to expose (empty = auto-select)
+	EagerStart         bool          // Pre-start all servers
+	ExposeManagerTools bool          // Include mcpmu.* tools in tools/list
+	DebounceDelay      time.Duration // Delay before applying config changes (default: 150ms)
 	LogLevel           string
 	Stdin              io.Reader
 	Stdout             io.Writer
@@ -469,7 +470,10 @@ func (s *Server) watchConfig(ctx context.Context, configPath string) {
 	log.Printf("Watching config file: %s", configPath)
 
 	// Debounce timer
-	const debounceDelay = 150 * time.Millisecond
+	debounceDelay := s.opts.DebounceDelay
+	if debounceDelay == 0 {
+		debounceDelay = 150 * time.Millisecond
+	}
 	var debounceTimer *time.Timer
 	var debounceMu sync.Mutex
 

@@ -16,6 +16,9 @@ import (
 	"github.com/Bigsy/mcpmu/internal/config"
 )
 
+// testDebounceDelay is a short debounce delay for tests.
+const testDebounceDelay = 10 * time.Millisecond
+
 func TestServer_ApplyReload_SwapsConfig(t *testing.T) {
 	t.Parallel()
 	enabled := true
@@ -308,7 +311,7 @@ func TestServer_ReloadChannel_ReceivesNewConfig(t *testing.T) {
 	}
 
 	// Wait a bit for initialization
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Send new config via reload channel
 	newCfg := &config.Config{
@@ -326,7 +329,7 @@ func TestServer_ReloadChannel_ReceivesNewConfig(t *testing.T) {
 	}
 
 	// Wait for reload to be processed
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Cancel context to stop server first
 	cancel()
@@ -374,6 +377,7 @@ func TestServer_WatchConfig_DetectsFileChange(t *testing.T) {
 	srv, err := New(Options{
 		Config:          initialCfg,
 		ConfigPath:      configPath, // Enable watching
+		DebounceDelay:   testDebounceDelay,
 		Stdin:           pipeReader,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -401,7 +405,7 @@ func TestServer_WatchConfig_DetectsFileChange(t *testing.T) {
 	}
 
 	// Wait for server to initialize and start watching
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Modify config file
 	newCfg := &config.Config{
@@ -417,7 +421,7 @@ func TestServer_WatchConfig_DetectsFileChange(t *testing.T) {
 	}
 
 	// Wait for debounce + reload
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Cancel context to stop server first
 	cancel()
@@ -465,6 +469,7 @@ func TestServer_WatchConfig_IgnoresParseErrors(t *testing.T) {
 	srv, err := New(Options{
 		Config:          initialCfg,
 		ConfigPath:      configPath,
+		DebounceDelay:   testDebounceDelay,
 		Stdin:           pipeReader,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -492,7 +497,7 @@ func TestServer_WatchConfig_IgnoresParseErrors(t *testing.T) {
 	}
 
 	// Wait for server to initialize
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Write invalid JSON to config
 	if err := os.WriteFile(configPath, []byte("{ invalid json }"), 0600); err != nil {
@@ -500,7 +505,7 @@ func TestServer_WatchConfig_IgnoresParseErrors(t *testing.T) {
 	}
 
 	// Wait for debounce
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Cancel context to stop server first
 	cancel()
