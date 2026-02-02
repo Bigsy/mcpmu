@@ -1022,7 +1022,7 @@ func (m Model) renderStatusBar() string {
 		}
 	case TabNamespaces:
 		if m.currentView == ViewList {
-			keys = "a:add  e:edit  d:delete  D:set-default  ?:help"
+			keys = "a:add  e:edit  c:copy  d:delete  D:set-default  ?:help"
 		} else {
 			keys = "esc:back  s:assign-servers  p:permissions  D:set-default  e:edit  ?:help"
 		}
@@ -1292,9 +1292,44 @@ func (m *Model) handleNamespaceListKey(msg tea.KeyMsg) (handled bool, model tea.
 			return true, m, m.toast.ShowSuccess(fmt.Sprintf("Namespace \"%s\" set as default", item.Name))
 		}
 		return true, m, nil
+
+	case key.Matches(msg, m.keys.Duplicate):
+		if item := m.namespaceList.SelectedItem(); item != nil {
+			newName := m.uniqueNamespaceCopyName(item.Name)
+			newConfig := config.NamespaceConfig{
+				Description:   item.Config.Description,
+				ServerIDs:     append([]string{}, item.Config.ServerIDs...),
+				DenyByDefault: item.Config.DenyByDefault,
+			}
+			if err := m.cfg.AddNamespace(newName, newConfig); err != nil {
+				log.Printf("Failed to duplicate namespace: %v", err)
+				return true, m, m.toast.ShowError(fmt.Sprintf("Failed to duplicate: %v", err))
+			}
+			if err := m.saveConfig(); err != nil {
+				log.Printf("Failed to save config: %v", err)
+				return true, m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
+			}
+			m.refreshNamespaceList()
+			return true, m, m.toast.ShowSuccess(fmt.Sprintf("Namespace \"%s\" duplicated", item.Name))
+		}
+		return true, m, nil
 	}
 
 	return false, m, nil
+}
+
+// uniqueNamespaceCopyName generates a unique name for a namespace copy.
+func (m *Model) uniqueNamespaceCopyName(baseName string) string {
+	candidate := baseName + " (copy)"
+	if _, exists := m.cfg.Namespaces[candidate]; !exists {
+		return candidate
+	}
+	for i := 2; ; i++ {
+		candidate = fmt.Sprintf("%s (copy %d)", baseName, i)
+		if _, exists := m.cfg.Namespaces[candidate]; !exists {
+			return candidate
+		}
+	}
 }
 
 func (m *Model) handleNamespaceDetailKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd tea.Cmd) {

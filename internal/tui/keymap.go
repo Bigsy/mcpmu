@@ -40,6 +40,7 @@ type KeyBindings struct {
 	Add           key.Binding
 	Edit          key.Binding
 	Delete        key.Binding
+	Duplicate     key.Binding
 	ToggleLogs    key.Binding
 	FollowLogs    key.Binding
 	ToggleEnabled key.Binding
@@ -125,6 +126,10 @@ func NewKeyBindings() KeyBindings {
 			key.WithKeys("d"),
 			key.WithHelp("d", "delete"),
 		),
+		Duplicate: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "copy"),
+		),
 		ToggleLogs: key.NewBinding(
 			key.WithKeys("l"),
 			key.WithHelp("l", "logs"),
@@ -159,7 +164,7 @@ func (k KeyBindings) ShortHelp() []key.Binding {
 func (k KeyBindings) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Top, k.Bottom, k.Enter, k.Escape},
-		{k.Test, k.ToggleEnabled, k.Add, k.Edit, k.Delete},
+		{k.Test, k.ToggleEnabled, k.Add, k.Edit, k.Delete, k.Duplicate},
 		{k.ToggleLogs, k.FollowLogs, k.TabPrev, k.TabNext, k.Tab1, k.Tab2},
 		{k.Help, k.Quit, k.CtrlC},
 	}
