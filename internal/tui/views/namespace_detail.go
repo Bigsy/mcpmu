@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/Bigsy/mcpmu/internal/config"
-	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 // NamespaceDetailModel displays detailed information about a namespace.
@@ -24,6 +24,7 @@ type NamespaceDetailModel struct {
 	viewport    viewport.Model
 	width       int
 	height      int
+	topPad      int
 	focused     bool
 }
 
@@ -51,7 +52,8 @@ func (m *NamespaceDetailModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	m.viewport.Width = width - 4
-	m.viewport.Height = height - 2
+	m.topPad = paneTopPaddingLines(height)
+	m.viewport.Height = height - 2 - m.topPad
 	if m.viewport.Width < 10 {
 		m.viewport.Width = 10
 	}
@@ -204,5 +206,9 @@ func (m NamespaceDetailModel) View() string {
 	if m.namespaceName != "" {
 		title = m.namespaceName
 	}
-	return m.theme.RenderPane(title, m.viewport.View(), m.width, m.focused)
+	content := strings.TrimSuffix(m.viewport.View(), "\n")
+	if m.topPad > 0 {
+		content = strings.Repeat("\n", m.topPad) + content
+	}
+	return m.theme.RenderPane(title, content, m.width, m.focused)
 }

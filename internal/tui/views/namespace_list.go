@@ -3,11 +3,12 @@ package views
 import (
 	"fmt"
 	"io"
+	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/tui/theme"
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // NamespaceItem represents a namespace in the list.
@@ -28,6 +29,7 @@ type NamespaceListModel struct {
 	emptyMsg string
 	width    int
 	height   int
+	topPad   int
 	focused  bool
 }
 
@@ -64,11 +66,17 @@ func (m *NamespaceListModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	listWidth := width - 4
-	listHeight := height - 2
+	m.topPad = paneTopPaddingLines(height)
+	listHeight := height - 2 - m.topPad
 	if listWidth < 10 {
 		listWidth = 10
 	}
 	if listHeight < 3 {
+		// Preserve a minimum usable list height by reducing top padding first.
+		m.topPad = height - 2 - 3
+		if m.topPad < 0 {
+			m.topPad = 0
+		}
 		listHeight = 3
 	}
 	m.list.SetSize(listWidth, listHeight)
@@ -111,6 +119,10 @@ func (m NamespaceListModel) View() string {
 	content := m.list.View()
 	if len(m.list.Items()) == 0 && m.emptyMsg != "" {
 		content = m.emptyMsg
+	}
+	content = strings.TrimSuffix(content, "\n")
+	if m.topPad > 0 {
+		content = strings.Repeat("\n", m.topPad) + content
 	}
 	return m.theme.RenderPane("Namespaces", content, m.width, m.focused)
 }

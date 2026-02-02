@@ -8,16 +8,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	"github.com/Bigsy/mcpmu/internal/tui/views"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Tab represents a tab in the UI.
@@ -524,6 +524,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (handled bool, model tea.Model, cmd te
 			m.logPanel.ToggleFollow()
 		}
 		return true, m, nil
+
+	case key.Matches(msg, m.keys.WrapLogs):
+		if m.logPanel.IsVisible() {
+			m.logPanel.ToggleWrap()
+		}
+		return true, m, nil
 	}
 
 	// Tab and view-specific keys
@@ -854,8 +860,8 @@ func (m *Model) convertTools(mcpTools []events.McpTool) []mcp.Tool {
 
 func (m *Model) updateLayout() {
 	// Calculate heights more carefully
-	headerHeight := 1  // Tab bar (single line)
-	statusHeight := 1  // Status bar
+	headerHeight := 1 // Tab bar (single line)
+	statusHeight := 1 // Status bar
 	logHeight := 0
 	if m.logPanel.IsVisible() {
 		logHeight = 10 // Log panel height when visible (including border)
@@ -988,7 +994,13 @@ func (m Model) renderHeader() string {
 		}
 	}
 
-	title := m.theme.Title.Render("mcpmu")
+	appLabel := lipgloss.NewStyle().
+		Padding(0, 1).
+		Bold(true).
+		Background(m.theme.Primary.GetForeground()).
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Render("mcpmu")
+	title := appLabel
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabViews...)
 
 	// Align title left, tabs right

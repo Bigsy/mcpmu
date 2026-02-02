@@ -5,13 +5,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/tui/theme"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ServerDetailModel displays detailed information about a server.
@@ -24,6 +24,7 @@ type ServerDetailModel struct {
 	viewport   viewport.Model
 	width      int
 	height     int
+	topPad     int
 	focused    bool
 }
 
@@ -52,7 +53,8 @@ func (m *ServerDetailModel) SetSize(width, height int) {
 	// Viewport gets: width minus borders (2) minus padding (2) = width - 4
 	// Height: height minus borders (2) = height - 2
 	m.viewport.Width = width - 4
-	m.viewport.Height = height - 2
+	m.topPad = paneTopPaddingLines(height)
+	m.viewport.Height = height - 2 - m.topPad
 	if m.viewport.Width < 10 {
 		m.viewport.Width = 10
 	}
@@ -205,7 +207,11 @@ func (m ServerDetailModel) View() string {
 	if m.serverName != "" {
 		title = m.serverName
 	}
-	return m.theme.RenderPane(title, m.viewport.View(), m.width, m.focused)
+	content := strings.TrimSuffix(m.viewport.View(), "\n")
+	if m.topPad > 0 {
+		content = strings.Repeat("\n", m.topPad) + content
+	}
+	return m.theme.RenderPane(title, content, m.width, m.focused)
 }
 
 func formatDuration(d time.Duration) string {

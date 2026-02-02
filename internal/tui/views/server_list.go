@@ -6,14 +6,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/tui/theme"
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ServerItem represents a server in the list.
@@ -42,6 +42,7 @@ type ServerListModel struct {
 	emptyMsg string
 	width    int
 	height   int
+	topPad   int
 	focused  bool
 }
 
@@ -111,9 +112,18 @@ func (m *ServerListModel) SetSize(width, height int) {
 	// List gets: width minus borders (2) minus padding (2) = width - 4
 	// Height: height minus borders (2) = height - 2
 	listWidth := width - 4
-	listHeight := height - 2
+	m.topPad = paneTopPaddingLines(height)
+	listHeight := height - 2 - m.topPad
 	if listWidth < 10 {
 		listWidth = 10
+	}
+	if listHeight < 3 {
+		// Preserve a minimum usable list height by reducing top padding first.
+		m.topPad = height - 2 - 3
+		if m.topPad < 0 {
+			m.topPad = 0
+		}
+		listHeight = 3
 	}
 	if listHeight < 3 {
 		listHeight = 3
@@ -176,7 +186,23 @@ func (m ServerListModel) View() string {
 	if len(m.list.Items()) == 0 && m.emptyMsg != "" {
 		content = m.emptyMsg
 	}
+	content = strings.TrimSuffix(content, "\n")
+	if m.topPad > 0 {
+		content = strings.Repeat("\n", m.topPad) + content
+	}
 	return m.theme.RenderPane("Servers", content, m.width, m.focused)
+}
+
+func paneTopPaddingLines(paneHeight int) int {
+	// Leave some breathing room below the pane header without moving the pane itself.
+	switch {
+	case paneHeight >= 35:
+		return 2
+	case paneHeight >= 22:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // serverDelegate is a custom delegate for rendering server items.

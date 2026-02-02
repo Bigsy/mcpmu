@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 // LogEntry represents a single log line.
@@ -23,9 +23,11 @@ type LogPanelModel struct {
 	viewport viewport.Model
 	entries  []LogEntry
 	follow   bool
+	wrap     bool
 	visible  bool
 	width    int
 	height   int
+	topPad   int
 	focused  bool
 }
 
@@ -45,9 +47,10 @@ func (m *LogPanelModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	// Viewport gets: width minus borders (2) minus padding (2) = width - 4
-	// Height: height minus borders (2) minus header line (1) = height - 3
+	// Height: height minus borders (2) = height - 2
 	m.viewport.Width = width - 4
-	m.viewport.Height = height - 3
+	m.topPad = paneTopPaddingLines(height)
+	m.viewport.Height = height - 2 - m.topPad
 	if m.viewport.Width < 10 {
 		m.viewport.Width = 10
 	}
@@ -90,6 +93,17 @@ func (m LogPanelModel) IsFollowing() bool {
 	return m.follow
 }
 
+// ToggleWrap toggles line wrapping.
+func (m *LogPanelModel) ToggleWrap() {
+	m.wrap = !m.wrap
+	m.updateContent()
+}
+
+// IsWrapping returns whether wrap mode is active.
+func (m LogPanelModel) IsWrapping() bool {
+	return m.wrap
+}
+
 // AppendLog adds a log entry.
 func (m *LogPanelModel) AppendLog(serverID, line string) {
 	entry := LogEntry{
@@ -117,6 +131,73 @@ func (m *LogPanelModel) Clear() {
 	m.updateContent()
 }
 
+// wrapText wraps text to fit within the specified width, breaking at word
+// boundaries when possible and hard-breaking very long words.
+func wrapText(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	if len(text) == 0 {
+		return []string{""}
+	}
+
+	var lines []string
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
+	}
+
+	var currentLine strings.Builder
+	currentLen := 0
+
+	for _, word := range words {
+		wordLen := len(word)
+
+		// If word itself is longer than width, hard-break it
+		if wordLen > width {
+			// Flush current line if not empty
+			if currentLen > 0 {
+				lines = append(lines, currentLine.String())
+				currentLine.Reset()
+				currentLen = 0
+			}
+			// Break the long word into chunks
+			for len(word) > width {
+				lines = append(lines, word[:width])
+				word = word[width:]
+			}
+			if len(word) > 0 {
+				currentLine.WriteString(word)
+				currentLen = len(word)
+			}
+			continue
+		}
+
+		// Check if word fits on current line
+		if currentLen == 0 {
+			currentLine.WriteString(word)
+			currentLen = wordLen
+		} else if currentLen+1+wordLen <= width {
+			currentLine.WriteString(" ")
+			currentLine.WriteString(word)
+			currentLen += 1 + wordLen
+		} else {
+			// Start new line
+			lines = append(lines, currentLine.String())
+			currentLine.Reset()
+			currentLine.WriteString(word)
+			currentLen = wordLen
+		}
+	}
+
+	// Flush remaining content
+	if currentLen > 0 {
+		lines = append(lines, currentLine.String())
+	}
+
+	return lines
+}
+
 func (m *LogPanelModel) updateContent() {
 	if len(m.entries) == 0 {
 		m.viewport.SetContent(m.theme.Faint.Render("No logs yet..."))
@@ -129,25 +210,69 @@ func (m *LogPanelModel) updateContent() {
 			content.WriteString("\n")
 		}
 
-		// Timestamp
+		// Build the prefix: "HH:MM:SS [serverID] "
 		ts := entry.Timestamp.Format("15:04:05")
-		content.WriteString(m.theme.Faint.Render(ts))
-		content.WriteString(" ")
-
-		// Server ID
 		serverTag := fmt.Sprintf("[%s]", entry.ServerID)
-		content.WriteString(m.theme.Primary.Render(serverTag))
-		content.WriteString(" ")
 
-		// Log line (colorize errors)
+		// Determine style based on log content
 		line := entry.Line
-		if strings.Contains(strings.ToLower(line), "error") ||
-			strings.Contains(strings.ToLower(line), "err:") {
-			content.WriteString(m.theme.Danger.Render(line))
-		} else if strings.Contains(strings.ToLower(line), "warn") {
-			content.WriteString(m.theme.Warn.Render(line))
+		isError := strings.Contains(strings.ToLower(line), "error") ||
+			strings.Contains(strings.ToLower(line), "err:")
+		isWarn := strings.Contains(strings.ToLower(line), "warn")
+
+		if m.wrap {
+			// Calculate prefix width (timestamp + space + serverTag + space)
+			prefixWidth := len(ts) + 1 + len(serverTag) + 1
+
+			// Calculate available width for log content
+			contentWidth := m.viewport.Width - prefixWidth
+			if contentWidth < 10 {
+				contentWidth = 10
+			}
+
+			// Wrap the log line
+			wrappedLines := wrapText(entry.Line, contentWidth)
+			indent := strings.Repeat(" ", prefixWidth)
+
+			for j, wrappedLine := range wrappedLines {
+				if j > 0 {
+					content.WriteString("\n")
+				}
+
+				if j == 0 {
+					// First line gets the prefix
+					content.WriteString(m.theme.Faint.Render(ts))
+					content.WriteString(" ")
+					content.WriteString(m.theme.Primary.Render(serverTag))
+					content.WriteString(" ")
+				} else {
+					// Continuation lines get indent
+					content.WriteString(indent)
+				}
+
+				// Apply appropriate style to the log content
+				if isError {
+					content.WriteString(m.theme.Danger.Render(wrappedLine))
+				} else if isWarn {
+					content.WriteString(m.theme.Warn.Render(wrappedLine))
+				} else {
+					content.WriteString(m.theme.Base.Render(wrappedLine))
+				}
+			}
 		} else {
-			content.WriteString(m.theme.Base.Render(line))
+			// No wrapping - render single line
+			content.WriteString(m.theme.Faint.Render(ts))
+			content.WriteString(" ")
+			content.WriteString(m.theme.Primary.Render(serverTag))
+			content.WriteString(" ")
+
+			if isError {
+				content.WriteString(m.theme.Danger.Render(line))
+			} else if isWarn {
+				content.WriteString(m.theme.Warn.Render(line))
+			} else {
+				content.WriteString(m.theme.Base.Render(line))
+			}
 		}
 	}
 
@@ -176,13 +301,23 @@ func (m LogPanelModel) View() string {
 		return ""
 	}
 
-	// Title with follow indicator
+	// Title with status and keybinding hints
 	title := "Logs"
+
+	// Show current states
 	if m.follow {
 		title += " [FOLLOW]"
-	} else {
-		title += " [PAUSED]"
+	}
+	if m.wrap {
+		title += " [WRAP]"
 	}
 
-	return m.theme.RenderPane(title, m.viewport.View(), m.width, m.focused)
+	// Show keybinding hints
+	title += "  f:follow w:wrap"
+
+	content := strings.TrimSuffix(m.viewport.View(), "\n")
+	if m.topPad > 0 {
+		content = strings.Repeat("\n", m.topPad) + content
+	}
+	return m.theme.RenderPane(title, content, m.width, m.focused)
 }

@@ -43,6 +43,7 @@ type KeyBindings struct {
 	Duplicate     key.Binding
 	ToggleLogs    key.Binding
 	FollowLogs    key.Binding
+	WrapLogs      key.Binding
 	ToggleEnabled key.Binding
 
 	// Confirm dialog
@@ -138,6 +139,10 @@ func NewKeyBindings() KeyBindings {
 			key.WithKeys("f"),
 			key.WithHelp("f", "follow"),
 		),
+		WrapLogs: key.NewBinding(
+			key.WithKeys("w"),
+			key.WithHelp("w", "wrap"),
+		),
 		ToggleEnabled: key.NewBinding(
 			key.WithKeys("E"),
 			key.WithHelp("E", "enable/disable"),
@@ -165,7 +170,7 @@ func (k KeyBindings) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Top, k.Bottom, k.Enter, k.Escape},
 		{k.Test, k.ToggleEnabled, k.Add, k.Edit, k.Delete, k.Duplicate},
-		{k.ToggleLogs, k.FollowLogs, k.TabPrev, k.TabNext, k.Tab1, k.Tab2},
+		{k.ToggleLogs, k.FollowLogs, k.WrapLogs, k.TabPrev, k.TabNext, k.Tab1, k.Tab2},
 		{k.Help, k.Quit, k.CtrlC},
 	}
 }
