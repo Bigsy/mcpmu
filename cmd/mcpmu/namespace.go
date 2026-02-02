@@ -13,8 +13,9 @@ import (
 )
 
 var namespaceCmd = &cobra.Command{
-	Use:   "namespace",
-	Short: "Manage namespaces",
+	Use:     "namespace",
+	Aliases: []string{"ns"},
+	Short:   "Manage namespaces",
 	Long: `Manage namespaces for grouping servers and tool permissions.
 
 Namespaces allow you to define different contexts for accessing MCP servers.
