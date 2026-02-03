@@ -17,6 +17,9 @@ type Credential struct {
 	// ClientID is from dynamic client registration.
 	ClientID string `json:"client_id"`
 
+	// ClientSecret is from dynamic client registration (may be empty for public clients).
+	ClientSecret string `json:"client_secret,omitempty"`
+
 	// AccessToken is the current access token.
 	AccessToken string `json:"access_token"`
 
@@ -49,12 +52,13 @@ func (c *Credential) Validate() error {
 
 // NewCredential creates a new Credential with validation.
 // ServerName is optional (may be empty).
-// RefreshToken and Scopes are optional.
-func NewCredential(serverName, serverURL, clientID, accessToken, refreshToken string, expiresAt time.Time, scopes []string) (*Credential, error) {
+// RefreshToken, ClientSecret, and Scopes are optional.
+func NewCredential(serverName, serverURL, clientID, clientSecret, accessToken, refreshToken string, expiresAt time.Time, scopes []string) (*Credential, error) {
 	cred := &Credential{
 		ServerName:   serverName,
 		ServerURL:    serverURL,
 		ClientID:     clientID,
+		ClientSecret: clientSecret,
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		ExpiresAt:    expiresAt.UnixMilli(),

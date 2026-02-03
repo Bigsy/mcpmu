@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"context"
 	"net/url"
 	"testing"
 )
@@ -120,5 +121,26 @@ func TestAuthorizationServerMetadata_SupportsS256(t *testing.T) {
 				t.Errorf("SupportsS256() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDiscoverFromChallenge_NilChallenge(t *testing.T) {
+	ctx := context.Background()
+	_, err := DiscoverFromChallenge(ctx, nil)
+	if err == nil {
+		t.Error("expected error for nil challenge")
+	}
+}
+
+func TestDiscoverFromChallenge_EmptyResourceMetadata(t *testing.T) {
+	ctx := context.Background()
+	challenge := &AuthChallenge{
+		Realm: "example",
+		Scope: "read",
+		// ResourceMetadata is empty
+	}
+	_, err := DiscoverFromChallenge(ctx, challenge)
+	if err == nil {
+		t.Error("expected error for empty ResourceMetadata")
 	}
 }

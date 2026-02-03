@@ -111,6 +111,7 @@ func runMCPLogin(cmd *cobra.Command, args []string) error {
 		Scopes:       scopes,
 		CallbackPort: cfg.MCPOAuthCallbackPort,
 		Store:        store,
+		ClientID:     srv.OAuthClientID, // Pre-registered client ID (if configured)
 	}
 
 	fmt.Printf("Starting OAuth login for %s...\n", serverName)

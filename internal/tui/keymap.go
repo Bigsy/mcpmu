@@ -45,6 +45,7 @@ type KeyBindings struct {
 	FollowLogs    key.Binding
 	WrapLogs      key.Binding
 	ToggleEnabled key.Binding
+	Login         key.Binding // OAuth login for HTTP servers
 
 	// Confirm dialog
 	Yes key.Binding
@@ -146,6 +147,10 @@ func NewKeyBindings() KeyBindings {
 		ToggleEnabled: key.NewBinding(
 			key.WithKeys("E"),
 			key.WithHelp("E", "enable/disable"),
+		),
+		Login: key.NewBinding(
+			key.WithKeys("L"),
+			key.WithHelp("L", "OAuth login"),
 		),
 
 		// Confirm dialog

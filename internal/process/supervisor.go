@@ -4,6 +4,7 @@ package process
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -312,6 +313,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 		httpTransport: httpTransport,
 		authStatus:    authStatus,
 		serverURL:     srv.URL,
+		serverConfig:  srv,
 		logs:          make([]string, 0, 1000),
 		toolsReady:    make(chan struct{}),
 		bus:           s.bus,
@@ -326,6 +328,48 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 	defer cancel()
 
 	if err := client.Initialize(initCtx); err != nil {
+		// Check if it's an auth error - we can handle this gracefully
+		var unauthErr *mcp.UnauthorizedError
+		if errors.As(err, &unauthErr) {
+			log.Printf("Server %s returned 401, checking for OAuth support", name)
+
+			// Try to discover OAuth via the challenge
+			var oauthMeta *oauth.AuthorizationServerMetadata
+			if unauthErr.Challenge != nil && unauthErr.Challenge.ResourceMetadata != "" {
+				// Convert mcp.AuthChallenge to oauth.AuthChallenge
+				oauthChallenge := &oauth.AuthChallenge{
+					ResourceMetadata: unauthErr.Challenge.ResourceMetadata,
+					Realm:            unauthErr.Challenge.Realm,
+					Scope:            unauthErr.Challenge.Scope,
+				}
+				result, discErr := oauth.DiscoverFromChallenge(ctx, oauthChallenge)
+				if discErr == nil && result != nil {
+					oauthMeta = result.Metadata
+					log.Printf("Discovered OAuth via resource_metadata for %s", name)
+				} else {
+					log.Printf("Failed to discover OAuth from challenge: %v", discErr)
+				}
+			}
+
+			// Fallback: try standard discovery
+			if oauthMeta == nil {
+				oauthMeta, _ = oauth.SupportsOAuth(ctx, srv.URL)
+			}
+
+			if oauthMeta != nil {
+				// Server supports OAuth - put handle in "needs login" state
+				handle.authStatus = mcp.AuthStatusOAuthNeeds
+				handle.oauthMeta = oauthMeta
+				handle.client = nil // No client until authenticated
+				_ = httpTransport.Close()
+				handle.httpTransport = nil
+
+				s.emitStatus(name, events.StateNeedsAuth, 0, nil, "OAuth login required")
+				log.Printf("Server %s requires OAuth login", name)
+				return handle, nil
+			}
+		}
+
 		_ = handle.Stop()
 		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
 		return nil, fmt.Errorf("initialize mcp: %w", err)
@@ -521,6 +565,8 @@ type Handle struct {
 	httpTransport *mcp.StreamableHTTPTransport
 	authStatus    mcp.AuthStatus
 	serverURL     string
+	serverConfig  config.ServerConfig                // Cached for retry after OAuth
+	oauthMeta     *oauth.AuthorizationServerMetadata // Cached OAuth metadata for login
 
 	// Common fields
 	client        *mcp.Client
@@ -660,8 +706,10 @@ func (h *Handle) Stop() error {
 		PID:   h.PID(),
 	}))
 
-	// Close MCP client first
-	_ = h.client.Close()
+	// Close MCP client first (may be nil for needs-auth state)
+	if h.client != nil {
+		_ = h.client.Close()
+	}
 
 	if h.kind == HandleKindStdio {
 		// Stdio: send SIGTERM to process
@@ -756,4 +804,128 @@ func (h *Handle) watchProcess() {
 		State:    newState,
 		LastExit: lastExit,
 	}))
+}
+
+// OAuthMeta returns the cached OAuth metadata for servers needing login.
+func (h *Handle) OAuthMeta() *oauth.AuthorizationServerMetadata {
+	return h.oauthMeta
+}
+
+// LoginOAuth triggers the OAuth login flow for a server that needs authentication.
+// It opens a browser for the user to authenticate, then reconnects.
+func (s *Supervisor) LoginOAuth(ctx context.Context, name string) error {
+	s.mu.Lock()
+	handle, exists := s.handles[name]
+	if !exists {
+		s.mu.Unlock()
+		return fmt.Errorf("server %s not found", name)
+	}
+	s.mu.Unlock()
+
+	if handle.authStatus != mcp.AuthStatusOAuthNeeds {
+		return fmt.Errorf("server %s doesn't need OAuth login (status: %s)", name, handle.authStatus)
+	}
+
+	if s.credStore == nil {
+		return fmt.Errorf("no credential store available")
+	}
+
+	// Build OAuth flow config
+	flowConfig := oauth.FlowConfig{
+		ServerURL:  handle.serverURL,
+		ServerName: name,
+		Store:      s.credStore,
+		ClientID:   handle.serverConfig.OAuthClientID, // Pre-registered client ID (if configured)
+	}
+
+	// Add scopes from config or metadata
+	if len(handle.serverConfig.Scopes) > 0 {
+		flowConfig.Scopes = handle.serverConfig.Scopes
+	} else if handle.oauthMeta != nil && len(handle.oauthMeta.ScopesSupported) > 0 {
+		flowConfig.Scopes = handle.oauthMeta.ScopesSupported
+	}
+
+	// Run OAuth flow
+	flow := oauth.NewFlow(flowConfig)
+	if err := flow.Run(ctx); err != nil {
+		return fmt.Errorf("oauth login: %w", err)
+	}
+
+	// Retry connection with new tokens
+	return s.retryHTTPConnection(ctx, name)
+}
+
+// retryHTTPConnection attempts to reconnect an HTTP server after OAuth completes.
+func (s *Supervisor) retryHTTPConnection(ctx context.Context, name string) error {
+	s.mu.Lock()
+	handle, exists := s.handles[name]
+	s.mu.Unlock()
+
+	if !exists {
+		return fmt.Errorf("server %s not found", name)
+	}
+
+	// Use cached server config from handle
+	cfg := handle.serverConfig
+
+	// Emit starting event
+	s.emitStatus(name, events.StateStarting, 0, nil, "")
+
+	// Get OAuth token
+	token, err := s.tokenManager.GetAccessToken(ctx, handle.serverURL)
+	if err != nil {
+		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("Failed to get OAuth token: %v", err))
+		return fmt.Errorf("get oauth token: %w", err)
+	}
+
+	// Build HTTP headers
+	headers := make(map[string]string)
+	for k, v := range cfg.HTTPHeaders {
+		headers[k] = v
+	}
+	for headerName, envVarName := range cfg.EnvHTTPHeaders {
+		if value := os.Getenv(envVarName); value != "" {
+			headers[headerName] = value
+		}
+	}
+
+	// Create transport with token
+	transportConfig := mcp.StreamableHTTPConfig{
+		URL:         handle.serverURL,
+		BearerToken: token,
+		HTTPHeaders: headers,
+	}
+	httpTransport := mcp.NewStreamableHTTPTransport(transportConfig)
+
+	// Connect
+	if err := httpTransport.Connect(ctx); err != nil {
+		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("Connect failed: %v", err))
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	// Create client and initialize
+	client := mcp.NewClient(httpTransport)
+
+	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if err := client.Initialize(initCtx); err != nil {
+		_ = httpTransport.Close()
+		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
+		return fmt.Errorf("initialize: %w", err)
+	}
+
+	// Update handle
+	handle.client = client
+	handle.httpTransport = httpTransport
+	handle.authStatus = mcp.AuthStatusOAuthOK
+	handle.done = make(chan struct{}) // Reset done channel
+	handle.startedAt = time.Now()
+
+	s.emitStatus(name, events.StateRunning, 0, nil, "")
+
+	// Discover tools in background
+	go s.discoverToolsAsync(handle, client, name)
+
+	return nil
 }

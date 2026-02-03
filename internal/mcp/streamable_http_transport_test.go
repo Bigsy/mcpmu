@@ -208,3 +208,91 @@ func TestSSEScanner_KeepAliveComment(t *testing.T) {
 		t.Errorf("expected 'actual', got %q", event.Data)
 	}
 }
+
+// Tests for WWW-Authenticate header parsing (RFC 9728 OAuth support)
+
+func TestParseWWWAuthenticate_Full(t *testing.T) {
+	header := `Bearer realm="example", resource_metadata="https://auth.example.com/.well-known/oauth-protected-resource", scope="read write"`
+	challenge := parseWWWAuthenticate(header)
+
+	if challenge == nil {
+		t.Fatal("expected non-nil challenge")
+	}
+	if challenge.ResourceMetadata != "https://auth.example.com/.well-known/oauth-protected-resource" {
+		t.Errorf("ResourceMetadata = %q, want URL", challenge.ResourceMetadata)
+	}
+	if challenge.Realm != "example" {
+		t.Errorf("Realm = %q, want 'example'", challenge.Realm)
+	}
+	if challenge.Scope != "read write" {
+		t.Errorf("Scope = %q, want 'read write'", challenge.Scope)
+	}
+}
+
+func TestParseWWWAuthenticate_ResourceMetadataOnly(t *testing.T) {
+	header := `Bearer resource_metadata="https://mcp.figma.com/.well-known/oauth-protected-resource"`
+	challenge := parseWWWAuthenticate(header)
+
+	if challenge == nil {
+		t.Fatal("expected non-nil challenge")
+	}
+	if challenge.ResourceMetadata != "https://mcp.figma.com/.well-known/oauth-protected-resource" {
+		t.Errorf("ResourceMetadata = %q", challenge.ResourceMetadata)
+	}
+}
+
+func TestParseWWWAuthenticate_CaseInsensitive(t *testing.T) {
+	header := `bearer Resource_Metadata="https://example.com/meta"`
+	challenge := parseWWWAuthenticate(header)
+
+	if challenge == nil {
+		t.Fatal("expected non-nil challenge")
+	}
+	if challenge.ResourceMetadata != "https://example.com/meta" {
+		t.Errorf("ResourceMetadata = %q", challenge.ResourceMetadata)
+	}
+}
+
+func TestParseWWWAuthenticate_EmptyHeader(t *testing.T) {
+	challenge := parseWWWAuthenticate("")
+	if challenge != nil {
+		t.Errorf("expected nil for empty header, got %+v", challenge)
+	}
+}
+
+func TestParseWWWAuthenticate_NonBearer(t *testing.T) {
+	challenge := parseWWWAuthenticate("Basic realm=\"example\"")
+	if challenge != nil {
+		t.Errorf("expected nil for non-Bearer scheme, got %+v", challenge)
+	}
+}
+
+func TestParseWWWAuthenticate_BearerOnly(t *testing.T) {
+	challenge := parseWWWAuthenticate("Bearer")
+	if challenge == nil {
+		t.Fatal("expected non-nil challenge for bare Bearer")
+	}
+	// Should have empty fields
+	if challenge.ResourceMetadata != "" || challenge.Realm != "" || challenge.Scope != "" {
+		t.Errorf("expected empty fields, got %+v", challenge)
+	}
+}
+
+func TestUnauthorizedError(t *testing.T) {
+	unauthErr := &UnauthorizedError{
+		Challenge: &AuthChallenge{
+			ResourceMetadata: "https://example.com/meta",
+			Realm:            "test",
+		},
+	}
+
+	if unauthErr.Error() != "unauthorized - authentication required" {
+		t.Errorf("unexpected error message: %s", unauthErr.Error())
+	}
+
+	// Test that error implements error interface
+	var e error = unauthErr
+	if e.Error() == "" {
+		t.Error("UnauthorizedError should return non-empty error message")
+	}
+}

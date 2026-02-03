@@ -31,16 +31,21 @@ type FlowConfig struct {
 
 	// Store is the credential store for saving tokens.
 	Store CredentialStore
+
+	// ClientID is a pre-registered OAuth client ID (for servers without dynamic registration).
+	// If empty, dynamic registration will be attempted, falling back to "mcpmu".
+	ClientID string
 }
 
 // Flow orchestrates an OAuth 2.1 authorization flow.
 type Flow struct {
-	config   FlowConfig
-	metadata *AuthorizationServerMetadata
-	clientID string
-	pkce     *PKCE
-	state    string
-	callback *CallbackServer
+	config       FlowConfig
+	metadata     *AuthorizationServerMetadata
+	clientID     string
+	clientSecret string // From dynamic registration, may be empty for public clients
+	pkce         *PKCE
+	state        string
+	callback     *CallbackServer
 }
 
 // TokenResponse is the response from the token endpoint.
@@ -58,7 +63,7 @@ func NewFlow(config FlowConfig) *Flow {
 }
 
 // Run executes the full OAuth flow:
-// 1. Discover OAuth metadata
+// 1. Discover OAuth metadata (via standard discovery or RFC 9728 challenge)
 // 2. Start callback server
 // 3. Register client (if registration endpoint available)
 // 4. Open browser for authorization
@@ -67,9 +72,16 @@ func NewFlow(config FlowConfig) *Flow {
 // 7. Store credentials
 func (f *Flow) Run(ctx context.Context) error {
 	// Step 1: Discover OAuth metadata
+	// First try standard discovery on the server URL
 	result, err := Discover(ctx, f.config.ServerURL)
 	if err != nil {
-		return fmt.Errorf("oauth discovery: %w", err)
+		// Standard discovery failed - try RFC 9728 Protected Resource Metadata flow
+		// This involves triggering a 401 to get WWW-Authenticate header
+		log.Printf("Standard OAuth discovery failed, trying challenge-based discovery: %v", err)
+		result, err = f.discoverViaChallenge(ctx)
+		if err != nil {
+			return fmt.Errorf("oauth discovery failed (tried standard and challenge-based): %w", err)
+		}
 	}
 	f.metadata = result.Metadata
 
@@ -85,13 +97,24 @@ func (f *Flow) Run(ctx context.Context) error {
 
 	redirectURI := f.callback.RedirectURI()
 
-	// Step 3: Register client if endpoint available
-	if f.metadata.RegistrationEndpoint != "" {
+	// Step 3: Register client or use configured client ID
+	// Priority: 1) Configured client ID, 2) Dynamic registration, 3) Default "mcpmu"
+	if f.config.ClientID != "" {
+		// Use pre-configured client ID (for servers without dynamic registration)
+		f.clientID = f.config.ClientID
+		log.Printf("Using configured OAuth client ID: %s", f.clientID)
+	} else if f.metadata.RegistrationEndpoint != "" {
+		// Try dynamic registration
+		// Some servers advertise registration but don't support it (return 403/401),
+		// so we treat registration failure as non-fatal and fall back to default client ID.
 		reg, err := RegisterClient(ctx, f.metadata.RegistrationEndpoint, redirectURI, f.config.Scopes)
 		if err != nil {
-			return fmt.Errorf("client registration: %w", err)
+			log.Printf("Client registration failed (falling back to default client ID): %v", err)
+			f.clientID = "mcpmu"
+		} else {
+			f.clientID = reg.ClientID
+			f.clientSecret = reg.ClientSecret // May be empty for public clients
 		}
-		f.clientID = reg.ClientID
 	} else {
 		// Use a default client ID for servers that don't support registration
 		f.clientID = "mcpmu"
@@ -152,6 +175,7 @@ func (f *Flow) Run(ctx context.Context) error {
 		f.config.ServerName,
 		f.config.ServerURL,
 		f.clientID,
+		f.clientSecret,
 		tokens.AccessToken,
 		tokens.RefreshToken,
 		expiresAt,
@@ -166,6 +190,133 @@ func (f *Flow) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// discoverViaChallenge triggers a 401 response from the MCP server to get
+// the WWW-Authenticate header, then uses RFC 9728 Protected Resource Metadata
+// to discover the OAuth server.
+func (f *Flow) discoverViaChallenge(ctx context.Context) (*DiscoverResult, error) {
+	// Send a request to trigger a 401
+	client := &http.Client{Timeout: DiscoveryTimeout}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", f.config.ServerURL, strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","id":1}`))
+	if err != nil {
+		return nil, fmt.Errorf("create challenge request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("challenge request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// We expect a 401 response
+	if resp.StatusCode != http.StatusUnauthorized {
+		return nil, fmt.Errorf("expected 401, got %d", resp.StatusCode)
+	}
+
+	// Parse WWW-Authenticate header
+	wwwAuth := resp.Header.Get("WWW-Authenticate")
+	if wwwAuth == "" {
+		return nil, fmt.Errorf("no WWW-Authenticate header in 401 response")
+	}
+
+	challenge := parseWWWAuthenticate(wwwAuth)
+	if challenge == nil {
+		return nil, fmt.Errorf("failed to parse WWW-Authenticate header: %s", wwwAuth)
+	}
+
+	if challenge.ResourceMetadata == "" {
+		return nil, fmt.Errorf("no resource_metadata in WWW-Authenticate header")
+	}
+
+	// Convert to oauth.AuthChallenge and discover
+	oauthChallenge := &AuthChallenge{
+		ResourceMetadata: challenge.ResourceMetadata,
+		Realm:            challenge.Realm,
+		Scope:            challenge.Scope,
+	}
+
+	return DiscoverFromChallenge(ctx, oauthChallenge)
+}
+
+// wwwAuthChallenge holds parsed WWW-Authenticate info (flow-internal).
+type wwwAuthChallenge struct {
+	ResourceMetadata string
+	Realm            string
+	Scope            string
+}
+
+// parseWWWAuthenticate parses WWW-Authenticate header for Bearer scheme.
+func parseWWWAuthenticate(header string) *wwwAuthChallenge {
+	if header == "" {
+		return nil
+	}
+
+	// Check for Bearer scheme (case-insensitive)
+	headerLower := strings.ToLower(header)
+	if !strings.HasPrefix(headerLower, "bearer") {
+		return nil
+	}
+
+	// Remove "Bearer " prefix
+	params := strings.TrimSpace(header[6:])
+	if params == "" {
+		return &wwwAuthChallenge{}
+	}
+
+	challenge := &wwwAuthChallenge{}
+
+	// Parse key="value" pairs
+	for len(params) > 0 {
+		params = strings.TrimLeft(params, " ,\t")
+		if params == "" {
+			break
+		}
+
+		eqIdx := strings.Index(params, "=")
+		if eqIdx == -1 {
+			break
+		}
+		key := strings.TrimSpace(params[:eqIdx])
+		params = params[eqIdx+1:]
+
+		var value string
+		params = strings.TrimLeft(params, " \t")
+		if len(params) > 0 && params[0] == '"' {
+			params = params[1:]
+			endQuote := strings.Index(params, "\"")
+			if endQuote == -1 {
+				value = params
+				params = ""
+			} else {
+				value = params[:endQuote]
+				params = params[endQuote+1:]
+			}
+		} else {
+			endIdx := strings.IndexAny(params, ", \t")
+			if endIdx == -1 {
+				value = params
+				params = ""
+			} else {
+				value = params[:endIdx]
+				params = params[endIdx:]
+			}
+		}
+
+		switch strings.ToLower(key) {
+		case "resource_metadata":
+			challenge.ResourceMetadata = value
+		case "realm":
+			challenge.Realm = value
+		case "scope":
+			challenge.Scope = value
+		}
+	}
+
+	return challenge
 }
 
 // buildAuthorizationURL constructs the OAuth authorization URL.
@@ -186,10 +337,50 @@ func (f *Flow) buildAuthorizationURL(redirectURI string) string {
 	return f.metadata.AuthorizationEndpoint + "?" + params.Encode()
 }
 
-// doTokenRequest performs a token endpoint request with the given params.
+// TokenAuthMethod specifies how to authenticate to the token endpoint.
+type TokenAuthMethod string
+
+const (
+	// TokenAuthNone is for public clients (no authentication).
+	TokenAuthNone TokenAuthMethod = "none"
+	// TokenAuthSecretPost sends client_id and client_secret in POST body.
+	TokenAuthSecretPost TokenAuthMethod = "client_secret_post"
+	// TokenAuthSecretBasic uses HTTP Basic authentication.
+	TokenAuthSecretBasic TokenAuthMethod = "client_secret_basic"
+)
+
+// TokenRequestConfig holds configuration for token endpoint requests.
+type TokenRequestConfig struct {
+	Endpoint     string
+	Params       url.Values
+	ClientID     string
+	ClientSecret string
+	AuthMethod   TokenAuthMethod
+}
+
+// doTokenRequest performs a token endpoint request with the given config.
 // This is the common HTTP request/response handling shared by exchangeCode and RefreshToken.
-func doTokenRequest(ctx context.Context, tokenEndpoint string, params url.Values) (*TokenResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", tokenEndpoint, strings.NewReader(params.Encode()))
+func doTokenRequest(ctx context.Context, cfg TokenRequestConfig) (*TokenResponse, error) {
+	params := cfg.Params
+
+	// Apply client authentication based on method
+	switch cfg.AuthMethod {
+	case TokenAuthSecretPost:
+		// Add client_id and client_secret to POST body
+		params.Set("client_id", cfg.ClientID)
+		if cfg.ClientSecret != "" {
+			params.Set("client_secret", cfg.ClientSecret)
+		}
+	case TokenAuthSecretBasic:
+		// Will set Authorization header below
+		// Still need client_id in body for some servers
+		params.Set("client_id", cfg.ClientID)
+	default:
+		// Public client - just client_id
+		params.Set("client_id", cfg.ClientID)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint, strings.NewReader(params.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -197,6 +388,11 @@ func doTokenRequest(ctx context.Context, tokenEndpoint string, params url.Values
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("MCP-Protocol-Version", MCPProtocolVersion)
+
+	// Set Basic auth if using client_secret_basic
+	if cfg.AuthMethod == TokenAuthSecretBasic && cfg.ClientSecret != "" {
+		req.SetBasicAuth(cfg.ClientID, cfg.ClientSecret)
+	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -226,28 +422,77 @@ func doTokenRequest(ctx context.Context, tokenEndpoint string, params url.Values
 	return &tokens, nil
 }
 
+// determineAuthMethod picks the best auth method based on server metadata and client credentials.
+func determineAuthMethod(metadata *AuthorizationServerMetadata, clientSecret string) TokenAuthMethod {
+	if clientSecret == "" {
+		return TokenAuthNone
+	}
+
+	// Check server's supported methods
+	supportedMethods := metadata.TokenEndpointAuthMethods
+	if len(supportedMethods) == 0 {
+		// Default per RFC: client_secret_basic
+		return TokenAuthSecretBasic
+	}
+
+	// Prefer client_secret_post (simpler), fall back to client_secret_basic
+	for _, method := range supportedMethods {
+		if method == "client_secret_post" {
+			return TokenAuthSecretPost
+		}
+	}
+	for _, method := range supportedMethods {
+		if method == "client_secret_basic" {
+			return TokenAuthSecretBasic
+		}
+	}
+
+	// Server doesn't support our methods - try post anyway
+	return TokenAuthSecretPost
+}
+
 // exchangeCode exchanges the authorization code for tokens.
 func (f *Flow) exchangeCode(ctx context.Context, code, redirectURI string) (*TokenResponse, error) {
 	params := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
 		"redirect_uri":  {redirectURI},
-		"client_id":     {f.clientID},
 		"code_verifier": {f.pkce.Verifier},
 	}
 
-	return doTokenRequest(ctx, f.metadata.TokenEndpoint, params)
+	authMethod := determineAuthMethod(f.metadata, f.clientSecret)
+	return doTokenRequest(ctx, TokenRequestConfig{
+		Endpoint:     f.metadata.TokenEndpoint,
+		Params:       params,
+		ClientID:     f.clientID,
+		ClientSecret: f.clientSecret,
+		AuthMethod:   authMethod,
+	})
 }
 
 // RefreshToken refreshes an access token using a refresh token.
-func RefreshToken(ctx context.Context, tokenEndpoint, clientID, refreshToken string) (*TokenResponse, error) {
+// Pass empty clientSecret for public clients.
+func RefreshToken(ctx context.Context, tokenEndpoint, clientID, clientSecret, refreshToken string, metadata *AuthorizationServerMetadata) (*TokenResponse, error) {
 	params := url.Values{
 		"grant_type":    {"refresh_token"},
-		"client_id":     {clientID},
 		"refresh_token": {refreshToken},
 	}
 
-	return doTokenRequest(ctx, tokenEndpoint, params)
+	authMethod := TokenAuthNone
+	if metadata != nil {
+		authMethod = determineAuthMethod(metadata, clientSecret)
+	} else if clientSecret != "" {
+		// Default to client_secret_post if no metadata
+		authMethod = TokenAuthSecretPost
+	}
+
+	return doTokenRequest(ctx, TokenRequestConfig{
+		Endpoint:     tokenEndpoint,
+		Params:       params,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		AuthMethod:   authMethod,
+	})
 }
 
 // openBrowser opens the default browser to a URL.
@@ -324,7 +569,7 @@ func (m *TokenManager) GetAccessToken(ctx context.Context, serverURL string) (st
 	}
 
 	// Refresh the token
-	tokens, err := RefreshToken(ctx, metadata.TokenEndpoint, cred.ClientID, cred.RefreshToken)
+	tokens, err := RefreshToken(ctx, metadata.TokenEndpoint, cred.ClientID, cred.ClientSecret, cred.RefreshToken, metadata)
 	if err != nil {
 		return "", fmt.Errorf("refresh token: %w", err)
 	}

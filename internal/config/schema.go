@@ -39,6 +39,7 @@ type ServerConfig struct {
 	HTTPHeaders       map[string]string `json:"http_headers,omitempty"`         // Static HTTP headers
 	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`     // HTTP headers from env vars (key=header name, value=env var name)
 	Scopes            []string          `json:"scopes,omitempty"`               // OAuth scopes to request
+	OAuthClientID     string            `json:"oauth_client_id,omitempty"`      // Pre-registered OAuth client ID (for servers without dynamic registration)
 
 	// Timeouts (seconds)
 	StartupTimeoutSec int `json:"startup_timeout_sec,omitempty"` // Default 10

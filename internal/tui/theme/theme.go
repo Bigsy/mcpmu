@@ -139,6 +139,9 @@ func (t Theme) StatusPill(state string) string {
 	case "error", "crashed":
 		return pill.Background(lipgloss.Color("#7F1D1D")).
 			Foreground(lipgloss.Color("#FEE2E2")).Render("✖ ERR")
+	case "needs-auth":
+		return pill.Background(lipgloss.Color("#1E3A5F")).
+			Foreground(lipgloss.Color("#BFDBFE")).Render("🔒 LOGIN")
 	default:
 		return pill.Background(lipgloss.Color("#374151")).
 			Foreground(lipgloss.Color("#E5E7EB")).Render("○ " + state)

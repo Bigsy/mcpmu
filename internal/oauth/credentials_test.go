@@ -90,6 +90,17 @@ func TestCredential_Validate(t *testing.T) {
 			},
 			wantErr: "",
 		},
+		{
+			name: "ClientSecret is optional",
+			cred: &Credential{
+				ServerURL:   "https://example.com/mcp",
+				ClientID:    "client-123",
+				AccessToken: "token-abc",
+				ExpiresAt:   time.Now().Add(time.Hour).UnixMilli(),
+				// ClientSecret intentionally omitted
+			},
+			wantErr: "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -116,6 +127,7 @@ func TestNewCredential(t *testing.T) {
 		serverName   string
 		serverURL    string
 		clientID     string
+		clientSecret string
 		accessToken  string
 		refreshToken string
 		expiresAt    time.Time
@@ -127,6 +139,7 @@ func TestNewCredential(t *testing.T) {
 			serverName:   "my-server",
 			serverURL:    "https://example.com/mcp",
 			clientID:     "client-123",
+			clientSecret: "secret-456",
 			accessToken:  "token-abc",
 			refreshToken: "refresh-xyz",
 			expiresAt:    time.Now().Add(time.Hour),
@@ -138,6 +151,19 @@ func TestNewCredential(t *testing.T) {
 			serverName:   "",
 			serverURL:    "https://example.com/mcp",
 			clientID:     "client-123",
+			clientSecret: "",
+			accessToken:  "token-abc",
+			refreshToken: "",
+			expiresAt:    time.Now().Add(time.Hour),
+			scopes:       nil,
+			wantErr:      "",
+		},
+		{
+			name:         "empty clientSecret is OK (public client)",
+			serverName:   "my-server",
+			serverURL:    "https://example.com/mcp",
+			clientID:     "client-123",
+			clientSecret: "",
 			accessToken:  "token-abc",
 			refreshToken: "",
 			expiresAt:    time.Now().Add(time.Hour),
@@ -149,6 +175,7 @@ func TestNewCredential(t *testing.T) {
 			serverName:   "my-server",
 			serverURL:    "",
 			clientID:     "client-123",
+			clientSecret: "",
 			accessToken:  "token-abc",
 			refreshToken: "",
 			expiresAt:    time.Now().Add(time.Hour),
@@ -160,6 +187,7 @@ func TestNewCredential(t *testing.T) {
 			serverName:   "my-server",
 			serverURL:    "https://example.com/mcp",
 			clientID:     "",
+			clientSecret: "",
 			accessToken:  "token-abc",
 			refreshToken: "",
 			expiresAt:    time.Now().Add(time.Hour),
@@ -171,6 +199,7 @@ func TestNewCredential(t *testing.T) {
 			serverName:   "my-server",
 			serverURL:    "https://example.com/mcp",
 			clientID:     "client-123",
+			clientSecret: "",
 			accessToken:  "",
 			refreshToken: "",
 			expiresAt:    time.Now().Add(time.Hour),
@@ -182,6 +211,7 @@ func TestNewCredential(t *testing.T) {
 			serverName:   "my-server",
 			serverURL:    "https://example.com/mcp",
 			clientID:     "client-123",
+			clientSecret: "",
 			accessToken:  "token-abc",
 			refreshToken: "",
 			expiresAt:    time.Time{},
@@ -196,6 +226,7 @@ func TestNewCredential(t *testing.T) {
 				tt.serverName,
 				tt.serverURL,
 				tt.clientID,
+				tt.clientSecret,
 				tt.accessToken,
 				tt.refreshToken,
 				tt.expiresAt,
@@ -219,6 +250,9 @@ func TestNewCredential(t *testing.T) {
 				}
 				if cred.ClientID != tt.clientID {
 					t.Errorf("ClientID = %q, want %q", cred.ClientID, tt.clientID)
+				}
+				if cred.ClientSecret != tt.clientSecret {
+					t.Errorf("ClientSecret = %q, want %q", cred.ClientSecret, tt.clientSecret)
 				}
 				if cred.AccessToken != tt.accessToken {
 					t.Errorf("AccessToken = %q, want %q", cred.AccessToken, tt.accessToken)

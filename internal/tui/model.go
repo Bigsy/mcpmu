@@ -602,6 +602,20 @@ func (m *Model) handleServerListKey(msg tea.KeyMsg) (handled bool, model tea.Mod
 			m.confirmDlg.Show("Delete Server", fmt.Sprintf("Delete server \"%s\"?\nThis cannot be undone.", item.Name), "delete-server")
 		}
 		return true, m, nil
+
+	case key.Matches(msg, m.keys.Login):
+		if item := m.serverList.SelectedItem(); item != nil {
+			// Only allow login for servers in needs-auth state
+			if item.Status.State == events.StateNeedsAuth {
+				go m.loginOAuth(item.Name)
+				return true, m, m.toast.ShowInfo("Opening browser for OAuth login...")
+			} else if !item.Config.IsHTTP() {
+				return true, m, m.toast.ShowError("OAuth login only applies to HTTP servers")
+			} else {
+				return true, m, m.toast.ShowError("Server doesn't need OAuth login")
+			}
+		}
+		return true, m, nil
 	}
 
 	return false, m, nil // Let list handle navigation keys
@@ -623,6 +637,16 @@ func (m *Model) handleServerDetailKey(msg tea.KeyMsg) (handled bool, model tea.M
 	case key.Matches(msg, m.keys.ToggleEnabled):
 		if m.detailServerID != "" {
 			m.toggleServerEnabled(m.detailServerID)
+		}
+		return true, m, nil
+
+	case key.Matches(msg, m.keys.Login):
+		if m.detailServerID != "" {
+			status := m.serverStatuses[m.detailServerID]
+			if status.State == events.StateNeedsAuth {
+				go m.loginOAuth(m.detailServerID)
+				return true, m, m.toast.ShowInfo("Opening browser for OAuth login...")
+			}
 		}
 		return true, m, nil
 	}
@@ -775,6 +799,14 @@ func (m Model) handleConfirmResult(result views.ConfirmResult) (tea.Model, tea.C
 func (m *Model) startServer(name string, srv config.ServerConfig) {
 	// Error will be emitted via event bus, no need to handle here
 	_, _ = m.supervisor.Start(m.ctx, name, srv)
+}
+
+func (m *Model) loginOAuth(name string) {
+	// Run OAuth login flow - errors will be emitted via event bus
+	if err := m.supervisor.LoginOAuth(m.ctx, name); err != nil {
+		log.Printf("OAuth login failed for %s: %v", name, err)
+		m.bus.Publish(events.NewErrorEvent(name, err, fmt.Sprintf("OAuth login failed: %v", err)))
+	}
 }
 
 func (m *Model) toggleServerEnabled(id string) {
@@ -1023,14 +1055,21 @@ func (m Model) renderStatusBar() string {
 	switch m.activeTab {
 	case TabServers:
 		enableHint := "E:enable"
-		if item := m.serverList.SelectedItem(); item != nil && item.Config.IsEnabled() {
-			enableHint = "E:disable"
+		loginHint := ""
+		if item := m.serverList.SelectedItem(); item != nil {
+			if item.Config.IsEnabled() {
+				enableHint = "E:disable"
+			}
+			// Show login hint for servers needing auth
+			if item.Status.State == events.StateNeedsAuth {
+				loginHint = "  L:login"
+			}
 		}
 
 		if m.currentView == ViewList {
-			keys = "enter:view  t:test  " + enableHint + "  a:add  e:edit  d:delete  l:logs  ?:help"
+			keys = "enter:view  t:test  " + enableHint + loginHint + "  a:add  e:edit  d:delete  l:logs  ?:help"
 		} else {
-			keys = "esc:back  t:test  " + enableHint + "  l:logs  ?:help"
+			keys = "esc:back  t:test  " + enableHint + loginHint + "  l:logs  ?:help"
 		}
 	case TabNamespaces:
 		if m.currentView == ViewList {

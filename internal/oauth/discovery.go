@@ -172,3 +172,102 @@ func SupportsOAuth(ctx context.Context, serverURL string) (*AuthorizationServerM
 	}
 	return result.Metadata, nil
 }
+
+// ResourceMetadata holds OAuth Protected Resource Metadata per RFC 9728.
+// This is returned by the resource_metadata URL from WWW-Authenticate header.
+type ResourceMetadata struct {
+	// Resource is the protected resource identifier (URL).
+	Resource string `json:"resource"`
+
+	// AuthorizationServers are the OAuth authorization server URLs.
+	AuthorizationServers []string `json:"authorization_servers"`
+
+	// ScopesSupported are the scopes available for this resource.
+	ScopesSupported []string `json:"scopes_supported,omitempty"`
+
+	// BearerMethodsSupported indicates how bearer tokens can be sent.
+	BearerMethodsSupported []string `json:"bearer_methods_supported,omitempty"`
+
+	// ResourceDocumentation is a URL for human-readable documentation.
+	ResourceDocumentation string `json:"resource_documentation,omitempty"`
+}
+
+// AuthChallenge represents parsed WWW-Authenticate header info.
+// This is used by DiscoverFromChallenge to find the auth server.
+type AuthChallenge struct {
+	ResourceMetadata string
+	Realm            string
+	Scope            string
+}
+
+// DiscoverFromChallenge discovers OAuth metadata from a 401 WWW-Authenticate challenge.
+// This implements RFC 9728 OAuth Protected Resource Metadata flow:
+// 1. Fetch the resource_metadata URL from the challenge
+// 2. Parse authorization_servers from the response
+// 3. Do standard discovery on the authorization server URL
+func DiscoverFromChallenge(ctx context.Context, challenge *AuthChallenge) (*DiscoverResult, error) {
+	if challenge == nil || challenge.ResourceMetadata == "" {
+		return nil, errors.New("no resource_metadata in challenge")
+	}
+
+	// Step 1: Fetch resource metadata
+	resourceMeta, err := fetchResourceMetadata(ctx, challenge.ResourceMetadata)
+	if err != nil {
+		return nil, fmt.Errorf("fetch resource metadata: %w", err)
+	}
+
+	if len(resourceMeta.AuthorizationServers) == 0 {
+		return nil, errors.New("resource metadata has no authorization_servers")
+	}
+
+	// Step 2: Do standard discovery on the authorization server URL
+	// Try each authorization server in order
+	var lastErr error
+	for _, authServerURL := range resourceMeta.AuthorizationServers {
+		result, err := Discover(ctx, authServerURL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return result, nil
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("discovery on auth servers failed: %w", lastErr)
+	}
+	return nil, errors.New("no valid authorization server found")
+}
+
+// fetchResourceMetadata fetches and parses OAuth Protected Resource Metadata (RFC 9728).
+func fetchResourceMetadata(ctx context.Context, metadataURL string) (*ResourceMetadata, error) {
+	client := &http.Client{Timeout: DiscoveryTimeout}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", metadataURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	var metadata ResourceMetadata
+	if err := json.Unmarshal(body, &metadata); err != nil {
+		return nil, fmt.Errorf("parse metadata: %w", err)
+	}
+
+	return &metadata, nil
+}

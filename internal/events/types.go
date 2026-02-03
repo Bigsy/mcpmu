@@ -17,6 +17,7 @@ const (
 	StateStopped
 	StateError
 	StateCrashed
+	StateNeedsAuth // Server requires OAuth login before connecting
 )
 
 func (s RuntimeState) String() string {
@@ -35,6 +36,8 @@ func (s RuntimeState) String() string {
 		return "error"
 	case StateCrashed:
 		return "crashed"
+	case StateNeedsAuth:
+		return "needs-auth"
 	default:
 		return "unknown"
 	}
