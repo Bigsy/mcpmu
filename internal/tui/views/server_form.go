@@ -36,20 +36,22 @@ type ServerFormModel struct {
 	originalName   string // Original name for edit mode (to detect rename)
 
 	// Form field values
-	name string
-	command   string
-	args      string
-	cwd       string
-	env       string
-	autostart bool
+	name              string
+	commandOrURL      string // Auto-detected: http(s):// = HTTP server, else = stdio command
+	args              string // Only used for stdio
+	cwd               string
+	env               string
+	bearerTokenEnvVar string // Only used for HTTP
+	autostart         bool
 
 	// Initial values for dirty checking
-	initialName      string
-	initialCommand   string
-	initialArgs      string
-	initialCwd       string
-	initialEnv       string
-	initialAutostart bool
+	initialName              string
+	initialCommandOrURL      string
+	initialArgs              string
+	initialCwd               string
+	initialEnv               string
+	initialBearerTokenEnvVar string
+	initialAutostart         bool
 
 	// Confirm discard state
 	showConfirmDiscard bool
@@ -78,17 +80,19 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.originalServer = nil
 	m.originalName = ""
 	m.name = ""
-	m.command = ""
+	m.commandOrURL = ""
 	m.args = ""
 	m.cwd = ""
 	m.env = ""
+	m.bearerTokenEnvVar = ""
 	m.autostart = false
 	// Save initial values for dirty checking
 	m.initialName = ""
-	m.initialCommand = ""
+	m.initialCommandOrURL = ""
 	m.initialArgs = ""
 	m.initialCwd = ""
 	m.initialEnv = ""
+	m.initialBearerTokenEnvVar = ""
 	m.initialAutostart = false
 	m.buildForm()
 	return m.form.Init()
@@ -100,20 +104,31 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	m.visible = true
 	m.isEdit = true
 	m.showConfirmDiscard = false
-	m.originalServer = &srv  // Preserve original for non-form fields
-	m.originalName = name    // Remember original name for rename detection
+	m.originalServer = &srv // Preserve original for non-form fields
+	m.originalName = name   // Remember original name for rename detection
 	m.name = name
-	m.command = srv.Command
-	m.args = formatArgs(srv.Args) // Properly quote args with spaces
+
+	// Determine if this is an HTTP or stdio server and populate accordingly
+	if srv.URL != "" {
+		m.commandOrURL = srv.URL
+		m.args = ""
+		m.bearerTokenEnvVar = srv.BearerTokenEnvVar
+	} else {
+		m.commandOrURL = srv.Command
+		m.args = formatArgs(srv.Args) // Properly quote args with spaces
+		m.bearerTokenEnvVar = ""
+	}
 	m.cwd = srv.Cwd
 	m.env = formatEnvVars(srv.Env)
 	m.autostart = srv.Autostart
+
 	// Save initial values for dirty checking
 	m.initialName = m.name
-	m.initialCommand = m.command
+	m.initialCommandOrURL = m.commandOrURL
 	m.initialArgs = m.args
 	m.initialCwd = m.cwd
 	m.initialEnv = m.env
+	m.initialBearerTokenEnvVar = m.bearerTokenEnvVar
 	m.initialAutostart = m.autostart
 	m.buildForm()
 	return m.form.Init()
@@ -148,21 +163,18 @@ func (m *ServerFormModel) buildForm() {
 				Description("Display name for the server").
 				Value(&m.name).
 				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return nil // Name is optional
-					}
-					return nil
+					return nil // Name is optional
 				}),
 
 			huh.NewInput().
-				Title("Command").
-				Description("The command to run (required)").
-				Value(&m.command).
+				Title("Command or URL").
+				Description("Command to run, or https:// URL for HTTP server").
+				Value(&m.commandOrURL).
 				Validate(huh.ValidateNotEmpty()),
 
 			huh.NewInput().
 				Title("Arguments").
-				Description("Space-separated arguments").
+				Description("Space-separated args (for commands only)").
 				Value(&m.args),
 
 			huh.NewInput().
@@ -176,6 +188,11 @@ func (m *ServerFormModel) buildForm() {
 				Value(&m.env).
 				CharLimit(1000).
 				Lines(3),
+
+			huh.NewInput().
+				Title("Bearer Token Env Var").
+				Description("Env var name for bearer auth (HTTP only, optional)").
+				Value(&m.bearerTokenEnvVar),
 
 			huh.NewConfirm().
 				Title("Autostart").
@@ -192,10 +209,11 @@ func (m *ServerFormModel) buildForm() {
 // isDirty returns true if any form values have changed from their initial values.
 func (m *ServerFormModel) isDirty() bool {
 	return m.name != m.initialName ||
-		m.command != m.initialCommand ||
+		m.commandOrURL != m.initialCommandOrURL ||
 		m.args != m.initialArgs ||
 		m.cwd != m.initialCwd ||
 		m.env != m.initialEnv ||
+		m.bearerTokenEnvVar != m.initialBearerTokenEnvVar ||
 		m.autostart != m.initialAutostart
 }
 
@@ -314,18 +332,40 @@ func (m *ServerFormModel) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+// isHTTPURL returns true if the string looks like an HTTP(S) URL.
+func isHTTPURL(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
 func (m ServerFormModel) buildServerConfig() config.ServerConfig {
 	var srv config.ServerConfig
 
 	// For edit mode, start with the original to preserve non-form fields
-	// (Enabled, Kind, URL, Headers, OAuth fields, etc.)
+	// (Enabled, Kind, Headers, OAuth fields, Scopes, etc.)
 	if m.isEdit && m.originalServer != nil {
 		srv = *m.originalServer
 	}
 
-	// Override with form values
-	srv.Command = strings.TrimSpace(m.command)
-	srv.Args = parseArgs(m.args)
+	commandOrURL := strings.TrimSpace(m.commandOrURL)
+
+	// Auto-detect server type based on input
+	if isHTTPURL(commandOrURL) {
+		// HTTP server
+		srv.URL = commandOrURL
+		srv.Command = ""
+		srv.Args = nil
+		srv.BearerTokenEnvVar = strings.TrimSpace(m.bearerTokenEnvVar)
+		srv.Kind = config.ServerKindStreamableHTTP
+	} else {
+		// Stdio server
+		srv.Command = commandOrURL
+		srv.Args = parseArgs(m.args)
+		srv.URL = ""
+		srv.BearerTokenEnvVar = ""
+		srv.Kind = config.ServerKindStdio
+	}
+
 	srv.Cwd = strings.TrimSpace(m.cwd)
 	srv.Env = parseEnvVars(m.env)
 	srv.Autostart = m.autostart
@@ -333,13 +373,39 @@ func (m ServerFormModel) buildServerConfig() config.ServerConfig {
 	return srv
 }
 
-// getName returns the server name, using command as fallback for new servers
+// getName returns the server name, using command/URL as fallback for new servers
 func (m ServerFormModel) getName() string {
 	name := strings.TrimSpace(m.name)
-	if name == "" {
-		return strings.TrimSpace(m.command)
+	if name != "" {
+		return name
 	}
-	return name
+
+	// Fallback: derive name from command or URL
+	commandOrURL := strings.TrimSpace(m.commandOrURL)
+	if isHTTPURL(commandOrURL) {
+		// Extract hostname from URL as name
+		// e.g., "https://mcp.sentry.dev/mcp" -> "sentry"
+		s := strings.TrimPrefix(commandOrURL, "https://")
+		s = strings.TrimPrefix(s, "http://")
+		// Get hostname part
+		if idx := strings.Index(s, "/"); idx > 0 {
+			s = s[:idx]
+		}
+		// Try to extract a meaningful name from subdomain
+		// "mcp.sentry.dev" -> "sentry"
+		parts := strings.Split(s, ".")
+		if len(parts) >= 2 {
+			// Skip "mcp" prefix if present
+			if parts[0] == "mcp" && len(parts) >= 3 {
+				return parts[1]
+			}
+			return parts[0]
+		}
+		return s
+	}
+
+	// For commands, use the command itself
+	return commandOrURL
 }
 
 // View renders the form.
