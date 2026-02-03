@@ -100,11 +100,6 @@ func (m *NamespaceFormModel) ShowEdit(name string, ns config.NamespaceConfig) te
 }
 
 func (m *NamespaceFormModel) buildForm() {
-	title := "Add Namespace"
-	if m.isEdit {
-		title = "Edit Namespace"
-	}
-
 	keymap := huh.NewDefaultKeyMap()
 	keymap.Input.Prev.SetKeys("up", "shift+tab")
 	keymap.Input.Next.SetKeys("down", "tab")
@@ -113,12 +108,14 @@ func (m *NamespaceFormModel) buildForm() {
 	keymap.Confirm.Prev.SetKeys("up", "shift+tab")
 	keymap.Confirm.Next.SetKeys("down", "tab")
 
+	// Custom theme with orange titles
+	formTheme := huh.ThemeBase16()
+	orange := lipgloss.AdaptiveColor{Light: "#EA580C", Dark: "#FB923C"}
+	formTheme.Focused.Title = formTheme.Focused.Title.Foreground(orange)
+	formTheme.Blurred.Title = formTheme.Blurred.Title.Foreground(orange)
+
 	m.form = huh.NewForm(
 		huh.NewGroup(
-			huh.NewNote().
-				Title(title).
-				Description("Configure a namespace for grouping servers"),
-
 			huh.NewInput().
 				Title("Name").
 				Description("Display name for the namespace (required)").
@@ -137,7 +134,7 @@ func (m *NamespaceFormModel) buildForm() {
 				Description("Block tools without explicit permission").
 				Value(&m.denyByDefault),
 		),
-	).WithTheme(huh.ThemeBase16()).
+	).WithTheme(formTheme).
 		WithWidth(60).
 		WithShowHelp(true).
 		WithShowErrors(true).

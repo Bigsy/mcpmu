@@ -42,7 +42,6 @@ type ServerFormModel struct {
 	cwd               string
 	env               string
 	bearerTokenEnvVar string // Only used for HTTP
-	autostart         bool
 
 	// Initial values for dirty checking
 	initialName              string
@@ -51,7 +50,6 @@ type ServerFormModel struct {
 	initialCwd               string
 	initialEnv               string
 	initialBearerTokenEnvVar string
-	initialAutostart         bool
 
 	// Confirm discard state
 	showConfirmDiscard bool
@@ -85,7 +83,6 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.cwd = ""
 	m.env = ""
 	m.bearerTokenEnvVar = ""
-	m.autostart = false
 	// Save initial values for dirty checking
 	m.initialName = ""
 	m.initialCommandOrURL = ""
@@ -93,7 +90,6 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.initialCwd = ""
 	m.initialEnv = ""
 	m.initialBearerTokenEnvVar = ""
-	m.initialAutostart = false
 	m.buildForm()
 	return m.form.Init()
 }
@@ -120,7 +116,6 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	}
 	m.cwd = srv.Cwd
 	m.env = formatEnvVars(srv.Env)
-	m.autostart = srv.Autostart
 
 	// Save initial values for dirty checking
 	m.initialName = m.name
@@ -129,17 +124,11 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	m.initialCwd = m.cwd
 	m.initialEnv = m.env
 	m.initialBearerTokenEnvVar = m.bearerTokenEnvVar
-	m.initialAutostart = m.autostart
 	m.buildForm()
 	return m.form.Init()
 }
 
 func (m *ServerFormModel) buildForm() {
-	title := "Add Server"
-	if m.isEdit {
-		title = "Edit Server"
-	}
-
 	// Custom keymap to add arrow key navigation
 	keymap := huh.NewDefaultKeyMap()
 	// Add up/down arrow navigation to Input fields
@@ -152,12 +141,14 @@ func (m *ServerFormModel) buildForm() {
 	keymap.Confirm.Prev.SetKeys("up", "shift+tab")
 	keymap.Confirm.Next.SetKeys("down", "tab")
 
+	// Custom theme with orange titles
+	formTheme := huh.ThemeBase16()
+	orange := lipgloss.AdaptiveColor{Light: "#EA580C", Dark: "#FB923C"}
+	formTheme.Focused.Title = formTheme.Focused.Title.Foreground(orange)
+	formTheme.Blurred.Title = formTheme.Blurred.Title.Foreground(orange)
+
 	m.form = huh.NewForm(
 		huh.NewGroup(
-			huh.NewNote().
-				Title(title).
-				Description("Configure an MCP server (↑/↓ to navigate)"),
-
 			huh.NewInput().
 				Title("Name").
 				Description("Display name for the server").
@@ -187,19 +178,14 @@ func (m *ServerFormModel) buildForm() {
 				Description("One per line: KEY=value").
 				Value(&m.env).
 				CharLimit(1000).
-				Lines(3),
+				Lines(2),
 
 			huh.NewInput().
 				Title("Bearer Token Env Var").
 				Description("Env var name for bearer auth (HTTP only, optional)").
 				Value(&m.bearerTokenEnvVar),
-
-			huh.NewConfirm().
-				Title("Autostart").
-				Description("Start this server automatically on app launch").
-				Value(&m.autostart),
 		),
-	).WithTheme(huh.ThemeBase16()).
+	).WithTheme(formTheme).
 		WithWidth(60).
 		WithShowHelp(true).
 		WithShowErrors(true).
@@ -213,8 +199,7 @@ func (m *ServerFormModel) isDirty() bool {
 		m.args != m.initialArgs ||
 		m.cwd != m.initialCwd ||
 		m.env != m.initialEnv ||
-		m.bearerTokenEnvVar != m.initialBearerTokenEnvVar ||
-		m.autostart != m.initialAutostart
+		m.bearerTokenEnvVar != m.initialBearerTokenEnvVar
 }
 
 // Hide hides the form.
@@ -368,7 +353,7 @@ func (m ServerFormModel) buildServerConfig() config.ServerConfig {
 
 	srv.Cwd = strings.TrimSpace(m.cwd)
 	srv.Env = parseEnvVars(m.env)
-	srv.Autostart = m.autostart
+	// Autostart preserved from original in edit mode, defaults to false for new servers
 
 	return srv
 }
