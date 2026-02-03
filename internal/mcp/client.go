@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,8 +25,9 @@ type Client struct {
 	closed    bool
 
 	// Server info from initialization
-	serverName    string
-	serverVersion string
+	serverName        string
+	serverVersion     string
+	protocolVersion   string // Negotiated protocol version
 }
 
 // rpcRequest is a JSON-RPC 2.0 request.
@@ -92,30 +94,67 @@ func NewClient(transport Transport) *Client {
 }
 
 // Initialize performs the MCP initialization handshake.
+// For stdio transports, it tries protocol versions in order until one is accepted.
+// For HTTP transports, version negotiation is handled by the transport layer.
 func (c *Client) Initialize(ctx context.Context) error {
-	params := initializeParams{
-		ProtocolVersion: "2024-11-05",
-		Capabilities:    map[string]any{},
-		ClientInfo: clientInfo{
-			Name:    "mcpmu-go",
-			Version: "0.1.0",
-		},
+	// Try each supported version until one works
+	var lastErr error
+	for _, version := range SupportedProtocolVersions {
+		params := initializeParams{
+			ProtocolVersion: version,
+			Capabilities:    map[string]any{},
+			ClientInfo: clientInfo{
+				Name:    "mcpmu-go",
+				Version: "0.1.0",
+			},
+		}
+
+		var result initializeResult
+		err := c.call(ctx, "initialize", params, &result)
+		if err != nil {
+			// Check if this is a version rejection error
+			if isProtocolVersionError(err) {
+				lastErr = err
+				continue // Try next version
+			}
+			// Other errors are fatal
+			return fmt.Errorf("initialize: %w", err)
+		}
+
+		// Success!
+		c.serverName = result.ServerInfo.Name
+		c.serverVersion = result.ServerInfo.Version
+		c.protocolVersion = version
+
+		// Send initialized notification
+		if err := c.notify(ctx, "notifications/initialized", nil); err != nil {
+			return fmt.Errorf("initialized notification: %w", err)
+		}
+
+		return nil
 	}
 
-	var result initializeResult
-	if err := c.call(ctx, "initialize", params, &result); err != nil {
-		return fmt.Errorf("initialize: %w", err)
+	if lastErr != nil {
+		return fmt.Errorf("all protocol versions rejected: %w", lastErr)
 	}
+	return fmt.Errorf("initialize: no protocol versions to try")
+}
 
-	c.serverName = result.ServerInfo.Name
-	c.serverVersion = result.ServerInfo.Version
-
-	// Send initialized notification
-	if err := c.notify(ctx, "notifications/initialized", nil); err != nil {
-		return fmt.Errorf("initialized notification: %w", err)
+// isProtocolVersionError checks if an error indicates a protocol version rejection.
+func isProtocolVersionError(err error) bool {
+	if err == nil {
+		return false
 	}
+	errStr := err.Error()
+	// Common patterns in version rejection errors
+	return strings.Contains(errStr, "protocol") && strings.Contains(errStr, "version") ||
+		strings.Contains(errStr, "protocolVersion") ||
+		strings.Contains(errStr, "unsupported version")
+}
 
-	return nil
+// ProtocolVersion returns the negotiated protocol version.
+func (c *Client) ProtocolVersion() string {
+	return c.protocolVersion
 }
 
 // ListTools retrieves the list of tools from the server.

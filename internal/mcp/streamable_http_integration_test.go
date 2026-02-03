@@ -283,8 +283,158 @@ func TestStreamableHTTPTransport_MCPProtocolVersion(t *testing.T) {
 	ctx := context.Background()
 	_ = transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`))
 
-	if receivedVersion != MCPProtocolVersion {
-		t.Errorf("expected MCP-Protocol-Version %q, got %q", MCPProtocolVersion, receivedVersion)
+	// Server accepts all versions, so we should get the first (newest) version
+	expectedVersion := SupportedProtocolVersions[0]
+	if receivedVersion != expectedVersion {
+		t.Errorf("expected MCP-Protocol-Version %q, got %q", expectedVersion, receivedVersion)
+	}
+
+	// Verify version was negotiated
+	if transport.NegotiatedVersion() != expectedVersion {
+		t.Errorf("expected negotiated version %q, got %q", expectedVersion, transport.NegotiatedVersion())
+	}
+}
+
+func TestStreamableHTTPTransport_VersionNegotiation_Fallback(t *testing.T) {
+	// Simulate a server that only accepts the legacy version (2024-11-05)
+	// This tests the automatic fallback behavior
+	var attemptedVersions []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		version := r.Header.Get("MCP-Protocol-Version")
+		attemptedVersions = append(attemptedVersions, version)
+
+		// Reject all versions except the legacy one
+		if version != "2024-11-05" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, `{"error":"Unsupported MCP-Protocol-Version: %s"}`, version)
+			return
+		}
+
+		// Accept legacy version
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+	}))
+	defer server.Close()
+
+	config := StreamableHTTPConfig{URL: server.URL}
+	transport := NewStreamableHTTPTransport(config)
+
+	ctx := context.Background()
+	err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`))
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+
+	// Should have tried all versions until finding 2024-11-05
+	if len(attemptedVersions) != len(SupportedProtocolVersions) {
+		t.Errorf("expected %d version attempts, got %d: %v",
+			len(SupportedProtocolVersions), len(attemptedVersions), attemptedVersions)
+	}
+
+	// Should have negotiated the legacy version
+	if transport.NegotiatedVersion() != "2024-11-05" {
+		t.Errorf("expected negotiated version '2024-11-05', got %q", transport.NegotiatedVersion())
+	}
+
+	// Subsequent requests should use the negotiated version directly
+	attemptedVersions = nil
+	err = transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":2,"method":"test"}`))
+	if err != nil {
+		t.Fatalf("Second Send failed: %v", err)
+	}
+
+	if len(attemptedVersions) != 1 {
+		t.Errorf("expected 1 version attempt on subsequent request, got %d", len(attemptedVersions))
+	}
+	if attemptedVersions[0] != "2024-11-05" {
+		t.Errorf("expected version '2024-11-05' on subsequent request, got %q", attemptedVersions[0])
+	}
+}
+
+func TestStreamableHTTPTransport_VersionNegotiation_AllRejected(t *testing.T) {
+	// Simulate a server that rejects all versions
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		version := r.Header.Get("MCP-Protocol-Version")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, `{"error":"Unsupported protocol version: %s"}`, version)
+	}))
+	defer server.Close()
+
+	config := StreamableHTTPConfig{URL: server.URL}
+	transport := NewStreamableHTTPTransport(config)
+
+	ctx := context.Background()
+	err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`))
+
+	if err == nil {
+		t.Fatal("expected error when all versions are rejected")
+	}
+	if !strings.Contains(err.Error(), "all protocol versions rejected") {
+		t.Errorf("expected 'all protocol versions rejected' error, got: %v", err)
+	}
+}
+
+func TestStreamableHTTPTransport_VersionNegotiation_LenientThenStrict(t *testing.T) {
+	// Simulate a server like Sentry that is lenient on first request but strict on subsequent
+	// First request accepts any version, second request only accepts specific versions
+	var requestCount int
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		version := r.Header.Get("MCP-Protocol-Version")
+		mu.Lock()
+		requestCount++
+		count := requestCount
+		mu.Unlock()
+
+		if count == 1 {
+			// First request: accept any version (lenient)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}`)
+			return
+		}
+
+		// Subsequent requests: only accept 2025-06-18 or 2025-03-26
+		if version != "2025-06-18" && version != "2025-03-26" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","error":{"code":-32000,"message":"Unsupported MCP-Protocol-Version: %s. Supported versions: 2025-03-26, 2025-06-18"}}`, version)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{}}`, count)
+	}))
+	defer server.Close()
+
+	config := StreamableHTTPConfig{URL: server.URL}
+	transport := NewStreamableHTTPTransport(config)
+
+	ctx := context.Background()
+
+	// First request succeeds (server is lenient)
+	err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`))
+	if err != nil {
+		t.Fatalf("First request failed: %v", err)
+	}
+
+	// Read the response
+	_, err = transport.Receive(ctx)
+	if err != nil {
+		t.Fatalf("Receive first response failed: %v", err)
+	}
+
+	// Second request: server is now strict, should re-negotiate
+	err = transport.Send(ctx, []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
+	if err != nil {
+		t.Fatalf("Second request failed: %v", err)
+	}
+
+	// Check that we negotiated to a supported version
+	negotiated := transport.NegotiatedVersion()
+	if negotiated != "2025-06-18" && negotiated != "2025-03-26" {
+		t.Errorf("expected negotiated version to be 2025-06-18 or 2025-03-26, got %q", negotiated)
 	}
 }
 

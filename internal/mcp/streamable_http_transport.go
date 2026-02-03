@@ -30,10 +30,17 @@ const (
 
 	// SSEReconnectMaxDelay is the maximum delay for SSE reconnection.
 	SSEReconnectMaxDelay = 30 * time.Second
-
-	// MCPProtocolVersion is the MCP protocol version to advertise.
-	MCPProtocolVersion = "2024-11-05"
 )
+
+// SupportedProtocolVersions lists the MCP protocol versions we support,
+// in order of preference (newest first). During connection, we try each
+// version until one is accepted by the server.
+var SupportedProtocolVersions = []string{
+	"2025-11-25", // current
+	"2025-06-18",
+	"2025-03-26",
+	"2024-11-05", // legacy fallback
+}
 
 // StreamableHTTPConfig holds configuration for the HTTP transport.
 type StreamableHTTPConfig struct {
@@ -58,9 +65,10 @@ type StreamableHTTPTransport struct {
 	rpcClient *http.Client // Client for POST requests (with timeout)
 
 	// Session state
-	sessionID   string
-	endpointURL string // POST endpoint URL (may include session ID query param)
-	lastEventID string
+	sessionID         string
+	endpointURL       string // POST endpoint URL (may include session ID query param)
+	lastEventID       string
+	negotiatedVersion string // Protocol version negotiated with server
 
 	// SSE stream
 	sseCancel context.CancelFunc
@@ -126,6 +134,8 @@ func (t *StreamableHTTPTransport) Connect(ctx context.Context) error {
 }
 
 // Send sends a JSON-RPC message via HTTP POST.
+// On version rejection (400 with "Unsupported MCP-Protocol-Version"), it automatically
+// retries with the next supported version until one is accepted.
 func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 	t.mu.Lock()
 	if t.closed {
@@ -134,6 +144,7 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 	}
 	sessionID := t.sessionID
 	endpointURL := t.endpointURL
+	negotiatedVersion := t.negotiatedVersion
 	t.mu.Unlock()
 
 	log.Printf("HTTP Send: %s", string(msg))
@@ -160,88 +171,174 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", postURL, bytes.NewReader(msg))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	t.setCommonHeaders(req)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-
-	// Also set session ID header for servers that expect it there (Streamable HTTP protocol)
-	if sessionID != "" {
-		req.Header.Set("Mcp-Session-Id", sessionID)
-	}
-
-	resp, err := t.rpcClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("send request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Capture session ID from response
-	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
-		t.mu.Lock()
-		t.sessionID = sid
-		t.mu.Unlock()
-	}
-
-	// Check response status
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		if resp.StatusCode == http.StatusUnauthorized {
-			return errors.New("unauthorized - authentication required")
-		}
-		return fmt.Errorf("request failed: %s - %s", resp.Status, string(body))
-	}
-
-	// Handle response based on content type
-	contentType := resp.Header.Get("Content-Type")
-	if strings.HasPrefix(contentType, "text/event-stream") {
-		// Response is streamed via SSE - read any inline events
-		scanner := newSSEScanner(resp.Body, MaxSSEEventSize)
-		for {
-			event, err := scanner.Next()
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				return fmt.Errorf("read SSE response: %w", err)
-			}
-			if event.ID != "" {
-				t.mu.Lock()
-				t.lastEventID = event.ID
-				t.mu.Unlock()
-			}
-			if len(event.Data) > 0 && (event.Event == "" || event.Event == "message") {
-				select {
-				case <-t.done:
-					return errors.New("transport closed")
-				case t.msgQueue <- event.Data:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
+	// Determine which versions to try
+	versionsToTry := SupportedProtocolVersions
+	startIdx := 0
+	if negotiatedVersion != "" {
+		// Already negotiated - start from that version but allow fallback if rejected
+		for i, v := range SupportedProtocolVersions {
+			if v == negotiatedVersion {
+				startIdx = i
+				break
 			}
 		}
-	} else if strings.HasPrefix(contentType, "application/json") {
-		// Direct JSON response - queue it
-		body, err := io.ReadAll(resp.Body)
+		versionsToTry = SupportedProtocolVersions[startIdx:]
+	}
+
+	var lastErr error
+	for i, version := range versionsToTry {
+		req, err := http.NewRequestWithContext(ctx, "POST", postURL, bytes.NewReader(msg))
 		if err != nil {
-			return fmt.Errorf("read response: %w", err)
+			return fmt.Errorf("create request: %w", err)
 		}
-		if len(body) > 0 {
-			log.Printf("HTTP Recv: %s", string(body))
+
+		t.setCommonHeaders(req, version)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+
+		// Also set session ID header for servers that expect it there (Streamable HTTP protocol)
+		if sessionID != "" {
+			req.Header.Set("Mcp-Session-Id", sessionID)
+		}
+
+		resp, err := t.rpcClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("send request: %w", err)
+		}
+
+		// Check for version rejection (400 Bad Request with version error)
+		// Allow re-negotiation even if we thought we had a version, since some servers
+		// are lenient on first request but strict on subsequent requests
+		if resp.StatusCode == http.StatusBadRequest {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			_ = resp.Body.Close()
+			bodyStr := string(body)
+
+			// Check if this is a version rejection
+			if isVersionRejection(bodyStr) {
+				log.Printf("HTTP version %s rejected by server, trying next version", version)
+				lastErr = fmt.Errorf("version %s rejected: %s", version, bodyStr)
+
+				// Clear the negotiated version since it was wrong
+				if negotiatedVersion != "" {
+					t.mu.Lock()
+					t.negotiatedVersion = ""
+					t.mu.Unlock()
+					negotiatedVersion = ""
+				}
+
+				// Try next version
+				if i < len(versionsToTry)-1 {
+					continue
+				}
+				return fmt.Errorf("all protocol versions rejected by server: %w", lastErr)
+			}
+
+			// Not a version rejection - return the error
+			return fmt.Errorf("request failed: %s - %s", resp.Status, bodyStr)
+		}
+
+		// Capture session ID from response
+		if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
+			t.mu.Lock()
+			t.sessionID = sid
+			t.mu.Unlock()
+		}
+
+		// Check response status
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusUnauthorized {
+				return errors.New("unauthorized - authentication required")
+			}
+			return fmt.Errorf("request failed: %s - %s", resp.Status, string(body))
+		}
+
+		// Success! Store the negotiated version
+		if negotiatedVersion == "" || negotiatedVersion != version {
+			t.mu.Lock()
+			t.negotiatedVersion = version
+			t.mu.Unlock()
+			log.Printf("HTTP negotiated protocol version: %s", version)
+		}
+
+		// Handle response based on content type
+		contentType := resp.Header.Get("Content-Type")
+		if strings.HasPrefix(contentType, "text/event-stream") {
+			// Response is streamed via SSE - read any inline events
+			err = t.handleSSEResponse(ctx, resp.Body)
+			_ = resp.Body.Close()
+			return err
+		} else if strings.HasPrefix(contentType, "application/json") {
+			// Direct JSON response - queue it
+			err = t.handleJSONResponse(ctx, resp.Body)
+			_ = resp.Body.Close()
+			return err
+		}
+
+		_ = resp.Body.Close()
+		return nil
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+	return errors.New("no protocol versions to try")
+}
+
+// isVersionRejection checks if an error response indicates a protocol version rejection.
+func isVersionRejection(body string) bool {
+	bodyLower := strings.ToLower(body)
+	return strings.Contains(bodyLower, "unsupported") && strings.Contains(bodyLower, "version") ||
+		strings.Contains(bodyLower, "protocol-version") ||
+		strings.Contains(bodyLower, "protocolversion")
+}
+
+// handleSSEResponse processes an SSE stream response.
+func (t *StreamableHTTPTransport) handleSSEResponse(ctx context.Context, body io.Reader) error {
+	scanner := newSSEScanner(body, MaxSSEEventSize)
+	for {
+		event, err := scanner.Next()
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return fmt.Errorf("read SSE response: %w", err)
+		}
+		if event.ID != "" {
+			t.mu.Lock()
+			t.lastEventID = event.ID
+			t.mu.Unlock()
+		}
+		if len(event.Data) > 0 && (event.Event == "" || event.Event == "message") {
 			select {
 			case <-t.done:
 				return errors.New("transport closed")
-			case t.msgQueue <- body:
+			case t.msgQueue <- event.Data:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		}
 	}
+}
 
+// handleJSONResponse processes a JSON response.
+func (t *StreamableHTTPTransport) handleJSONResponse(ctx context.Context, body io.Reader) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+	if len(data) > 0 {
+		log.Printf("HTTP Recv: %s", string(data))
+		select {
+		case <-t.done:
+			return errors.New("transport closed")
+		case t.msgQueue <- data:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return nil
 }
 
@@ -312,8 +409,8 @@ func (t *StreamableHTTPTransport) SessionID() string {
 }
 
 // setCommonHeaders sets headers common to all requests.
-func (t *StreamableHTTPTransport) setCommonHeaders(req *http.Request) {
-	req.Header.Set("MCP-Protocol-Version", MCPProtocolVersion)
+func (t *StreamableHTTPTransport) setCommonHeaders(req *http.Request, version string) {
+	req.Header.Set("MCP-Protocol-Version", version)
 
 	// Bearer token auth
 	if t.config.BearerToken != "" {
@@ -324,6 +421,14 @@ func (t *StreamableHTTPTransport) setCommonHeaders(req *http.Request) {
 	for k, v := range t.config.HTTPHeaders {
 		req.Header.Set(k, v)
 	}
+}
+
+// NegotiatedVersion returns the protocol version negotiated with the server.
+// Returns empty string if no version has been negotiated yet.
+func (t *StreamableHTTPTransport) NegotiatedVersion() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.negotiatedVersion
 }
 
 // sseEvent represents a single SSE event.
