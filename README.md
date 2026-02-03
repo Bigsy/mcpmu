@@ -143,12 +143,22 @@ mcpmu serve -n work --log-level debug --eager  # pre-start all servers
 - `-l, --log-level` - log level: debug, info, warn, error (default: info)
 - `--eager` - pre-start all servers on init (default: lazy start)
 
-Example entry for Claude Code:
+Example entry for Claude Code (minimal):
 ```json
 {
   "mcpmu": {
     "command": "mcpmu",
-    "args": ["serve", "--stdio", "--config", "~/.config/mcpmu/config.json", "--namespace", "default"]
+    "args": ["serve", "--stdio"]
+  }
+}
+```
+
+With explicit namespace:
+```json
+{
+  "mcpmu": {
+    "command": "mcpmu",
+    "args": ["serve", "--stdio", "-n", "work"]
   }
 }
 ```
@@ -162,14 +172,24 @@ Default config path: `~/.config/mcpmu/config.json`
 {
   "servers": {
     "filesystem": {
-      "id": "filesystem",
-      "name": "Filesystem",
-      "kind": "stdio",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-      "cwd": "",
-      "env": {},
-      "autostart": false
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    }
+  }
+}
+```
+
+With optional fields:
+```json
+{
+  "servers": {
+    "myserver": {
+      "command": "./server",
+      "args": ["--flag"],
+      "cwd": "/path/to/dir",
+      "env": {"FOO": "bar"},
+      "autostart": true,
+      "enabled": false
     }
   }
 }
@@ -180,11 +200,20 @@ Default config path: `~/.config/mcpmu/config.json`
 {
   "servers": {
     "figma": {
-      "id": "figma",
-      "name": "Figma",
-      "kind": "streamable_http",
       "url": "https://mcp.figma.com/mcp",
-      "bearer_token_env_var": "FIGMA_TOKEN",
+      "bearer_token_env_var": "FIGMA_TOKEN"
+    }
+  }
+}
+```
+
+With optional fields:
+```json
+{
+  "servers": {
+    "myapi": {
+      "url": "https://example.com/mcp",
+      "bearer_token_env_var": "API_TOKEN",
       "http_headers": {
         "X-Custom-Header": "value"
       },
