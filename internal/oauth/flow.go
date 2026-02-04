@@ -199,12 +199,14 @@ func (f *Flow) discoverViaChallenge(ctx context.Context) (*DiscoverResult, error
 	// Send a request to trigger a 401
 	client := &http.Client{Timeout: DiscoveryTimeout}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", f.config.ServerURL, strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","id":1}`))
+	// Send a proper MCP initialize request shape to ensure servers return the expected 401
+	req, err := http.NewRequestWithContext(ctx, "POST", f.config.ServerURL, strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"mcpmu","version":"1.0.0"},"capabilities":{}}}`))
 	if err != nil {
 		return nil, fmt.Errorf("create challenge request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("MCP-Protocol-Version", MCPProtocolVersion)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -217,106 +219,18 @@ func (f *Flow) discoverViaChallenge(ctx context.Context) (*DiscoverResult, error
 		return nil, fmt.Errorf("expected 401, got %d", resp.StatusCode)
 	}
 
-	// Parse WWW-Authenticate header
-	wwwAuth := resp.Header.Get("WWW-Authenticate")
-	if wwwAuth == "" {
-		return nil, fmt.Errorf("no WWW-Authenticate header in 401 response")
-	}
-
-	challenge := parseWWWAuthenticate(wwwAuth)
+	// Parse WWW-Authenticate headers using centralized parser
+	// This handles multiple header values and multiple challenges per value
+	challenge := ParseBearerChallenge(resp.Header)
 	if challenge == nil {
-		return nil, fmt.Errorf("failed to parse WWW-Authenticate header: %s", wwwAuth)
+		return nil, fmt.Errorf("no Bearer challenge in WWW-Authenticate header")
 	}
 
 	if challenge.ResourceMetadata == "" {
-		return nil, fmt.Errorf("no resource_metadata in WWW-Authenticate header")
+		return nil, fmt.Errorf("no resource_metadata in WWW-Authenticate Bearer challenge")
 	}
 
-	// Convert to oauth.AuthChallenge and discover
-	oauthChallenge := &AuthChallenge{
-		ResourceMetadata: challenge.ResourceMetadata,
-		Realm:            challenge.Realm,
-		Scope:            challenge.Scope,
-	}
-
-	return DiscoverFromChallenge(ctx, oauthChallenge)
-}
-
-// wwwAuthChallenge holds parsed WWW-Authenticate info (flow-internal).
-type wwwAuthChallenge struct {
-	ResourceMetadata string
-	Realm            string
-	Scope            string
-}
-
-// parseWWWAuthenticate parses WWW-Authenticate header for Bearer scheme.
-func parseWWWAuthenticate(header string) *wwwAuthChallenge {
-	if header == "" {
-		return nil
-	}
-
-	// Check for Bearer scheme (case-insensitive)
-	headerLower := strings.ToLower(header)
-	if !strings.HasPrefix(headerLower, "bearer") {
-		return nil
-	}
-
-	// Remove "Bearer " prefix
-	params := strings.TrimSpace(header[6:])
-	if params == "" {
-		return &wwwAuthChallenge{}
-	}
-
-	challenge := &wwwAuthChallenge{}
-
-	// Parse key="value" pairs
-	for len(params) > 0 {
-		params = strings.TrimLeft(params, " ,\t")
-		if params == "" {
-			break
-		}
-
-		eqIdx := strings.Index(params, "=")
-		if eqIdx == -1 {
-			break
-		}
-		key := strings.TrimSpace(params[:eqIdx])
-		params = params[eqIdx+1:]
-
-		var value string
-		params = strings.TrimLeft(params, " \t")
-		if len(params) > 0 && params[0] == '"' {
-			params = params[1:]
-			endQuote := strings.Index(params, "\"")
-			if endQuote == -1 {
-				value = params
-				params = ""
-			} else {
-				value = params[:endQuote]
-				params = params[endQuote+1:]
-			}
-		} else {
-			endIdx := strings.IndexAny(params, ", \t")
-			if endIdx == -1 {
-				value = params
-				params = ""
-			} else {
-				value = params[:endIdx]
-				params = params[endIdx:]
-			}
-		}
-
-		switch strings.ToLower(key) {
-		case "resource_metadata":
-			challenge.ResourceMetadata = value
-		case "realm":
-			challenge.Realm = value
-		case "scope":
-			challenge.Scope = value
-		}
-	}
-
-	return challenge
+	return DiscoverFromChallenge(ctx, challenge)
 }
 
 // buildAuthorizationURL constructs the OAuth authorization URL.

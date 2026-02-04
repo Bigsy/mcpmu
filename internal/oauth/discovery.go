@@ -192,20 +192,16 @@ type ResourceMetadata struct {
 	ResourceDocumentation string `json:"resource_documentation,omitempty"`
 }
 
-// AuthChallenge represents parsed WWW-Authenticate header info.
-// This is used by DiscoverFromChallenge to find the auth server.
-type AuthChallenge struct {
-	ResourceMetadata string
-	Realm            string
-	Scope            string
-}
+// AuthChallenge is an alias for BearerChallenge for backward compatibility.
+// Deprecated: Use BearerChallenge directly.
+type AuthChallenge = BearerChallenge
 
 // DiscoverFromChallenge discovers OAuth metadata from a 401 WWW-Authenticate challenge.
 // This implements RFC 9728 OAuth Protected Resource Metadata flow:
 // 1. Fetch the resource_metadata URL from the challenge
 // 2. Parse authorization_servers from the response
 // 3. Do standard discovery on the authorization server URL
-func DiscoverFromChallenge(ctx context.Context, challenge *AuthChallenge) (*DiscoverResult, error) {
+func DiscoverFromChallenge(ctx context.Context, challenge *BearerChallenge) (*DiscoverResult, error) {
 	if challenge == nil || challenge.ResourceMetadata == "" {
 		return nil, errors.New("no resource_metadata in challenge")
 	}

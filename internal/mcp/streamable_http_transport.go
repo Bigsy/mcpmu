@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Bigsy/mcpmu/internal/oauth"
 )
 
 const (
@@ -250,8 +252,9 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusUnauthorized {
-				// Parse WWW-Authenticate header for OAuth discovery (RFC 9728)
-				challenge := parseWWWAuthenticate(resp.Header.Get("WWW-Authenticate"))
+				// Parse WWW-Authenticate headers for OAuth discovery (RFC 9728)
+				// Uses all header values to find Bearer challenge with resource_metadata
+				challenge := oauth.ParseBearerChallenge(resp.Header)
 				return &UnauthorizedError{Challenge: challenge}
 			}
 			return fmt.Errorf("request failed: %s - %s", resp.Status, string(body))
@@ -534,107 +537,19 @@ const (
 	AuthStatusOAuthExp   AuthStatus = "oauth:expired"
 )
 
-// AuthChallenge holds parsed WWW-Authenticate header info from a 401 response.
-// This enables RFC 9728 OAuth Protected Resource Metadata discovery.
-type AuthChallenge struct {
-	// ResourceMetadata is the URL from WWW-Authenticate: Bearer resource_metadata="..."
-	// This is the key field for RFC 9728 Protected Resource Metadata.
-	ResourceMetadata string
-
-	// Realm from WWW-Authenticate: Bearer realm="..."
-	Realm string
-
-	// Scope from WWW-Authenticate: Bearer scope="..."
-	Scope string
-}
+// AuthChallenge is an alias for oauth.BearerChallenge for backward compatibility.
+// Deprecated: Use oauth.BearerChallenge directly.
+type AuthChallenge = oauth.BearerChallenge
 
 // UnauthorizedError is returned on HTTP 401 responses.
 // It preserves the WWW-Authenticate challenge info so callers can use
 // errors.As() to extract challenge info for OAuth discovery.
 type UnauthorizedError struct {
-	Challenge *AuthChallenge
+	Challenge *oauth.BearerChallenge
 }
 
 func (e *UnauthorizedError) Error() string {
 	return "unauthorized - authentication required"
-}
-
-// parseWWWAuthenticate parses WWW-Authenticate header for Bearer scheme.
-// Format: Bearer realm="...", resource_metadata="https://...", scope="..."
-func parseWWWAuthenticate(header string) *AuthChallenge {
-	if header == "" {
-		return nil
-	}
-
-	// Check for Bearer scheme (case-insensitive)
-	headerLower := strings.ToLower(header)
-	if !strings.HasPrefix(headerLower, "bearer") {
-		return nil
-	}
-
-	// Remove "Bearer " prefix
-	params := strings.TrimSpace(header[6:])
-	if params == "" {
-		return &AuthChallenge{}
-	}
-
-	challenge := &AuthChallenge{}
-
-	// Parse key="value" pairs (handles comma-separated or space-separated)
-	// State machine to handle quoted values properly
-	for len(params) > 0 {
-		// Skip whitespace and commas
-		params = strings.TrimLeft(params, " ,\t")
-		if params == "" {
-			break
-		}
-
-		// Find key
-		eqIdx := strings.Index(params, "=")
-		if eqIdx == -1 {
-			break
-		}
-		key := strings.TrimSpace(params[:eqIdx])
-		params = params[eqIdx+1:]
-
-		// Parse value (may be quoted or unquoted)
-		var value string
-		params = strings.TrimLeft(params, " \t")
-		if len(params) > 0 && params[0] == '"' {
-			// Quoted value - find closing quote
-			params = params[1:]
-			endQuote := strings.Index(params, "\"")
-			if endQuote == -1 {
-				value = params
-				params = ""
-			} else {
-				value = params[:endQuote]
-				params = params[endQuote+1:]
-			}
-		} else {
-			// Unquoted value - ends at comma, space, or end of string
-			endIdx := strings.IndexAny(params, ", \t")
-			if endIdx == -1 {
-				value = params
-				params = ""
-			} else {
-				value = params[:endIdx]
-				params = params[endIdx:]
-			}
-		}
-
-		// Store known fields
-		switch strings.ToLower(key) {
-		case "resource_metadata":
-			challenge.ResourceMetadata = value
-		case "realm":
-			challenge.Realm = value
-		case "scope":
-			challenge.Scope = value
-		}
-	}
-
-	return challenge
 }
 
 // HTTPClientConfig holds configuration for creating an HTTP transport from server config.

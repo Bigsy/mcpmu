@@ -336,13 +336,8 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 			// Try to discover OAuth via the challenge
 			var oauthMeta *oauth.AuthorizationServerMetadata
 			if unauthErr.Challenge != nil && unauthErr.Challenge.ResourceMetadata != "" {
-				// Convert mcp.AuthChallenge to oauth.AuthChallenge
-				oauthChallenge := &oauth.AuthChallenge{
-					ResourceMetadata: unauthErr.Challenge.ResourceMetadata,
-					Realm:            unauthErr.Challenge.Realm,
-					Scope:            unauthErr.Challenge.Scope,
-				}
-				result, discErr := oauth.DiscoverFromChallenge(ctx, oauthChallenge)
+				// Challenge is now *oauth.BearerChallenge, can use directly
+				result, discErr := oauth.DiscoverFromChallenge(ctx, unauthErr.Challenge)
 				if discErr == nil && result != nil {
 					oauthMeta = result.Metadata
 					log.Printf("Discovered OAuth via resource_metadata for %s", name)
