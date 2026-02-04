@@ -428,6 +428,10 @@ func (m *Model) handleEvent(e events.Event) tea.Cmd {
 			}
 		case events.StateError, events.StateCrashed:
 			cmds = append(cmds, m.toast.ShowError(fmt.Sprintf("Server \"%s\" failed", serverName)))
+			// Check if we're waiting for this server during permission discovery
+			if m.toolPerms.IsDiscovering() {
+				m.checkPermissionDiscoveryComplete()
+			}
 		}
 
 		if len(cmds) > 0 {
@@ -1477,8 +1481,9 @@ func (m *Model) startToolPermissionEditor(nsName string, ns *config.NamespaceCon
 	}
 
 	// Need to start servers - show discovery state
+	// We expect ALL servers being started to report tools before finishing
 	m.permDiscoveryServers = autoStartedIDs
-	m.permDiscoveryExpected = len(autoStartedIDs) + len(serverTools)
+	m.permDiscoveryExpected = len(autoStartedIDs)
 	m.toolPerms.ShowDiscovering(nsName, autoStartedIDs)
 
 	// Start servers in background
@@ -1507,27 +1512,31 @@ func (m *Model) startToolPermissionEditor(nsName string, ns *config.NamespaceCon
 // permDiscoveryTimeoutMsg is sent when permission discovery times out.
 type permDiscoveryTimeoutMsg struct{}
 
-// checkPermissionDiscoveryComplete checks if all servers have reported tools.
+// checkPermissionDiscoveryComplete checks if all servers have reported tools or failed.
 func (m *Model) checkPermissionDiscoveryComplete() {
-	ns, ok := m.cfg.GetNamespace(m.detailNamespaceID)
-	if !ok {
+	if len(m.permDiscoveryServers) == 0 {
 		return
 	}
 
-	// Count how many servers have tools
-	toolCount := 0
-	for _, serverName := range ns.ServerIDs {
-		srv, ok := m.cfg.GetServer(serverName)
-		if !ok || !srv.IsEnabled() {
+	// Count servers that are "done" - either have tools or have failed
+	doneCount := 0
+	for _, serverName := range m.permDiscoveryServers {
+		// Server has reported tools
+		if tools, ok := m.serverTools[serverName]; ok && len(tools) > 0 {
+			doneCount++
 			continue
 		}
-		if tools, ok := m.serverTools[serverName]; ok && len(tools) > 0 {
-			toolCount++
+		// Server has failed/errored - won't report tools, count as done
+		if status, ok := m.serverStatuses[serverName]; ok {
+			switch status.State {
+			case events.StateError, events.StateCrashed, events.StateStopped:
+				doneCount++
+			}
 		}
 	}
 
-	// If we have tools from all expected servers, finish discovery
-	if toolCount >= m.permDiscoveryExpected || toolCount > 0 {
+	// Finish when all servers we started are done (have tools or failed)
+	if doneCount >= m.permDiscoveryExpected {
 		m.finishPermissionDiscovery()
 	}
 }
