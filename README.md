@@ -41,7 +41,7 @@ Key differentiators:
 ### Homebrew (macOS/Linux)
 
 ```bash
-brew tap Bigsy/mcpmu https://github.com/Bigsy/mcpmu
+brew tap Bigsy/tap
 brew install mcpmu
 ```
 
