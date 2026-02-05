@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 // HelpOverlayModel is the help overlay component.

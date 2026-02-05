@@ -3,9 +3,9 @@ package views
 import (
 	"time"
 
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 // ToastLevel represents the severity of a toast notification.

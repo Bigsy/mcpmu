@@ -669,8 +669,8 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 	}
 	// Verify denied tools are NOT in the list
 	deniedTools := []string{
-		"srv1.write_file",  // denied by DenyByDefault
-		"srv1.delete_file", // explicitly denied
+		"srv1.write_file",   // denied by DenyByDefault
+		"srv1.delete_file",  // explicitly denied
 		"srv2.set_timezone", // denied by DenyByDefault
 	}
 	for _, name := range deniedTools {

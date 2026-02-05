@@ -190,8 +190,8 @@ func TestValidateName(t *testing.T) {
 		{"test_server", false},
 		{"server123", false},
 		{"filesystem", false},
-		{"", true},         // empty
-		{"has.dot", true},  // dot not allowed (used as namespace separator)
+		{"", true},        // empty
+		{"has.dot", true}, // dot not allowed (used as namespace separator)
 	}
 
 	for _, tt := range tests {

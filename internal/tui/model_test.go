@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/mcptest"
 	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/Bigsy/mcpmu/internal/testutil"
 	"github.com/Bigsy/mcpmu/internal/tui/views"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // newTestModel creates a Model with minimal dependencies for testing.

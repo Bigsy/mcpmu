@@ -190,9 +190,9 @@ func TestToolPermissions_BulkEnableSafe(t *testing.T) {
 
 	serverTools := map[string][]events.McpTool{
 		"Server 1": {
-			{Name: "read_file", Description: "Read"},    // safe
-			{Name: "write_file", Description: "Write"},  // unsafe
-			{Name: "get_info", Description: "Get info"}, // safe
+			{Name: "read_file", Description: "Read"},     // safe
+			{Name: "write_file", Description: "Write"},   // unsafe
+			{Name: "get_info", Description: "Get info"},  // safe
 			{Name: "custom_tool", Description: "Custom"}, // unknown
 		},
 	}

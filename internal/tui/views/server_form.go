@@ -3,12 +3,12 @@ package views
 import (
 	"strings"
 
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/Bigsy/mcpmu/internal/config"
-	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 // ServerFormResult is sent when the user completes or cancels the form.

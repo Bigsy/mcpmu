@@ -7,10 +7,10 @@ import (
 
 func TestParseBearerChallengeValues(t *testing.T) {
 	tests := []struct {
-		name     string
-		values   []string
-		want     *BearerChallenge
-		wantNil  bool
+		name    string
+		values  []string
+		want    *BearerChallenge
+		wantNil bool
 	}{
 		{
 			name:    "empty values",

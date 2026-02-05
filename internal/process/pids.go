@@ -126,10 +126,10 @@ func (pt *PIDTracker) Remove(serverID string) error {
 type verifyResult int
 
 const (
-	verifyConfirmedOwned    verifyResult = iota // We own this process - safe to kill
-	verifyConfirmedReused                       // PID was reused by another process - safe to remove entry
-	verifyProcessGone                           // Process no longer exists - safe to remove entry
-	verifyUncertain                             // Can't verify ownership - keep entry and retry later
+	verifyConfirmedOwned  verifyResult = iota // We own this process - safe to kill
+	verifyConfirmedReused                     // PID was reused by another process - safe to remove entry
+	verifyProcessGone                         // Process no longer exists - safe to remove entry
+	verifyUncertain                           // Can't verify ownership - keep entry and retry later
 )
 
 // CleanupOrphans checks for and terminates orphaned processes.

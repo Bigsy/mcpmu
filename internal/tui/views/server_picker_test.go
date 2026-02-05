@@ -3,9 +3,9 @@ package views
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/tui/theme"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestServerPicker_Show(t *testing.T) {

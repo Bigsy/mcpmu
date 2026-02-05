@@ -103,8 +103,8 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			fakeCfg:        mcptest.MalformedResponseConfig(),
 			expectTools:    -1,
 			expectError:    true,
-			mustObserve:    events.StateError,  // error must be observed, but final state may be stopped
-			skipFinalCheck: true,               // final state is non-deterministic (error or stopped)
+			mustObserve:    events.StateError, // error must be observed, but final state may be stopped
+			skipFinalCheck: true,              // final state is non-deterministic (error or stopped)
 		},
 		{
 			name:          "notification_before_response",

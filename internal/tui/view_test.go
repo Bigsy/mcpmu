@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/Bigsy/mcpmu/internal/testutil"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // newTestModelWithSize creates a Model with dimensions set for view testing.

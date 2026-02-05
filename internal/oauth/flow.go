@@ -432,9 +432,9 @@ type WarningHandler func(serverURL string, warning error)
 
 // TokenManager handles automatic token refresh.
 type TokenManager struct {
-	store         CredentialStore
-	metadata      map[string]*AuthorizationServerMetadata // cached by server URL
-	onWarning     WarningHandler
+	store     CredentialStore
+	metadata  map[string]*AuthorizationServerMetadata // cached by server URL
+	onWarning WarningHandler
 }
 
 // NewTokenManager creates a new token manager.

@@ -8,11 +8,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/Bigsy/mcpmu/internal/tui"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 )
 

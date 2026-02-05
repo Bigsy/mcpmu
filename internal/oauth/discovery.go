@@ -36,9 +36,9 @@ type AuthorizationServerMetadata struct {
 	CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported,omitempty"`
 
 	// Grant types
-	GrantTypesSupported         []string `json:"grant_types_supported,omitempty"`
-	ResponseTypesSupported      []string `json:"response_types_supported,omitempty"`
-	TokenEndpointAuthMethods    []string `json:"token_endpoint_auth_methods_supported,omitempty"`
+	GrantTypesSupported      []string `json:"grant_types_supported,omitempty"`
+	ResponseTypesSupported   []string `json:"response_types_supported,omitempty"`
+	TokenEndpointAuthMethods []string `json:"token_endpoint_auth_methods_supported,omitempty"`
 }
 
 // SupportsS256 returns true if the server supports S256 PKCE.

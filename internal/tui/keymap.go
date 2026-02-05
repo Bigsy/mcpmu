@@ -23,9 +23,9 @@ type KeyBindings struct {
 	Help    key.Binding
 	TabNext key.Binding
 	TabPrev key.Binding
-	Tab1   key.Binding
-	Tab2   key.Binding
-	Escape key.Binding
+	Tab1    key.Binding
+	Tab2    key.Binding
+	Escape  key.Binding
 	CtrlC   key.Binding
 
 	// List navigation

@@ -75,4 +75,3 @@ func TestTokenManager_RefreshTokenFailure_ReturnsError(t *testing.T) {
 		t.Fatalf("AccessToken mutated on refresh failure: got %q, want %q", stored.AccessToken, "expired-token")
 	}
 }
-

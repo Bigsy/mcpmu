@@ -5,12 +5,12 @@ import (
 	"io"
 	"strings"
 
+	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/Bigsy/mcpmu/internal/config"
-	"github.com/Bigsy/mcpmu/internal/tui/theme"
 )
 
 // ServerPickerResult is sent when the user completes server selection.

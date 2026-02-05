@@ -118,9 +118,9 @@ func outputTable(servers []config.ServerEntry) error {
 	}
 
 	// Calculate column widths
-	nameWidth := 4  // "NAME"
-	typeWidth := 4  // "TYPE"
-	cmdWidth := 15  // "COMMAND/URL"
+	nameWidth := 4 // "NAME"
+	typeWidth := 4 // "TYPE"
+	cmdWidth := 15 // "COMMAND/URL"
 
 	for _, entry := range servers {
 		if len(entry.Name) > nameWidth {

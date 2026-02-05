@@ -419,7 +419,7 @@ func TestServer_NamespaceSelection_MultipleNamespacesNoDefault(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
 		SchemaVersion: 1,
-		Servers: map[string]config.ServerConfig{},
+		Servers:       map[string]config.ServerConfig{},
 		Namespaces: map[string]config.NamespaceConfig{
 			"ns1": {Description: "Namespace 1"},
 			"ns2": {Description: "Namespace 2"},

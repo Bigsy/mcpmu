@@ -111,7 +111,7 @@ type baseEvent struct {
 	timestamp time.Time
 }
 
-func (e baseEvent) ServerID() string    { return e.serverID }
+func (e baseEvent) ServerID() string     { return e.serverID }
 func (e baseEvent) Timestamp() time.Time { return e.timestamp }
 
 // StatusChangedEvent is emitted when a server's state changes.

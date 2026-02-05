@@ -34,12 +34,12 @@ const (
 
 // Supervisor manages MCP server process lifecycles.
 type Supervisor struct {
-	bus           *events.Bus
-	handles       map[string]*Handle
-	pidTracker    *PIDTracker
-	credStore     oauth.CredentialStore
-	tokenManager  *oauth.TokenManager
-	mu            sync.RWMutex
+	bus          *events.Bus
+	handles      map[string]*Handle
+	pidTracker   *PIDTracker
+	credStore    oauth.CredentialStore
+	tokenManager *oauth.TokenManager
+	mu           sync.RWMutex
 }
 
 // SupervisorOptions configures a Supervisor.
@@ -570,20 +570,20 @@ type Handle struct {
 	oauthMeta     *oauth.AuthorizationServerMetadata // Cached OAuth metadata for login
 
 	// Common fields
-	ctx           context.Context    // cancelled when server stops
-	ctxCancel     context.CancelFunc // cancels ctx
-	client        *mcp.Client
-	tools         []mcp.Tool
-	toolsMu       sync.RWMutex
-	toolsReady    chan struct{} // closed when tools are discovered
-	toolsReadyMu  sync.Mutex    // protects toolsReady close
-	logs          []string
-	logsMu        sync.RWMutex
-	bus           *events.Bus
-	startedAt     time.Time
-	stopped       bool
-	stopMu        sync.Mutex
-	done          chan struct{} // closed when server stops
+	ctx          context.Context    // cancelled when server stops
+	ctxCancel    context.CancelFunc // cancels ctx
+	client       *mcp.Client
+	tools        []mcp.Tool
+	toolsMu      sync.RWMutex
+	toolsReady   chan struct{} // closed when tools are discovered
+	toolsReadyMu sync.Mutex    // protects toolsReady close
+	logs         []string
+	logsMu       sync.RWMutex
+	bus          *events.Bus
+	startedAt    time.Time
+	stopped      bool
+	stopMu       sync.Mutex
+	done         chan struct{} // closed when server stops
 }
 
 // ID returns the server ID.

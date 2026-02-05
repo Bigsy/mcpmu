@@ -25,9 +25,9 @@ type Client struct {
 	closed    bool
 
 	// Server info from initialization
-	serverName        string
-	serverVersion     string
-	protocolVersion   string // Negotiated protocol version
+	serverName      string
+	serverVersion   string
+	protocolVersion string // Negotiated protocol version
 }
 
 // rpcRequest is a JSON-RPC 2.0 request.

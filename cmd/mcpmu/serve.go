@@ -17,10 +17,10 @@ import (
 )
 
 var (
-	serveConfigPath        string
-	serveNamespace         string
-	serveLogLevel          string
-	serveEager             bool
+	serveConfigPath         string
+	serveNamespace          string
+	serveLogLevel           string
+	serveEager              bool
 	serveExposeManagerTools bool
 )
 
