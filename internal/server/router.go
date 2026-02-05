@@ -12,8 +12,6 @@ import (
 )
 
 const (
-	// DefaultToolCallTimeout is the default timeout for tool calls
-	DefaultToolCallTimeout = 30 * time.Second
 	// LazyStartTimeout is the max time to wait for a lazy server start
 	LazyStartTimeout = 10 * time.Second
 )
@@ -90,8 +88,9 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 		return nil, ErrServerNotRunning(serverName)
 	}
 
-	// Set timeout for the call
-	callCtx, cancel := context.WithTimeout(ctx, DefaultToolCallTimeout)
+	// Set timeout for the call using per-server config (defaults to 60s)
+	timeout := time.Duration(srv.ToolTimeout()) * time.Second
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	result, err := client.CallTool(callCtx, toolName, arguments)
