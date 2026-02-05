@@ -95,5 +95,6 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: v${{ needs.tag.outputs.version }}
+    secrets: inherit
     permissions:
       contents: write
