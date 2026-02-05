@@ -1,6 +1,6 @@
 # mcpmu (μ)
 
-**A multiplexing MCP server that aggregates multiple MCP servers behind a single endpoint.**
+**A multiplexing MCP server that aggregates multiple MCP servers behind a single stdio MCP server.**
 
 Unlike typical MCP setups where each coding agent needs its own server configurations, mcpmu acts as a meta-server: you configure all your MCP servers once, then expose them as a unified endpoint to any agent that supports the Model Context Protocol. Add one entry to Claude Code, Cursor, Windsurf, or any MCP-compatible tool and instantly gain access to your entire MCP ecosystem.
 
