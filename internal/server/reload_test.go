@@ -207,6 +207,78 @@ func TestServer_ApplyReload_ReSelectsNamespaceIfRemoved(t *testing.T) {
 	}
 }
 
+func TestServer_ApplyReload_KeepsPreviousNamespaceOnResolutionFailure(t *testing.T) {
+	t.Parallel()
+	enabled := true
+	oldCfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {Enabled: &enabled, Command: "echo"},
+		},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns1": {Description: "Work", ServerIDs: []string{"srv1"}},
+		},
+	}
+
+	var stdout bytes.Buffer
+	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}
+`)
+
+	srv, err := New(Options{
+		Config:          oldCfg,
+		Stdin:           stdin,
+		Stdout:          &stdout,
+		ServerName:      "mcpmu-test",
+		ServerVersion:   "1.0.0",
+		ProtocolVersion: "2024-11-05",
+		LogLevel:        "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Run initialization (will auto-select ns1 as only namespace)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = srv.Run(ctx)
+
+	// Verify initial state
+	if srv.activeNamespaceName != "ns1" {
+		t.Fatal("Expected ns1 to be active after init")
+	}
+	if srv.selectionMethod != SelectionOnly {
+		t.Errorf("Expected SelectionOnly, got %v", srv.selectionMethod)
+	}
+
+	// Create new config where ns1 is deleted and 2 new namespaces exist
+	// (triggers "multiple namespaces, none selected" error in resolveNamespace)
+	newCfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {Enabled: &enabled, Command: "echo"},
+			"srv2": {Enabled: &enabled, Command: "echo"},
+		},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns2": {Description: "Personal", ServerIDs: []string{"srv1"}},
+			"ns3": {Description: "Work2", ServerIDs: []string{"srv2"}},
+		},
+	}
+
+	// Apply reload - namespace resolution should fail (2 namespaces, none selected)
+	srv.applyReload(context.Background(), newCfg)
+
+	// Verify the server kept the previous namespace config (fail-closed)
+	if srv.activeNamespaceName != "ns1" {
+		t.Errorf("Expected ns1 to be kept (fail-closed), got %q", srv.activeNamespaceName)
+	}
+	if srv.selectionMethod != SelectionOnly {
+		t.Errorf("Expected SelectionOnly to be preserved, got %v", srv.selectionMethod)
+	}
+	if len(srv.activeServerNames) != 1 || srv.activeServerNames[0] != "srv1" {
+		t.Errorf("Expected previous server list [srv1], got %v", srv.activeServerNames)
+	}
+}
+
 func TestServer_ApplyReload_RebuildAggregatorAndRouter(t *testing.T) {
 	t.Parallel()
 	enabled := true

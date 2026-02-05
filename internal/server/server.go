@@ -582,26 +582,20 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 
 	if !keepNamespace {
 		// Need to re-resolve namespace from scratch
-		// Clear current state first
+		// Save previous state so we can restore on failure (fail-closed)
+		oldActiveServerNames := s.activeServerNames
 		s.activeNamespaceName = ""
 		s.activeServerNames = nil
 		s.mu.Unlock()
 
 		// Re-run namespace resolution
 		if err := s.resolveNamespace(); err != nil {
-			log.Printf("Failed to resolve namespace after reload: %v", err)
-			// Fall back to exposing all enabled servers
+			log.Printf("WARN: namespace resolution failed after reload, keeping previous config: %v", err)
 			s.mu.Lock()
-			s.activeNamespaceName = ""
-			s.activeServerNames = make([]string, 0, len(newCfg.Servers))
-			for name, srv := range newCfg.Servers {
-				if srv.IsEnabled() {
-					s.activeServerNames = append(s.activeServerNames, name)
-				}
-			}
-			s.selectionMethod = SelectionAll
+			s.activeNamespaceName = oldNamespaceName
+			s.activeServerNames = oldActiveServerNames
+			s.selectionMethod = oldSelectionMethod
 			s.mu.Unlock()
-			log.Printf("Fell back to exposing all %d enabled servers", len(s.activeServerNames))
 		}
 	} else {
 		log.Printf("Kept namespace %q after reload with %d servers",
