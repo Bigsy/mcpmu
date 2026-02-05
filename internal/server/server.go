@@ -18,6 +18,9 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// DebugLogging enables verbose payload logging (Recv/Send messages).
+var DebugLogging bool
+
 // Options configures the MCP server.
 type Options struct {
 	Config             *config.Config
@@ -172,7 +175,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 // handleMessage parses and routes a JSON-RPC message.
 func (s *Server) handleMessage(ctx context.Context, data []byte) error {
-	log.Printf("Recv: %s", string(data))
+	if DebugLogging {
+		log.Printf("Recv: %s", string(data))
+	}
 
 	var msg rpcMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
@@ -654,7 +659,9 @@ func (s *Server) send(msg any) {
 		return
 	}
 
-	log.Printf("Send: %s", string(data))
+	if DebugLogging {
+		log.Printf("Send: %s", string(data))
+	}
 
 	if _, err := s.writer.Write(data); err != nil {
 		log.Printf("Failed to write response: %v", err)

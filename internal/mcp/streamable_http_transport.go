@@ -149,7 +149,9 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 	negotiatedVersion := t.negotiatedVersion
 	t.mu.Unlock()
 
-	log.Printf("HTTP Send: %s", string(msg))
+	if DebugLogging {
+		log.Printf("HTTP Send: %s", string(msg))
+	}
 
 	// Build the POST URL - use endpoint URL if we got one from SSE (legacy HTTP+SSE protocol),
 	// otherwise use the base URL (newer Streamable HTTP protocol)
@@ -335,7 +337,9 @@ func (t *StreamableHTTPTransport) handleJSONResponse(ctx context.Context, body i
 		return fmt.Errorf("read response: %w", err)
 	}
 	if len(data) > 0 {
-		log.Printf("HTTP Recv: %s", string(data))
+		if DebugLogging {
+			log.Printf("HTTP Recv: %s", string(data))
+		}
 		select {
 		case <-t.done:
 			return errors.New("transport closed")

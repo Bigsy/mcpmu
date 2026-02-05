@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -66,13 +67,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 	case "debug":
 		log.SetOutput(os.Stderr)
 		log.SetFlags(log.LstdFlags | log.Lshortfile)
+		server.DebugLogging = true
+		mcp.DebugLogging = true
 	case "info", "warn":
 		log.SetOutput(os.Stderr)
 		log.SetFlags(log.LstdFlags)
 	case "error":
-		// Only log errors
-		log.SetOutput(os.Stderr)
-		log.SetFlags(log.LstdFlags)
+		log.SetOutput(io.Discard)
 	default:
 		log.SetOutput(io.Discard)
 	}

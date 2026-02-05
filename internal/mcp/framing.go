@@ -10,6 +10,9 @@ import (
 	"sync"
 )
 
+// DebugLogging enables verbose payload logging (MCP Send/Recv messages).
+var DebugLogging bool
+
 // StdioTransport implements Transport over stdin/stdout pipes.
 // Uses NDJSON (newline-delimited JSON) which is the standard for MCP stdio.
 type StdioTransport struct {
@@ -38,7 +41,9 @@ func (t *StdioTransport) Send(ctx context.Context, msg []byte) error {
 		return fmt.Errorf("transport closed")
 	}
 
-	log.Printf("MCP Send: %s", string(msg))
+	if DebugLogging {
+		log.Printf("MCP Send: %s", string(msg))
+	}
 
 	// NDJSON: just append newline
 	if _, err := t.stdin.Write(msg); err != nil {
@@ -79,7 +84,9 @@ func (t *StdioTransport) Receive(ctx context.Context) ([]byte, error) {
 			return nil, fmt.Errorf("read line: %w", result.err)
 		}
 		msg := bytes.TrimSpace(result.line)
-		log.Printf("MCP Recv: %s", string(msg))
+		if DebugLogging {
+			log.Printf("MCP Recv: %s", string(msg))
+		}
 		return msg, nil
 
 	case <-ctx.Done():
