@@ -19,7 +19,8 @@ Key differentiators:
 - **Tool permissions** — Allow/deny specific tools per namespace; deny-by-default mode available
 - **Bearer token auth** — Authenticate to HTTP servers via environment variables
 - **Custom headers** — Add static or env-sourced HTTP headers
-- **OAuth support** — Built-in OAuth flow with configurable scopes
+- **OAuth support** — Full OAuth 2.1 with PKCE, dynamic client registration (RFC 7591), authorization server discovery (RFC 8414), protected resource metadata (RFC 9728), and token revocation (RFC 7009). Credentials stored in system keyring (preferred) or file. `bearer_token_env_var` takes precedence over OAuth when both are configured.
+- **Hot-reload** — Serve mode watches the config file and automatically applies changes without restart
 - **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
 - **Lazy or eager startup** — Start servers on-demand or pre-start everything at init
 
@@ -55,14 +56,15 @@ go build -o mcpmu ./cmd/mcpmu
 
 ## TUI Usage
 
-Keybindings:
-- `t` start/stop server (test toggle)
-- `e` enable/disable server
-- `l` toggle log panel
-- `f` toggle follow mode (logs)
-- `?` help overlay
-- `Enter` view details
-- `Esc` go back
+**Global:** `q` quit, `?` help, `tab`/`shift+tab` cycle tabs, `1` servers, `2` namespaces, `esc` back, `ctrl+c` force quit
+
+**Navigation:** `j`/`↓` down, `k`/`↑` up, `g` top, `G` bottom, `enter` select
+
+**Server/Namespace actions:** `t` test (start/stop), `a` add, `e` edit, `d` delete, `c` copy, `E` enable/disable, `L` OAuth login
+
+**Log panel:** `l` toggle, `f` follow, `w` wrap
+
+**Namespace detail:** `s` assign servers, `p` permissions, `D` set default
 
 ## CLI Usage
 
@@ -90,13 +92,15 @@ mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
 mcpmu add my-api https://example.com/mcp
 ```
 
-**List and remove:**
+**List, remove, and rename:**
 ```bash
 mcpmu list
 mcpmu list --json
 
 mcpmu remove <name>
 mcpmu remove <name> --yes  # skip confirmation
+
+mcpmu rename <old-name> <new-name>  # updates namespace and permission references
 ```
 
 ### OAuth authentication
@@ -107,7 +111,7 @@ mcpmu mcp login atlassian --scopes read,write
 mcpmu mcp logout <server>             # remove stored credentials
 ```
 
-### Namespaces
+### Namespaces (alias: `ns`)
 
 ```bash
 mcpmu namespace list
@@ -120,6 +124,7 @@ mcpmu namespace assign <namespace> <server>
 mcpmu namespace unassign <namespace> <server>
 mcpmu namespace default <name>
 mcpmu namespace set-deny-default <namespace> <true|false>  # deny unconfigured tools
+mcpmu namespace rename <old-name> <new-name>
 ```
 
 ### Tool permissions
@@ -142,6 +147,9 @@ mcpmu serve -n work --log-level debug --eager  # pre-start all servers
 - `-n, --namespace` - namespace to expose (default: auto-select)
 - `-l, --log-level` - log level: debug, info, warn, error (default: info)
 - `--eager` - pre-start all servers on init (default: lazy start)
+- `--expose-manager-tools` - include mcpmu.* management tools in tools/list
+
+Serve mode watches the config file and hot-reloads on changes — add, remove, or reconfigure servers without restarting.
 
 Example entry for Claude Code (minimal):
 ```json
@@ -231,15 +239,25 @@ With optional fields:
 | Field | Description |
 |-------|-------------|
 | `url` | Server endpoint URL |
-| `bearer_token_env_var` | Env var containing bearer token |
+| `bearer_token_env_var` | Env var containing bearer token (takes precedence over OAuth) |
 | `http_headers` | Static headers to include in all requests |
 | `env_http_headers` | Headers sourced from env vars (header name → env var name) |
 | `scopes` | OAuth scopes to request |
+| `oauth_client_id` | Override the OAuth client ID (skips dynamic registration) |
 | `startup_timeout_sec` | Connection timeout (default: 10) |
 | `tool_timeout_sec` | Tool call timeout (default: 60) |
+
+### Global config fields
+
+| Field | Description |
+|-------|-------------|
+| `mcp_oauth_credentials_store` | Where to store OAuth tokens: `"auto"`, `"keyring"`, or `"file"` (default: auto) |
+| `mcp_oauth_callback_port` | Port for the OAuth callback server (default: auto-assigned) |
 
 ## Testing
 
 ```bash
 go test ./...
+make check            # lint + tests
+make test-integration # integration tests
 ```
