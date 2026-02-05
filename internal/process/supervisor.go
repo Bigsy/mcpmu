@@ -175,9 +175,12 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 	client := mcp.NewClient(transport)
 
 	// Create handle
+	handleCtx, handleCancel := context.WithCancel(context.Background())
 	handle := &Handle{
 		id:             name,
 		kind:           HandleKindStdio,
+		ctx:            handleCtx,
+		ctxCancel:      handleCancel,
 		cmd:            cmd,
 		client:         client,
 		stdioTransport: transport,
@@ -306,9 +309,12 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 	client := mcp.NewClient(httpTransport)
 
 	// Create handle
+	handleCtx, handleCancel := context.WithCancel(context.Background())
 	handle := &Handle{
 		id:            name,
 		kind:          HandleKindHTTP,
+		ctx:           handleCtx,
+		ctxCancel:     handleCancel,
 		client:        client,
 		httpTransport: httpTransport,
 		authStatus:    authStatus,
@@ -475,7 +481,7 @@ func (s *Supervisor) emitStatus(id string, state events.RuntimeState, pid int, l
 func (s *Supervisor) discoverToolsAsync(handle *Handle, client *mcp.Client, name string) {
 	defer handle.signalToolsReady()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(handle.ctx, 30*time.Second)
 	defer cancel()
 
 	tools, err := client.ListTools(ctx)
@@ -564,6 +570,8 @@ type Handle struct {
 	oauthMeta     *oauth.AuthorizationServerMetadata // Cached OAuth metadata for login
 
 	// Common fields
+	ctx           context.Context    // cancelled when server stops
+	ctxCancel     context.CancelFunc // cancels ctx
 	client        *mcp.Client
 	tools         []mcp.Tool
 	toolsMu       sync.RWMutex
@@ -700,6 +708,11 @@ func (h *Handle) Stop() error {
 		State: events.StateStopping,
 		PID:   h.PID(),
 	}))
+
+	// Cancel handle context to abort any in-flight operations (e.g. tool discovery)
+	if h.ctxCancel != nil {
+		h.ctxCancel()
+	}
 
 	// Close MCP client first (may be nil for needs-auth state)
 	if h.client != nil {
@@ -911,6 +924,7 @@ func (s *Supervisor) retryHTTPConnection(ctx context.Context, name string) error
 	}
 
 	// Update handle
+	handle.ctx, handle.ctxCancel = context.WithCancel(context.Background())
 	handle.client = client
 	handle.httpTransport = httpTransport
 	handle.authStatus = mcp.AuthStatusOAuthOK
