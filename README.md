@@ -24,10 +24,16 @@ Key differentiators:
 - **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
 - **Lazy or eager startup** — Start servers on-demand or pre-start everything at init
 
-<img width="935" height="720" alt="image" src="https://github.com/user-attachments/assets/481cebb2-c3de-4c4b-8b01-81f43ab06c54" />
-<img width="935" height="718" alt="image" src="https://github.com/user-attachments/assets/127f1ccd-4882-4676-876a-4f7cb067769e" />
-<img width="933" height="718" alt="image" src="https://github.com/user-attachments/assets/9378dff4-14b1-49a1-bfe6-4c5a00d73bfc" />
-<img width="932" height="715" alt="image" src="https://github.com/user-attachments/assets/763e8be4-e84c-45c9-9795-792769be7504" />
+<table>
+  <tr>
+    <td><img width="467" height="360" alt="image" src="https://github.com/user-attachments/assets/481cebb2-c3de-4c4b-8b01-81f43ab06c54" /></td>
+    <td><img width="467" height="359" alt="image" src="https://github.com/user-attachments/assets/127f1ccd-4882-4676-876a-4f7cb067769e" /></td>
+  </tr>
+  <tr>
+    <td><img width="467" height="359" alt="image" src="https://github.com/user-attachments/assets/9378dff4-14b1-49a1-bfe6-4c5a00d73bfc" /></td>
+    <td><img width="466" height="358" alt="image" src="https://github.com/user-attachments/assets/763e8be4-e84c-45c9-9795-792769be7504" /></td>
+  </tr>
+</table>
 
 
 ## Installation
