@@ -134,15 +134,18 @@ jobs:
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
           SHA256: ${{ steps.sha.outputs.SHA256 }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
-          VERSION_NUM="${VERSION#v}"
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/Bigsy/homebrew-tap.git tap
+          cd tap
+
           sed -i "s|url \".*\"|url \"https://github.com/${{ github.repository }}/archive/refs/tags/${VERSION}.tar.gz\"|" Formula/mcpmu.rb
           sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/mcpmu.rb
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/mcpmu.rb
-          git commit -m "Update Homebrew formula to ${VERSION}" || echo "No changes to commit"
+          git commit -m "Update mcpmu to ${VERSION}" || echo "No changes to commit"
           git push origin main
 
       - name: Create Release
