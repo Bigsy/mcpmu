@@ -103,7 +103,7 @@ If no namespace is specified, mcpmu uses the default namespace (usually the firs
 
 ## Tool Permissions
 
-Control which tools are exposed per namespace — useful for keeping context lean or restricting access:
+Control which tools are exposed per namespace — useful for keeping context lean or restricting access. Can also be all configured from the TUI (probably easier there):
 
 ```bash
 # Allow/deny specific tools
