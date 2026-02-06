@@ -45,7 +45,7 @@ go install github.com/Bigsy/mcpmu/cmd/mcpmu@latest
 mcpmu add context7 -- npx -y @upstash/context7-mcp
 
 # Add an HTTP server
-mcpmu add figma https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
+mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
 ```
 
 ### 2. Add mcpmu to your agent
@@ -83,7 +83,7 @@ mcpmu namespace add personal --description "Personal projects"
 
 # Assign servers to namespaces
 mcpmu namespace assign work atlassian
-mcpmu namespace assign work figma
+mcpmu namespace assign work context7
 mcpmu namespace assign personal context7
 ```
 
@@ -107,8 +107,8 @@ Control which tools are exposed per namespace — useful for keeping context lea
 
 ```bash
 # Allow/deny specific tools
-mcpmu permission set work figma get_file allow
-mcpmu permission set work figma delete_file deny
+mcpmu permission set work atlassian jira_search allow
+mcpmu permission set work atlassian confluence_delete deny
 
 # Deny all tools by default, then allowlist what you need
 mcpmu namespace set-deny-default minimal true
@@ -143,9 +143,8 @@ mcpmu add my-server --env FOO=bar --cwd /path -- ./server --flag
 mcpmu add auto-server --autostart -- ./server  # start on app launch
 
 # Add HTTP server (Streamable HTTP / SSE)
-mcpmu add figma https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
 mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
-mcpmu add my-api https://example.com/mcp
+mcpmu add my-api https://example.com/mcp --bearer-env API_TOKEN
 
 # List, remove, rename
 mcpmu list
@@ -233,9 +232,9 @@ With optional fields:
 ```json
 {
   "servers": {
-    "figma": {
-      "url": "https://mcp.figma.com/mcp",
-      "bearer_token_env_var": "FIGMA_TOKEN"
+    "atlassian": {
+      "url": "https://mcp.atlassian.com/mcp",
+      "scopes": ["read", "write"]
     }
   }
 }
