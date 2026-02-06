@@ -662,7 +662,11 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 
 	// Capture stderr for debugging
 	stderrBuf := &bytes.Buffer{}
-	go func() { _, _ = io.Copy(stderrBuf, stderr) }()
+	stderrDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(stderrBuf, stderr)
+		close(stderrDone)
+	}()
 
 	if err := serverCmd.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -672,6 +676,7 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 		_ = stdin.Close()
 		_ = serverCmd.Process.Kill()
 		_ = serverCmd.Wait()
+		<-stderrDone // wait for io.Copy goroutine to finish before reading buffer
 		if t.Failed() {
 			t.Logf("Server stderr:\n%s", stderrBuf.String())
 		}
@@ -901,7 +906,11 @@ func TestServer_ReloadDuringActiveRequest(t *testing.T) {
 
 	// Capture stderr for debugging
 	stderrBuf := &bytes.Buffer{}
-	go func() { _, _ = io.Copy(stderrBuf, stderr) }()
+	stderrDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(stderrBuf, stderr)
+		close(stderrDone)
+	}()
 
 	if err := serverCmd.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -911,6 +920,7 @@ func TestServer_ReloadDuringActiveRequest(t *testing.T) {
 		_ = stdin.Close()
 		_ = serverCmd.Process.Kill()
 		_ = serverCmd.Wait()
+		<-stderrDone // wait for io.Copy goroutine to finish before reading buffer
 		if t.Failed() {
 			t.Logf("Server stderr:\n%s", stderrBuf.String())
 		}
