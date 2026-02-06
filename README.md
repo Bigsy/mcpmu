@@ -157,7 +157,20 @@ mcpmu serve -n work --log-level debug --eager  # pre-start all servers
 
 Serve mode watches the config file and hot-reloads on changes — add, remove, or reconfigure servers without restarting.
 
-Example entry for Claude Code (minimal):
+If no namespace is specified, mcpmu uses the default namespace (usually the first namespace created).
+
+### Adding to Claude Code
+
+Via CLI:
+```bash
+# Uses the default namespace
+claude mcp add mcpmu -- mcpmu serve --stdio
+
+# With a specific namespace
+claude mcp add work -- mcpmu serve --stdio --namespace work
+```
+
+Or add directly to your Claude Code MCP config JSON:
 ```json
 {
   "mcpmu": {
@@ -175,6 +188,16 @@ With explicit namespace:
     "args": ["serve", "--stdio", "-n", "work"]
   }
 }
+```
+
+### Adding to Codex
+
+```bash
+# Uses the default namespace
+codex mcp add mcpmu -- mcpmu serve --stdio
+
+# With a specific namespace
+codex mcp add extra -- mcpmu serve --stdio --namespace extra
 ```
 
 ## Configuration
