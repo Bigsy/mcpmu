@@ -10,20 +10,6 @@ Key differentiators:
 - **Multi-transport** — Manage both local stdio processes and remote HTTP/SSE endpoints
 - **Interactive TUI** — Monitor, test, and manage servers with a terminal interface
 
-## Features
-
-- **Stdio process management** — Spawn and supervise local MCP servers (npx, binaries, scripts)
-- **Streamable HTTP/SSE** — Connect to remote MCP endpoints with full SSE support
-- **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`
-- **Namespace profiles** — Create isolated server groups (work, personal, project) with independent configurations
-- **Tool permissions** — Allow/deny specific tools per namespace; deny-by-default mode available
-- **Bearer token auth** — Authenticate to HTTP servers via environment variables
-- **Custom headers** — Add static or env-sourced HTTP headers
-- **OAuth support** — Full OAuth 2.1 with PKCE, dynamic client registration (RFC 7591), authorization server discovery (RFC 8414), protected resource metadata (RFC 9728), and token revocation (RFC 7009). Credentials stored in system keyring (preferred) or file. `bearer_token_env_var` takes precedence over OAuth when both are configured.
-- **Hot-reload** — Serve mode watches the config file and automatically applies changes without restart
-- **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
-- **Lazy or eager startup** — Start servers on-demand or pre-start everything at init
-
 <table>
   <tr>
     <td><img width="467" height="360" alt="image" src="https://github.com/user-attachments/assets/481cebb2-c3de-4c4b-8b01-81f43ab06c54" /></td>
@@ -34,7 +20,6 @@ Key differentiators:
     <td><img width="466" height="358" alt="image" src="https://github.com/user-attachments/assets/763e8be4-e84c-45c9-9795-792769be7504" /></td>
   </tr>
 </table>
-
 
 ## Installation
 
@@ -51,62 +36,122 @@ brew install mcpmu
 go install github.com/Bigsy/mcpmu/cmd/mcpmu@latest
 ```
 
-### Manual build
+## Quick Start
+
+### 1. Add your MCP servers to mcpmu
 
 ```bash
-git clone https://github.com/Bigsy/mcpmu.git
-cd mcpmu
-go build -o mcpmu ./cmd/mcpmu
-./mcpmu
+# Add a stdio server
+mcpmu add context7 -- npx -y @upstash/context7-mcp
+
+# Add an HTTP server
+mcpmu add figma https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
 ```
 
-## TUI Usage
+### 2. Add mcpmu to your agent
 
-**Global:** `q` quit, `?` help, `tab`/`shift+tab` cycle tabs, `1` servers, `2` namespaces, `esc` back, `ctrl+c` force quit
+**Claude Code:**
+```bash
+claude mcp add mcpmu -- mcpmu serve --stdio
+```
 
-**Navigation:** `j`/`↓` down, `k`/`↑` up, `g` top, `G` bottom, `enter` select
+**Codex:**
+```bash
+codex mcp add mcpmu -- mcpmu serve --stdio
+```
 
-**Server/Namespace actions:** `t` test (start/stop), `a` add, `e` edit, `d` delete, `c` copy, `E` enable/disable, `L` OAuth login
+**Or add directly to any MCP config JSON (Claude Code, Cursor, Windsurf, etc.):**
+```json
+{
+  "mcpmu": {
+    "command": "mcpmu",
+    "args": ["serve", "--stdio"]
+  }
+}
+```
 
-**Log panel:** `l` toggle, `f` follow, `w` wrap
+That's it. Your agent now has access to all your configured MCP servers through a single endpoint.
 
-**Namespace detail:** `s` assign servers, `p` permissions, `D` set default
+## Namespaces
 
-## CLI Usage
+Namespaces let you create different server profiles — one for work, one for personal projects, a minimal one for keeping context length down.
+
+```bash
+# Create namespaces
+mcpmu namespace add work --description "Work servers"
+mcpmu namespace add personal --description "Personal projects"
+
+# Assign servers to namespaces
+mcpmu namespace assign work atlassian
+mcpmu namespace assign work figma
+mcpmu namespace assign personal context7
+```
+
+Then point each agent at the namespace it needs:
+
+**Claude Code:**
+```bash
+claude mcp add work -- mcpmu serve --stdio --namespace work
+```
+
+**Codex:**
+```bash
+codex mcp add personal -- mcpmu serve --stdio --namespace personal
+```
+
+If no namespace is specified, mcpmu uses the default namespace (usually the first namespace created).
+
+## Tool Permissions
+
+Control which tools are exposed per namespace — useful for keeping context lean or restricting access:
+
+```bash
+# Allow/deny specific tools
+mcpmu permission set work figma get_file allow
+mcpmu permission set work figma delete_file deny
+
+# Deny all tools by default, then allowlist what you need
+mcpmu namespace set-deny-default minimal true
+mcpmu permission set minimal context7 resolve allow
+```
+
+A common pattern: keep a lean namespace with only your most-used tools for everyday work, and an "extra" namespace with the full suite that you add as a second MCP server when needed.
+
+## Features
+
+- **Stdio process management** — Spawn and supervise local MCP servers (npx, binaries, scripts)
+- **Streamable HTTP/SSE** — Connect to remote MCP endpoints with full SSE support
+- **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`
+- **OAuth support** — Full OAuth 2.1 with PKCE, dynamic client registration, and token management
+- **Hot-reload** — Serve mode watches the config file and automatically applies changes without restart
+- **Lazy or eager startup** — Start servers on-demand or pre-start everything with `--eager`
+- **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
+
+---
+
+## CLI Reference
 
 All commands support `--config` / `-c` to specify a custom config file path.
 
 ### Server management
 
-**Add stdio server:**
 ```bash
+# Add stdio server
 mcpmu add <name> -- <command> [args...]
 mcpmu add context7 -- npx -y @upstash/context7-mcp
 mcpmu add my-server --env FOO=bar --cwd /path -- ./server --flag
 mcpmu add auto-server --autostart -- ./server  # start on app launch
-```
 
-**Add HTTP server (Streamable HTTP / SSE):**
-```bash
-# With bearer token from environment variable
+# Add HTTP server (Streamable HTTP / SSE)
 mcpmu add figma https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
-
-# With OAuth scopes (login separately with `mcp login`)
 mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
-
-# Plain HTTP (no auth)
 mcpmu add my-api https://example.com/mcp
-```
 
-**List, remove, and rename:**
-```bash
+# List, remove, rename
 mcpmu list
 mcpmu list --json
-
-mcpmu remove <name>
-mcpmu remove <name> --yes  # skip confirmation
-
-mcpmu rename <old-name> <new-name>  # updates namespace and permission references
+mcpmu remove <name> [--yes]
+mcpmu rename <old-name> <new-name>
 ```
 
 ### OAuth authentication
@@ -117,88 +162,40 @@ mcpmu mcp login atlassian --scopes read,write
 mcpmu mcp logout <server>             # remove stored credentials
 ```
 
-### Namespaces (alias: `ns`)
+### Namespace commands (alias: `ns`)
 
 ```bash
-mcpmu namespace list
-mcpmu namespace list --json
-mcpmu namespace add <name> --description "My namespace"
-mcpmu namespace remove <name>
-mcpmu namespace remove <name> --yes
-
+mcpmu namespace list [--json]
+mcpmu namespace add <name> --description "desc"
+mcpmu namespace remove <name> [--yes]
 mcpmu namespace assign <namespace> <server>
 mcpmu namespace unassign <namespace> <server>
 mcpmu namespace default <name>
-mcpmu namespace set-deny-default <namespace> <true|false>  # deny unconfigured tools
+mcpmu namespace set-deny-default <namespace> <true|false>
 mcpmu namespace rename <old-name> <new-name>
 ```
 
-### Tool permissions
+### Permission commands
 
 ```bash
-mcpmu permission list <namespace>
+mcpmu permission list <namespace> [--json]
 mcpmu permission set <namespace> <server> <tool> <allow|deny>
 mcpmu permission unset <namespace> <server> <tool>
 ```
 
-## MCP Server Mode (stdio)
+### Serve mode
 
-Run mcpmu as an MCP server so Claude/Codex can call tools from your managed servers:
 ```bash
 mcpmu serve --stdio --namespace default
-mcpmu serve -n work --log-level debug --eager  # pre-start all servers
+mcpmu serve -n work --log-level debug --eager
+mcpmu serve --stdio --expose-manager-tools  # include mcpmu.* tools
 ```
 
-**Serve flags:**
-- `-n, --namespace` - namespace to expose (default: auto-select)
-- `-l, --log-level` - log level: debug, info, warn, error (default: info)
-- `--eager` - pre-start all servers on init (default: lazy start)
-- `--expose-manager-tools` - include mcpmu.* management tools in tools/list
-
-Serve mode watches the config file and hot-reloads on changes — add, remove, or reconfigure servers without restarting.
-
-If no namespace is specified, mcpmu uses the default namespace (usually the first namespace created).
-
-### Adding to Claude Code
-
-Via CLI:
-```bash
-# Uses the default namespace
-claude mcp add mcpmu -- mcpmu serve --stdio
-
-# With a specific namespace
-claude mcp add work -- mcpmu serve --stdio --namespace work
-```
-
-Or add directly to your Claude Code MCP config JSON:
-```json
-{
-  "mcpmu": {
-    "command": "mcpmu",
-    "args": ["serve", "--stdio"]
-  }
-}
-```
-
-With explicit namespace:
-```json
-{
-  "mcpmu": {
-    "command": "mcpmu",
-    "args": ["serve", "--stdio", "-n", "work"]
-  }
-}
-```
-
-### Adding to Codex
-
-```bash
-# Uses the default namespace
-codex mcp add mcpmu -- mcpmu serve --stdio
-
-# With a specific namespace
-codex mcp add extra -- mcpmu serve --stdio --namespace extra
-```
+**Flags:**
+- `-n, --namespace` — namespace to expose (default: auto-select)
+- `-l, --log-level` — debug, info, warn, error (default: info)
+- `--eager` — pre-start all servers on init (default: lazy start)
+- `--expose-manager-tools` — include mcpmu.* management tools in tools/list
 
 ## Configuration
 
@@ -282,6 +279,15 @@ With optional fields:
 |-------|-------------|
 | `mcp_oauth_credentials_store` | Where to store OAuth tokens: `"auto"`, `"keyring"`, or `"file"` (default: auto) |
 | `mcp_oauth_callback_port` | Port for the OAuth callback server (default: auto-assigned) |
+
+## Building from source
+
+```bash
+git clone https://github.com/Bigsy/mcpmu.git
+cd mcpmu
+go build -o mcpmu ./cmd/mcpmu
+./mcpmu
+```
 
 ## Testing
 
