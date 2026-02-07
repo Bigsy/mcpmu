@@ -102,6 +102,8 @@ func (m HelpOverlayModel) helpContent() string {
 			{"a", "Add new server"},
 			{"e", "Edit server"},
 			{"d", "Delete server"},
+			{"L", "OAuth login (HTTP servers)"},
+			{"O", "OAuth logout (HTTP servers)"},
 		}),
 		m.renderSection("Logs", [][]string{
 			{"l", "Toggle log panel"},

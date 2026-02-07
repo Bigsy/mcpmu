@@ -47,6 +47,10 @@ type SupervisorOptions struct {
 	// CredentialStoreMode specifies the OAuth credential store mode.
 	// If empty, defaults to "auto".
 	CredentialStoreMode string
+
+	// PIDTrackerDir overrides the directory used for the PID tracking file.
+	// If empty, the default ~/.config/mcpmu/ directory is used.
+	PIDTrackerDir string
 }
 
 // NewSupervisor creates a new process supervisor.
@@ -57,7 +61,13 @@ func NewSupervisor(bus *events.Bus) *Supervisor {
 
 // NewSupervisorWithOptions creates a new process supervisor with options.
 func NewSupervisorWithOptions(bus *events.Bus, opts SupervisorOptions) *Supervisor {
-	pidTracker, err := NewPIDTracker()
+	var pidTracker *PIDTracker
+	var err error
+	if opts.PIDTrackerDir != "" {
+		pidTracker, err = NewPIDTrackerWithDir(opts.PIDTrackerDir)
+	} else {
+		pidTracker, err = NewPIDTracker()
+	}
 	if err != nil {
 		log.Printf("Warning: failed to create PID tracker: %v", err)
 	} else {

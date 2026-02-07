@@ -609,15 +609,26 @@ func (m *Model) handleServerListKey(msg tea.KeyMsg) (handled bool, model tea.Mod
 
 	case key.Matches(msg, m.keys.Login):
 		if item := m.serverList.SelectedItem(); item != nil {
-			// Only allow login for servers in needs-auth state
-			if item.Status.State == events.StateNeedsAuth {
-				go m.loginOAuth(item.Name)
-				return true, m, m.toast.ShowInfo("Opening browser for OAuth login...")
-			} else if !item.Config.IsHTTP() {
-				return true, m, m.toast.ShowError("OAuth login only applies to HTTP servers")
-			} else {
-				return true, m, m.toast.ShowError("Server doesn't need OAuth login")
+			if item.Config.IsHTTP() && item.Config.BearerTokenEnvVar == "" {
+				if item.Status.State == events.StateNeedsAuth {
+					go m.loginOAuth(item.Name)
+					return true, m, m.toast.ShowInfo("Opening browser for OAuth login...")
+				}
+				return true, m, m.toast.ShowError(oauthLoginHint(item.Status.State))
 			}
+			return true, m, m.toast.ShowError("OAuth login only applies to OAuth HTTP servers")
+		}
+		return true, m, nil
+
+	case key.Matches(msg, m.keys.Logout):
+		if item := m.serverList.SelectedItem(); item != nil {
+			if item.Config.IsHTTP() && item.Config.BearerTokenEnvVar == "" {
+				if err := m.logoutOAuth(item.Name); err != nil {
+					return true, m, m.toast.ShowError(fmt.Sprintf("OAuth logout failed: %v", err))
+				}
+				return true, m, m.toast.ShowSuccess(fmt.Sprintf("Logged out from \"%s\"", item.Name))
+			}
+			return true, m, m.toast.ShowError("OAuth logout only applies to OAuth HTTP servers")
 		}
 		return true, m, nil
 	}
@@ -646,11 +657,29 @@ func (m *Model) handleServerDetailKey(msg tea.KeyMsg) (handled bool, model tea.M
 
 	case key.Matches(msg, m.keys.Login):
 		if m.detailServerID != "" {
-			status := m.serverStatuses[m.detailServerID]
-			if status.State == events.StateNeedsAuth {
-				go m.loginOAuth(m.detailServerID)
-				return true, m, m.toast.ShowInfo("Opening browser for OAuth login...")
+			srv, ok := m.cfg.GetServer(m.detailServerID)
+			if ok && srv.IsHTTP() && srv.BearerTokenEnvVar == "" {
+				status := m.serverStatuses[m.detailServerID]
+				if status.State == events.StateNeedsAuth {
+					go m.loginOAuth(m.detailServerID)
+					return true, m, m.toast.ShowInfo("Opening browser for OAuth login...")
+				}
+				return true, m, m.toast.ShowError(oauthLoginHint(status.State))
 			}
+			return true, m, m.toast.ShowError("OAuth login only applies to OAuth HTTP servers")
+		}
+		return true, m, nil
+
+	case key.Matches(msg, m.keys.Logout):
+		if m.detailServerID != "" {
+			srv, ok := m.cfg.GetServer(m.detailServerID)
+			if ok && srv.IsHTTP() && srv.BearerTokenEnvVar == "" {
+				if err := m.logoutOAuth(m.detailServerID); err != nil {
+					return true, m, m.toast.ShowError(fmt.Sprintf("OAuth logout failed: %v", err))
+				}
+				return true, m, m.toast.ShowSuccess(fmt.Sprintf("Logged out from \"%s\"", m.detailServerID))
+			}
+			return true, m, m.toast.ShowError("OAuth logout only applies to OAuth HTTP servers")
 		}
 		return true, m, nil
 	}
@@ -810,6 +839,41 @@ func (m *Model) loginOAuth(name string) {
 	if err := m.supervisor.LoginOAuth(m.ctx, name); err != nil {
 		log.Printf("OAuth login failed for %s: %v", name, err)
 		m.bus.Publish(events.NewErrorEvent(name, err, fmt.Sprintf("OAuth login failed: %v", err)))
+	}
+}
+
+func (m *Model) logoutOAuth(name string) error {
+	srv, ok := m.cfg.GetServer(name)
+	if !ok {
+		return fmt.Errorf("server not found")
+	}
+	store := m.supervisor.CredentialStore()
+	if store == nil {
+		return fmt.Errorf("no credential store available")
+	}
+	if err := store.Delete(srv.URL); err != nil {
+		return fmt.Errorf("failed to remove credentials: %w", err)
+	}
+	// Stop server if running to avoid stale auth in-memory
+	status := m.serverStatuses[name]
+	if status.State == events.StateRunning || status.State == events.StateStarting {
+		_ = m.supervisor.Stop(name)
+	}
+	return nil
+}
+
+// oauthLoginHint returns a user-facing message explaining why L didn't trigger,
+// tailored to the server's current state.
+func oauthLoginHint(state events.RuntimeState) string {
+	switch state {
+	case events.StateRunning:
+		return "Server already authenticated — use O to logout first, then restart with t"
+	case events.StateStarting:
+		return "Server is starting — wait for it to reach the auth prompt"
+	case events.StateIdle, events.StateStopped:
+		return "Start the server first with t to begin OAuth login"
+	default:
+		return "Server is not awaiting OAuth login"
 	}
 }
 
@@ -1059,21 +1123,21 @@ func (m Model) renderStatusBar() string {
 	switch m.activeTab {
 	case TabServers:
 		enableHint := "E:enable"
-		loginHint := ""
+		oauthHint := ""
 		if item := m.serverList.SelectedItem(); item != nil {
 			if item.Config.IsEnabled() {
 				enableHint = "E:disable"
 			}
-			// Show login hint for servers needing auth
-			if item.Status.State == events.StateNeedsAuth {
-				loginHint = "  L:login"
+			// Show OAuth hints for OAuth-capable servers (HTTP without bearer token)
+			if item.Config.IsHTTP() && item.Config.BearerTokenEnvVar == "" {
+				oauthHint = "  L:login  O:logout"
 			}
 		}
 
 		if m.currentView == ViewList {
-			keys = "enter:view  t:test  " + enableHint + loginHint + "  a:add  e:edit  d:delete  l:logs  ?:help"
+			keys = "enter:view  t:test  " + enableHint + oauthHint + "  a:add  e:edit  d:delete  l:logs  ?:help"
 		} else {
-			keys = "esc:back  t:test  " + enableHint + loginHint + "  l:logs  ?:help"
+			keys = "esc:back  t:test  " + enableHint + oauthHint + "  l:logs  ?:help"
 		}
 	case TabNamespaces:
 		if m.currentView == ViewList {

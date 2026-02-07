@@ -46,6 +46,7 @@ type KeyBindings struct {
 	WrapLogs      key.Binding
 	ToggleEnabled key.Binding
 	Login         key.Binding // OAuth login for HTTP servers
+	Logout        key.Binding // OAuth logout for HTTP servers
 
 	// Confirm dialog
 	Yes key.Binding
@@ -152,6 +153,10 @@ func NewKeyBindings() KeyBindings {
 			key.WithKeys("L"),
 			key.WithHelp("L", "OAuth login"),
 		),
+		Logout: key.NewBinding(
+			key.WithKeys("O"),
+			key.WithHelp("O", "OAuth logout"),
+		),
 
 		// Confirm dialog
 		Yes: key.NewBinding(
@@ -174,7 +179,7 @@ func (k KeyBindings) ShortHelp() []key.Binding {
 func (k KeyBindings) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Top, k.Bottom, k.Enter, k.Escape},
-		{k.Test, k.ToggleEnabled, k.Add, k.Edit, k.Delete, k.Duplicate},
+		{k.Test, k.ToggleEnabled, k.Add, k.Edit, k.Delete, k.Duplicate, k.Login, k.Logout},
 		{k.ToggleLogs, k.FollowLogs, k.WrapLogs, k.TabPrev, k.TabNext, k.Tab1, k.Tab2},
 		{k.Help, k.Quit, k.CtrlC},
 	}

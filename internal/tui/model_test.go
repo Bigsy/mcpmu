@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +23,9 @@ func newTestModel(t *testing.T) Model {
 
 	cfg := config.NewConfig()
 	bus := events.NewBus()
-	supervisor := process.NewSupervisor(bus)
+	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
+		CredentialStoreMode: "file",
+	})
 
 	return NewModel(cfg, supervisor, bus, "")
 }
@@ -687,5 +690,237 @@ func TestModel_ServerPicker_EscClosesPicker(t *testing.T) {
 	if cmd != nil {
 		msg := cmd()
 		m, _ = updateModel(m, msg)
+	}
+}
+
+// newTestModelWithCredStore creates a Model with a file-backed credential store for OAuth tests.
+func newTestModelWithCredStore(t *testing.T) Model {
+	t.Helper()
+	testutil.SetupTestHome(t)
+
+	cfg := config.NewConfig()
+	bus := events.NewBus()
+	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
+		CredentialStoreMode: "file",
+	})
+
+	m := NewModel(cfg, supervisor, bus, "")
+	m.width = 80
+	m.height = 24
+	return m
+}
+
+func TestModel_LoginKey_OAuthHTTPServer_NeedsAuth(t *testing.T) {
+	m := newTestModelWithCredStore(t)
+
+	// Add an OAuth HTTP server (no bearer token)
+	srv := config.ServerConfig{
+		Kind: config.ServerKindStreamableHTTP,
+		URL:  "https://mcp.example.com/v1",
+	}
+	_ = m.cfg.AddServer("oauth-server", srv)
+	// Set server status to needs-auth so L triggers the login flow
+	m.serverStatuses["oauth-server"] = events.ServerStatus{State: events.StateNeedsAuth}
+	m.refreshServerList()
+
+	// Navigate to detail
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.currentView != ViewDetail {
+		t.Fatal("expected detail view")
+	}
+
+	// Press L — should show info toast (browser opening)
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	if !m.toast.IsVisible() {
+		t.Fatal("expected toast to be visible")
+	}
+	view := testutil.StripANSI(m.View())
+	if strings.Contains(view, "only applies to") || strings.Contains(view, "not awaiting") {
+		t.Errorf("L on needs-auth OAuth server should show info toast, got: %s", view)
+	}
+}
+
+func TestModel_LoginKey_OAuthHTTPServer_NotNeedsAuth(t *testing.T) {
+	m := newTestModelWithCredStore(t)
+
+	// Add an OAuth HTTP server (no bearer token), not in needs-auth state
+	srv := config.ServerConfig{
+		Kind: config.ServerKindStreamableHTTP,
+		URL:  "https://mcp.example.com/v1",
+	}
+	_ = m.cfg.AddServer("oauth-server", srv)
+	m.refreshServerList()
+
+	// Navigate to detail
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Press L — should show error about not awaiting auth
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	if !m.toast.IsVisible() {
+		t.Fatal("expected toast to be visible")
+	}
+	view := testutil.StripANSI(m.View())
+	// Toast may be truncated in the status bar; check that it's an error (not info/success)
+	// and not the "only applies to" error (which would mean the OAuth check failed)
+	if strings.Contains(view, "only applies to") {
+		t.Error("L on OAuth HTTP server should not show 'only applies to' error")
+	}
+	if strings.Contains(view, "Opening browser") {
+		t.Error("L on non-needs-auth server should not trigger login flow")
+	}
+}
+
+func TestModel_LogoutKey_OAuthHTTPServer_DetailView(t *testing.T) {
+	m := newTestModelWithCredStore(t)
+
+	// Add an OAuth HTTP server
+	srv := config.ServerConfig{
+		Kind: config.ServerKindStreamableHTTP,
+		URL:  "https://mcp.example.com/v1",
+	}
+	_ = m.cfg.AddServer("oauth-server", srv)
+	m.refreshServerList()
+
+	// Navigate to detail
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Press O — should succeed (show success toast)
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	if !m.toast.IsVisible() {
+		t.Fatal("expected toast to be visible")
+	}
+	view := testutil.StripANSI(m.View())
+	if !strings.Contains(view, "Logged") {
+		t.Errorf("expected 'Logged out' toast, got: %s", view)
+	}
+}
+
+func TestModel_LoginKey_StdioServer_RejectsWithError(t *testing.T) {
+	m := newTestModelWithCredStore(t)
+
+	// Add a stdio server
+	srv := config.ServerConfig{
+		Kind:    config.ServerKindStdio,
+		Command: "echo",
+	}
+	_ = m.cfg.AddServer("stdio-server", srv)
+	m.refreshServerList()
+
+	// Navigate to detail
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Press L — should show error toast
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	if !m.toast.IsVisible() {
+		t.Fatal("expected toast to be visible")
+	}
+	view := testutil.StripANSI(m.View())
+	if !strings.Contains(view, "OAuth login only applies") && !strings.Contains(view, "OAuth logout only applies") {
+		t.Errorf("expected error toast for stdio server login, got: %s", view)
+	}
+}
+
+func TestModel_LogoutKey_StdioServer_RejectsWithError(t *testing.T) {
+	m := newTestModelWithCredStore(t)
+
+	// Add a stdio server
+	srv := config.ServerConfig{
+		Kind:    config.ServerKindStdio,
+		Command: "echo",
+	}
+	_ = m.cfg.AddServer("stdio-server", srv)
+	m.refreshServerList()
+
+	// Navigate to detail
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Press O — should show error toast
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	if !m.toast.IsVisible() {
+		t.Fatal("expected toast to be visible")
+	}
+	view := testutil.StripANSI(m.View())
+	if !strings.Contains(view, "OAuth login only applies") && !strings.Contains(view, "OAuth logout only applies") {
+		t.Errorf("expected error toast for stdio server logout, got: %s", view)
+	}
+}
+
+func TestModel_LoginLogout_BearerTokenServer_RejectsWithError(t *testing.T) {
+	m := newTestModelWithCredStore(t)
+
+	// Add an HTTP server with bearer token (not OAuth)
+	srv := config.ServerConfig{
+		Kind:              config.ServerKindStreamableHTTP,
+		URL:               "https://mcp.example.com/v1",
+		BearerTokenEnvVar: "MY_TOKEN",
+	}
+	_ = m.cfg.AddServer("bearer-server", srv)
+	m.refreshServerList()
+
+	// Navigate to detail
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Press L — should show error toast
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	if !m.toast.IsVisible() {
+		t.Fatal("expected toast to be visible for login")
+	}
+	view := testutil.StripANSI(m.View())
+	if !strings.Contains(view, "OAuth login only applies") && !strings.Contains(view, "OAuth logout only applies") {
+		t.Errorf("expected error toast for bearer token server login, got: %s", view)
+	}
+
+	// Dismiss toast by pressing any key, then press O
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	// The O key first dismisses the toast (line 286-288), then is handled as a key.
+	// But the handler also sets a new toast, so it should be visible again.
+	if !m.toast.IsVisible() {
+		t.Fatal("expected toast to be visible for logout")
+	}
+	view = testutil.StripANSI(m.View())
+	if !strings.Contains(view, "OAuth login only applies") && !strings.Contains(view, "OAuth logout only applies") {
+		t.Errorf("expected error toast for bearer token server logout, got: %s", view)
+	}
+}
+
+func TestModel_LogoutOAuth_ServerNotFound(t *testing.T) {
+	m := newTestModelWithCredStore(t)
+
+	err := m.logoutOAuth("nonexistent-server")
+	if err == nil {
+		t.Fatal("expected error for nonexistent server")
+	}
+	if !strings.Contains(err.Error(), "server not found") {
+		t.Errorf("expected 'server not found' error, got: %v", err)
+	}
+}
+
+func TestModel_LogoutKey_ErrorToast_OnFailure(t *testing.T) {
+	m := newTestModelWithCredStore(t)
+	// Use wider terminal so the error toast isn't truncated beyond recognition
+	m.width = 160
+	m.height = 24
+
+	// Add an OAuth HTTP server
+	srv := config.ServerConfig{
+		Kind: config.ServerKindStreamableHTTP,
+		URL:  "https://mcp.example.com/v1",
+	}
+	_ = m.cfg.AddServer("oauth-server", srv)
+	m.refreshServerList()
+
+	// Remove the server from config AFTER refreshing the list. The list view's
+	// cached item still passes the OAuth-eligibility check, but logoutOAuth
+	// fails because GetServer returns not-found.
+	delete(m.cfg.Servers, "oauth-server")
+
+	// Press O in list view — logoutOAuth returns "server not found", handler shows error toast
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	if !m.toast.IsVisible() {
+		t.Fatal("expected toast to be visible")
+	}
+	view := testutil.StripANSI(m.View())
+	if !strings.Contains(view, "OAuth logout failed") {
+		t.Errorf("expected 'OAuth logout failed' error toast, got: %s", view)
 	}
 }

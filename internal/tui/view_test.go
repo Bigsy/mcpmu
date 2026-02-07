@@ -18,7 +18,9 @@ func newTestModelWithSize(t *testing.T, width, height int) Model {
 
 	cfg := config.NewConfig()
 	bus := events.NewBus()
-	supervisor := process.NewSupervisor(bus)
+	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
+		CredentialStoreMode: "file",
+	})
 
 	m := NewModel(cfg, supervisor, bus, "")
 	newModel, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
@@ -30,7 +32,9 @@ func TestView_Loading(t *testing.T) {
 
 	cfg := config.NewConfig()
 	bus := events.NewBus()
-	supervisor := process.NewSupervisor(bus)
+	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
+		CredentialStoreMode: "file",
+	})
 	m := NewModel(cfg, supervisor, bus, "")
 
 	// Before WindowSizeMsg, width/height are 0
@@ -146,7 +150,9 @@ func TestView_WithServers(t *testing.T) {
 	}
 
 	bus := events.NewBus()
-	supervisor := process.NewSupervisor(bus)
+	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
+		CredentialStoreMode: "file",
+	})
 
 	m := NewModel(cfg, supervisor, bus, "")
 	newModel, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -202,5 +208,75 @@ func TestView_RendersWithVeryLargeTerminal(t *testing.T) {
 
 	if view == "" {
 		t.Error("expected non-empty view with large terminal")
+	}
+}
+
+func TestView_StatusBar_OAuthServerShowsLoginLogout(t *testing.T) {
+	m := newTestModelWithSize(t, 120, 40)
+
+	// Add an OAuth HTTP server (no bearer token)
+	m.cfg.Servers["oauth-server"] = config.ServerConfig{
+		Kind: config.ServerKindStreamableHTTP,
+		URL:  "https://mcp.example.com/v1",
+	}
+	m.refreshServerList()
+
+	// List view
+	view := testutil.StripANSI(m.View())
+	if !strings.Contains(view, "L:login") {
+		t.Error("expected status bar to show 'L:login' for OAuth HTTP server in list view")
+	}
+	if !strings.Contains(view, "O:logout") {
+		t.Error("expected status bar to show 'O:logout' for OAuth HTTP server in list view")
+	}
+
+	// Detail view
+	m.currentView = ViewDetail
+	m.detailServerID = "oauth-server"
+	view = testutil.StripANSI(m.View())
+	if !strings.Contains(view, "L:login") {
+		t.Error("expected status bar to show 'L:login' for OAuth HTTP server in detail view")
+	}
+	if !strings.Contains(view, "O:logout") {
+		t.Error("expected status bar to show 'O:logout' for OAuth HTTP server in detail view")
+	}
+}
+
+func TestView_StatusBar_StdioServerNoLoginLogout(t *testing.T) {
+	m := newTestModelWithSize(t, 120, 40)
+
+	// Add a stdio server
+	m.cfg.Servers["stdio-server"] = config.ServerConfig{
+		Kind:    config.ServerKindStdio,
+		Command: "echo",
+	}
+	m.refreshServerList()
+
+	view := testutil.StripANSI(m.View())
+	if strings.Contains(view, "L:login") {
+		t.Error("expected status bar NOT to show 'L:login' for stdio server")
+	}
+	if strings.Contains(view, "O:logout") {
+		t.Error("expected status bar NOT to show 'O:logout' for stdio server")
+	}
+}
+
+func TestView_StatusBar_BearerTokenServerNoLoginLogout(t *testing.T) {
+	m := newTestModelWithSize(t, 120, 40)
+
+	// Add an HTTP server with bearer token
+	m.cfg.Servers["bearer-server"] = config.ServerConfig{
+		Kind:              config.ServerKindStreamableHTTP,
+		URL:               "https://mcp.example.com/v1",
+		BearerTokenEnvVar: "MY_TOKEN",
+	}
+	m.refreshServerList()
+
+	view := testutil.StripANSI(m.View())
+	if strings.Contains(view, "L:login") {
+		t.Error("expected status bar NOT to show 'L:login' for bearer token server")
+	}
+	if strings.Contains(view, "O:logout") {
+		t.Error("expected status bar NOT to show 'O:logout' for bearer token server")
 	}
 }

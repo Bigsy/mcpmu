@@ -24,6 +24,7 @@ func TestServer_Initialize(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Stdin:           stdin,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -99,6 +100,7 @@ func TestServer_ToolsList_NoServers_ManagerToolsHidden(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:             cfg,
+		PIDTrackerDir:      t.TempDir(),
 		Stdin:              stdin,
 		Stdout:             &stdout,
 		ServerName:         "mcpmu-test",
@@ -161,6 +163,7 @@ func TestServer_ToolsList_NoServers_ManagerToolsExposed(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:             cfg,
+		PIDTrackerDir:      t.TempDir(),
 		Stdin:              stdin,
 		Stdout:             &stdout,
 		ServerName:         "mcpmu-test",
@@ -228,6 +231,7 @@ func TestServer_ToolsList_NotInitialized(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Stdin:           stdin,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -275,6 +279,7 @@ func TestServer_MethodNotFound(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Stdin:           stdin,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -327,6 +332,7 @@ func TestServer_Ping(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Stdin:           stdin,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -385,6 +391,7 @@ func TestServer_NamespaceSelection_NoNamespaces(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Stdin:           stdin,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -432,6 +439,7 @@ func TestServer_NamespaceSelection_MultipleNamespacesNoDefault(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Stdin:           stdin,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -484,6 +492,7 @@ func TestServer_NamespaceSelection_WithDefault(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Stdin:           stdin,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -531,6 +540,7 @@ func TestServer_NamespaceSelection_ExplicitNamespace(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Namespace:       "ns2", // Explicit selection
 		Stdin:           stdin,
 		Stdout:          &stdout,

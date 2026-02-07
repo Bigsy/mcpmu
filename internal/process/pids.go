@@ -41,16 +41,20 @@ type PIDTracker struct {
 	mu   sync.Mutex
 }
 
-// NewPIDTracker creates a new PID tracker.
+// NewPIDTracker creates a new PID tracker using the default directory.
 func NewPIDTracker() (*PIDTracker, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
 
-	path := filepath.Join(home, ".config", "mcpmu", pidsFile)
+	return NewPIDTrackerWithDir(filepath.Join(home, ".config", "mcpmu"))
+}
+
+// NewPIDTrackerWithDir creates a new PID tracker storing its state in the given directory.
+func NewPIDTrackerWithDir(dir string) (*PIDTracker, error) {
 	pt := &PIDTracker{
-		path: path,
+		path: filepath.Join(dir, pidsFile),
 		pids: make(map[string]pidEntry),
 	}
 

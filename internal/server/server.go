@@ -25,6 +25,7 @@ var DebugLogging bool
 type Options struct {
 	Config             *config.Config
 	ConfigPath         string        // Expanded path for hot-reload watching (empty = no watching)
+	PIDTrackerDir      string        // Directory for PID tracking file (empty = derive from ConfigPath or default)
 	Namespace          string        // Namespace to expose (empty = auto-select)
 	EagerStart         bool          // Pre-start all servers
 	ExposeManagerTools bool          // Include mcpmu.* tools in tools/list
@@ -80,9 +81,16 @@ func New(opts Options) (*Server, error) {
 	// Create event bus
 	bus := events.NewBus()
 
+	// Derive PID tracker directory from config path to isolate instances
+	pidTrackerDir := opts.PIDTrackerDir
+	if pidTrackerDir == "" && opts.ConfigPath != "" {
+		pidTrackerDir = filepath.Dir(opts.ConfigPath)
+	}
+
 	// Create process supervisor with config-specified credential store
 	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
 		CredentialStoreMode: opts.Config.MCPOAuthCredentialStore,
+		PIDTrackerDir:       pidTrackerDir,
 	})
 
 	s := &Server{

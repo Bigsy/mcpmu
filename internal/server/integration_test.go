@@ -64,6 +64,7 @@ func TestServer_ManagerTool_ServersList(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Stdin:           stdin,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -137,6 +138,7 @@ func TestServer_ManagerTool_NamespacesList(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Namespace:       "work", // Select work namespace to pass init
 		Stdin:           stdin,
 		Stdout:          &stdout,
@@ -204,6 +206,7 @@ func TestServer_ToolsCall_UnknownTool(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Stdin:           stdin,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -267,6 +270,7 @@ func TestServer_ToolsCall_PermissionDenied(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Namespace:       "restricted",
 		Stdin:           stdin,
 		Stdout:          &stdout,
@@ -340,6 +344,7 @@ func TestServer_ToolsCall_NoNamespace_AllowsAll(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Stdin:           stdin,
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
@@ -597,6 +602,7 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 
 	srv, err := New(Options{
 		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
 		Namespace:       "restricted",
 		EagerStart:      false, // Use lazy start - servers start when tools are called
 		Stdin:           stdin,
