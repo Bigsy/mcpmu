@@ -52,6 +52,10 @@ type StreamableHTTPConfig struct {
 	// BearerToken is the bearer token for authentication (optional).
 	BearerToken string
 
+	// BearerTokenProvider resolves a bearer token for each request (optional).
+	// When set, it takes precedence over BearerToken.
+	BearerTokenProvider func(context.Context) (string, error)
+
 	// HTTPHeaders are static headers to include in all requests.
 	HTTPHeaders map[string]string
 
@@ -196,7 +200,9 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 			return fmt.Errorf("create request: %w", err)
 		}
 
-		t.setCommonHeaders(req, version)
+		if err := t.setCommonHeaders(ctx, req, version); err != nil {
+			return fmt.Errorf("set headers: %w", err)
+		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
 
@@ -418,11 +424,19 @@ func (t *StreamableHTTPTransport) SessionID() string {
 }
 
 // setCommonHeaders sets headers common to all requests.
-func (t *StreamableHTTPTransport) setCommonHeaders(req *http.Request, version string) {
+func (t *StreamableHTTPTransport) setCommonHeaders(ctx context.Context, req *http.Request, version string) error {
 	req.Header.Set("MCP-Protocol-Version", version)
 
 	// Bearer token auth
-	if t.config.BearerToken != "" {
+	if t.config.BearerTokenProvider != nil {
+		token, err := t.config.BearerTokenProvider(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve bearer token: %w", err)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+	} else if t.config.BearerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+t.config.BearerToken)
 	}
 
@@ -430,6 +444,8 @@ func (t *StreamableHTTPTransport) setCommonHeaders(req *http.Request, version st
 	for k, v := range t.config.HTTPHeaders {
 		req.Header.Set(k, v)
 	}
+
+	return nil
 }
 
 // NegotiatedVersion returns the protocol version negotiated with the server.

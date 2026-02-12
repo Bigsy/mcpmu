@@ -254,6 +254,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 
 	// Determine authentication
 	var bearerToken string
+	var bearerTokenProvider func(context.Context) (string, error)
 	authStatus := mcp.AuthStatusNone
 
 	// Check bearer token first (highest priority)
@@ -273,6 +274,9 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 		if err == nil && token != "" {
 			log.Printf("Found OAuth token for %s (len=%d)", name, len(token))
 			bearerToken = token
+			bearerTokenProvider = func(callCtx context.Context) (string, error) {
+				return s.tokenManager.GetAccessToken(callCtx, srv.URL)
+			}
 			authStatus = mcp.AuthStatusOAuthOK
 		} else {
 			log.Printf("No OAuth token found for %s: err=%v", name, err)
@@ -299,9 +303,10 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 
 	// Create HTTP transport
 	transportConfig := mcp.StreamableHTTPConfig{
-		URL:         srv.URL,
-		BearerToken: bearerToken,
-		HTTPHeaders: headers,
+		URL:                 srv.URL,
+		BearerToken:         bearerToken,
+		BearerTokenProvider: bearerTokenProvider,
+		HTTPHeaders:         headers,
 	}
 	httpTransport := mcp.NewStreamableHTTPTransport(transportConfig)
 
@@ -911,6 +916,9 @@ func (s *Supervisor) retryHTTPConnection(ctx context.Context, name string) error
 	transportConfig := mcp.StreamableHTTPConfig{
 		URL:         handle.serverURL,
 		BearerToken: token,
+		BearerTokenProvider: func(callCtx context.Context) (string, error) {
+			return s.tokenManager.GetAccessToken(callCtx, handle.serverURL)
+		},
 		HTTPHeaders: headers,
 	}
 	httpTransport := mcp.NewStreamableHTTPTransport(transportConfig)
