@@ -4,6 +4,7 @@ package process
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,7 +40,13 @@ type Supervisor struct {
 	pidTracker   *PIDTracker
 	credStore    oauth.CredentialStore
 	tokenManager *oauth.TokenManager
+	toolCache    *config.ToolCache
 	mu           sync.RWMutex
+}
+
+// SetToolCache sets the tool cache for token counting.
+func (s *Supervisor) SetToolCache(tc *config.ToolCache) {
+	s.toolCache = tc
 }
 
 // SupervisorOptions configures a Supervisor.
@@ -509,11 +516,31 @@ func (s *Supervisor) discoverToolsAsync(handle *Handle, client *mcp.Client, name
 
 	mcpTools := make([]events.McpTool, len(tools))
 	for i, t := range tools {
+		var schema json.RawMessage
+		if t.InputSchema != nil {
+			schema, _ = json.Marshal(t.InputSchema)
+		}
 		mcpTools[i] = events.McpTool{
 			Name:        t.Name,
 			Description: t.Description,
+			InputSchema: schema,
 		}
 	}
+	// Update tool cache before publishing event so TUI reads fresh data
+	if s.toolCache != nil {
+		cacheInputs := make([]config.CachedToolInput, len(mcpTools))
+		for i, t := range mcpTools {
+			cacheInputs[i] = config.CachedToolInput{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+			}
+		}
+		if err := s.toolCache.Update(name, cacheInputs); err != nil {
+			log.Printf("Warning: failed to update tool cache for %s: %v", name, err)
+		}
+	}
+
 	s.bus.Publish(events.NewToolsUpdatedEvent(name, mcpTools))
 }
 

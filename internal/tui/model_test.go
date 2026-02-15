@@ -27,7 +27,7 @@ func newTestModel(t *testing.T) Model {
 		CredentialStoreMode: "file",
 	})
 
-	return NewModel(cfg, supervisor, bus, "")
+	return NewModel(cfg, supervisor, bus, "", nil)
 }
 
 // updateModel is a helper that calls Update and returns the Model (with type assertion).
@@ -704,7 +704,7 @@ func newTestModelWithCredStore(t *testing.T) Model {
 		CredentialStoreMode: "file",
 	})
 
-	m := NewModel(cfg, supervisor, bus, "")
+	m := NewModel(cfg, supervisor, bus, "", nil)
 	m.width = 80
 	m.height = 24
 	return m
@@ -922,5 +922,85 @@ func TestModel_LogoutKey_ErrorToast_OnFailure(t *testing.T) {
 	view := testutil.StripANSI(m.View())
 	if !strings.Contains(view, "OAuth logout failed") {
 		t.Errorf("expected 'OAuth logout failed' error toast, got: %s", view)
+	}
+}
+
+// newTestModelWithToolCache creates a Model with a real ToolCache backed by a temp dir.
+func newTestModelWithToolCache(t *testing.T) Model {
+	t.Helper()
+	testutil.SetupTestHome(t)
+
+	dir := t.TempDir()
+	configPath := dir + "/config.json"
+
+	cfg := config.NewConfig()
+	bus := events.NewBus()
+	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
+		CredentialStoreMode: "file",
+	})
+
+	tc, err := config.NewToolCache(configPath)
+	if err != nil {
+		t.Fatalf("NewToolCache: %v", err)
+	}
+
+	m := NewModel(cfg, supervisor, bus, configPath, tc)
+	m.width = 80
+	m.height = 24
+	return m
+}
+
+func TestGetServerToolsForDetail_EmptyLiveToolsNotFallingBackToCache(t *testing.T) {
+	m := newTestModelWithToolCache(t)
+
+	// Add a server
+	_ = m.cfg.AddServer("srv", config.ServerConfig{
+		Kind:    config.ServerKindStdio,
+		Command: "echo",
+	})
+
+	// Populate cache with stale tools (simulating a previous run)
+	_ = m.toolCache.Update("srv", []config.CachedToolInput{
+		{Name: "old_tool", Description: "stale tool from prior run"},
+	})
+
+	// Simulate the server reporting zero tools (empty but present in map)
+	m.serverTools["srv"] = []events.McpTool{}
+
+	tools, _, fromCache := m.getServerToolsForDetail("srv")
+
+	if fromCache {
+		t.Error("expected fromCache=false when live tools are present (even if empty)")
+	}
+	if len(tools) != 0 {
+		t.Errorf("expected 0 live tools, got %d — stale cache leaked through", len(tools))
+	}
+}
+
+func TestGetServerToolsForDetail_FallsBackToCacheWhenNoLiveData(t *testing.T) {
+	m := newTestModelWithToolCache(t)
+
+	// Add a server
+	_ = m.cfg.AddServer("srv", config.ServerConfig{
+		Kind:    config.ServerKindStdio,
+		Command: "echo",
+	})
+
+	// Populate cache (server not running, no live data)
+	_ = m.toolCache.Update("srv", []config.CachedToolInput{
+		{Name: "cached_tool", Description: "from cache"},
+	})
+
+	// serverTools has no entry for "srv" at all (never started this session)
+	tools, toolTokens, fromCache := m.getServerToolsForDetail("srv")
+
+	if !fromCache {
+		t.Error("expected fromCache=true when no live data exists")
+	}
+	if len(tools) != 1 || tools[0].Name != "cached_tool" {
+		t.Errorf("expected 1 cached tool 'cached_tool', got %v", tools)
+	}
+	if toolTokens["cached_tool"] <= 0 {
+		t.Errorf("expected positive token count for cached tool, got %d", toolTokens["cached_tool"])
 	}
 }

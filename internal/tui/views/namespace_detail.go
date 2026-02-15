@@ -20,12 +20,15 @@ type NamespaceDetailModel struct {
 	// All servers for assignment display
 	allServers []config.ServerEntry
 	// Tool permissions for this namespace
-	permissions []config.ToolPermission
-	viewport    viewport.Model
-	width       int
-	height      int
-	topPad      int
-	focused     bool
+	permissions  []config.ToolPermission
+	serverTokens map[string]int // serverID -> enabled token count
+	totalTokens  int
+	hasCache     bool
+	viewport     viewport.Model
+	width        int
+	height       int
+	topPad       int
+	focused      bool
 }
 
 // NewNamespaceDetail creates a new namespace detail view.
@@ -38,12 +41,18 @@ func NewNamespaceDetail(th theme.Theme) NamespaceDetailModel {
 }
 
 // SetNamespace sets the namespace to display.
-func (m *NamespaceDetailModel) SetNamespace(name string, ns *config.NamespaceConfig, isDefault bool, allServers []config.ServerEntry, permissions []config.ToolPermission) {
+func (m *NamespaceDetailModel) SetNamespace(name string, ns *config.NamespaceConfig, isDefault bool, allServers []config.ServerEntry, permissions []config.ToolPermission, serverTokens map[string]int) {
 	m.namespaceName = name
 	m.namespace = ns
 	m.isDefault = isDefault
 	m.allServers = allServers
 	m.permissions = permissions
+	m.serverTokens = serverTokens
+	m.totalTokens = 0
+	for _, n := range serverTokens {
+		m.totalTokens += n
+	}
+	m.hasCache = len(serverTokens) > 0
 	m.updateContent()
 }
 
@@ -101,6 +110,16 @@ func (m *NamespaceDetailModel) updateContent() {
 	} else {
 		content.WriteString(m.theme.Success.Render("Allow unconfigured tools"))
 	}
+	content.WriteString("\n")
+
+	// Estimated tokens
+	content.WriteString(labelStyle.Render("Estimated Tokens: "))
+	if m.hasCache {
+		content.WriteString(m.theme.Primary.Render(formatTokenCount(m.totalTokens)))
+		content.WriteString(m.theme.Faint.Render(" (enabled tools)"))
+	} else {
+		content.WriteString(m.theme.Faint.Render("Unknown - start servers to discover tools"))
+	}
 	content.WriteString("\n\n")
 
 	// Assigned servers section
@@ -125,6 +144,13 @@ func (m *NamespaceDetailModel) updateContent() {
 				serversContent.WriteString("\n")
 			}
 			serversContent.WriteString(m.theme.Primary.Render(serverName))
+			if tokens, ok := m.serverTokens[serverName]; ok {
+				serversContent.WriteString("  ")
+				serversContent.WriteString(m.theme.Muted.Render(fmt.Sprintf("(%d tokens)", tokens)))
+			} else {
+				serversContent.WriteString("  ")
+				serversContent.WriteString(m.theme.Faint.Render("(tokens unknown)"))
+			}
 		}
 		content.WriteString(serverBox.Render(serversContent.String()))
 	}

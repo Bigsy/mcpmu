@@ -16,16 +16,18 @@ import (
 
 // ServerDetailModel displays detailed information about a server.
 type ServerDetailModel struct {
-	theme      theme.Theme
-	serverName string // Server name (map key)
-	server     *config.ServerConfig
-	status     *events.ServerStatus
-	tools      []mcp.Tool
-	viewport   viewport.Model
-	width      int
-	height     int
-	topPad     int
-	focused    bool
+	theme          theme.Theme
+	serverName     string // Server name (map key)
+	server         *config.ServerConfig
+	status         *events.ServerStatus
+	tools          []mcp.Tool
+	toolTokens     map[string]int // toolName -> token count
+	toolsFromCache bool           // true when tools were loaded from cache
+	viewport       viewport.Model
+	width          int
+	height         int
+	topPad         int
+	focused        bool
 }
 
 // NewServerDetail creates a new server detail view.
@@ -38,11 +40,13 @@ func NewServerDetail(theme theme.Theme) ServerDetailModel {
 }
 
 // SetServer sets the server to display.
-func (m *ServerDetailModel) SetServer(name string, srv *config.ServerConfig, status *events.ServerStatus, tools []mcp.Tool) {
+func (m *ServerDetailModel) SetServer(name string, srv *config.ServerConfig, status *events.ServerStatus, tools []mcp.Tool, toolTokens map[string]int, toolsFromCache bool) {
 	m.serverName = name
 	m.server = srv
 	m.status = status
 	m.tools = tools
+	m.toolTokens = toolTokens
+	m.toolsFromCache = toolsFromCache
 	m.updateContent()
 }
 
@@ -137,6 +141,10 @@ func (m *ServerDetailModel) updateContent() {
 	content.WriteString("\n")
 	toolsHeader := fmt.Sprintf("Tools (%d)", len(m.tools))
 	content.WriteString(m.theme.Title.Render(toolsHeader))
+	if m.toolsFromCache {
+		content.WriteString("  ")
+		content.WriteString(m.theme.Faint.Render("(cached — start server to refresh)"))
+	}
 	content.WriteString("\n")
 
 	if len(m.tools) == 0 {
@@ -155,6 +163,10 @@ func (m *ServerDetailModel) updateContent() {
 				toolsContent.WriteString("\n")
 			}
 			toolsContent.WriteString(m.theme.Primary.Render(tool.Name))
+			if tokens, ok := m.toolTokens[tool.Name]; ok {
+				toolsContent.WriteString("  ")
+				toolsContent.WriteString(m.theme.Faint.Render(fmt.Sprintf("~%d tokens", tokens)))
+			}
 			if tool.Description != "" {
 				toolsContent.WriteString("\n  ")
 				desc := tool.Description

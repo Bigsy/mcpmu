@@ -83,13 +83,20 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		}
 	})
 
+	// Create tool cache (co-located with active config)
+	toolCache, err := config.NewToolCache(configPath)
+	if err != nil {
+		log.Printf("Warning: failed to create tool cache: %v", err)
+	}
+
 	// Create process supervisor with config-specified credential store
 	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
 		CredentialStoreMode: cfg.MCPOAuthCredentialStore,
 	})
+	supervisor.SetToolCache(toolCache)
 
 	// Create TUI model
-	model := tui.NewModel(cfg, supervisor, bus, configPath)
+	model := tui.NewModel(cfg, supervisor, bus, configPath, toolCache)
 
 	// Set up signal handling for graceful shutdown
 	sigCh := make(chan os.Signal, 1)

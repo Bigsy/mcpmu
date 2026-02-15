@@ -12,6 +12,7 @@ import (
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/process"
+	"github.com/Bigsy/mcpmu/internal/server"
 	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	"github.com/Bigsy/mcpmu/internal/tui/views"
 	"github.com/charmbracelet/bubbles/key"
@@ -44,6 +45,7 @@ type Model struct {
 	bus        *events.Bus
 	ctx        context.Context
 	configPath string // Custom config path, empty for default
+	toolCache  *config.ToolCache
 
 	// UI state
 	theme       theme.Theme
@@ -112,7 +114,7 @@ func newNamespaceFormPtr(th theme.Theme) *views.NamespaceFormModel {
 }
 
 // NewModel creates a new root model.
-func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bus, configPath string) Model {
+func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bus, configPath string, toolCache *config.ToolCache) Model {
 	th := theme.New()
 	keys := NewKeyBindings()
 
@@ -122,6 +124,7 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 		bus:             bus,
 		ctx:             context.Background(),
 		configPath:      configPath,
+		toolCache:       toolCache,
 		theme:           th,
 		keys:            keys,
 		activeTab:       TabServers,
@@ -448,6 +451,10 @@ func (m *Model) handleEvent(e events.Event) tea.Cmd {
 		m.refreshServerList()
 		m.refreshDetailViewIfShowing(evt.ServerID())
 
+		// Refresh namespace views (token counts may have changed)
+		m.refreshNamespaceList()
+		m.refreshNamespaceDetailIfShowing()
+
 		// Check if we're in discovery mode and this completes it
 		if m.toolPerms.IsDiscovering() {
 			m.checkPermissionDiscoveryComplete()
@@ -564,8 +571,8 @@ func (m *Model) handleServerListKey(msg tea.KeyMsg) (handled bool, model tea.Mod
 			m.currentView = ViewDetail
 			m.detailServerID = item.Name
 			status := m.serverStatuses[item.Name]
-			tools := m.convertTools(m.serverTools[item.Name])
-			m.serverDetail.SetServer(item.Name, &item.Config, &status, tools)
+			tools, toolTokens, fromCache := m.getServerToolsForDetail(item.Name)
+			m.serverDetail.SetServer(item.Name, &item.Config, &status, tools, toolTokens, fromCache)
 		}
 		return true, m, nil
 
@@ -726,7 +733,22 @@ func (m Model) handleServerFormResult(result views.ServerFormResult) (tea.Model,
 				log.Printf("Failed to rename server: %v", err)
 				return m, m.toast.ShowError(fmt.Sprintf("Failed to rename server: %v", err))
 			}
+			// Migrate cache entry to new server name (recomputes tokens)
+			if m.toolCache != nil {
+				_ = m.toolCache.Rename(result.OriginalName, result.Name)
+			}
 		}
+
+		// If command/args or URL changed, clear stale cache (tool set likely different)
+		if m.toolCache != nil {
+			if old, ok := m.cfg.GetServer(result.Name); ok {
+				if old.Command != result.Server.Command || old.URL != result.Server.URL ||
+					strings.Join(old.Args, "\x00") != strings.Join(result.Server.Args, "\x00") {
+					_ = m.toolCache.Delete(result.Name)
+				}
+			}
+		}
+
 		// Update existing server config
 		err = m.cfg.UpdateServer(result.Name, result.Server)
 		if err != nil {
@@ -788,8 +810,14 @@ func (m Model) handleConfirmResult(result views.ConfirmResult) (tea.Model, tea.C
 		delete(m.serverStatuses, m.pendingDeleteID)
 		delete(m.serverTools, m.pendingDeleteID)
 
+		// Remove stale cache entry for deleted server
+		if m.toolCache != nil {
+			_ = m.toolCache.Delete(m.pendingDeleteID)
+		}
+
 		// Refresh list
 		m.refreshServerList()
+		m.refreshNamespaceList()
 
 		m.pendingDeleteID = ""
 		return m, m.toast.ShowSuccess(fmt.Sprintf("Server \"%s\" deleted", serverName))
@@ -943,8 +971,8 @@ func (m *Model) refreshDetailViewIfShowing(serverID string) {
 		return
 	}
 	status := m.serverStatuses[serverID]
-	tools := m.convertTools(m.serverTools[serverID])
-	m.serverDetail.SetServer(serverID, &srv, &status, tools)
+	tools, toolTokens, fromCache := m.getServerToolsForDetail(serverID)
+	m.serverDetail.SetServer(serverID, &srv, &status, tools, toolTokens, fromCache)
 }
 
 func (m *Model) convertTools(mcpTools []events.McpTool) []mcp.Tool {
@@ -1378,7 +1406,8 @@ func (m *Model) handleNamespaceListKey(msg tea.KeyMsg) (handled bool, model tea.
 			m.currentView = ViewDetail
 			m.detailNamespaceID = item.Name
 			permissions := m.cfg.GetToolPermissionsForNamespace(item.Name)
-			m.namespaceDetail.SetNamespace(item.Name, &item.Config, item.IsDefault, m.cfg.ServerEntries(), permissions)
+			serverTokens := m.getServerTokensForNamespace(item.Name)
+			m.namespaceDetail.SetNamespace(item.Name, &item.Config, item.IsDefault, m.cfg.ServerEntries(), permissions, serverTokens)
 		}
 		return true, m, nil
 
@@ -1472,7 +1501,8 @@ func (m *Model) handleNamespaceDetailKey(msg tea.KeyMsg) (handled bool, model te
 			return true, m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 		}
 		permissions := m.cfg.GetToolPermissionsForNamespace(m.detailNamespaceID)
-		m.namespaceDetail.SetNamespace(m.detailNamespaceID, &ns, true, m.cfg.ServerEntries(), permissions)
+		serverTokens := m.getServerTokensForNamespace(m.detailNamespaceID)
+		m.namespaceDetail.SetNamespace(m.detailNamespaceID, &ns, true, m.cfg.ServerEntries(), permissions, serverTokens)
 		m.refreshNamespaceList()
 		return true, m, m.toast.ShowSuccess(fmt.Sprintf("Namespace \"%s\" set as default", m.detailNamespaceID))
 
@@ -1690,7 +1720,8 @@ func (m Model) handleNamespaceFormResult(result views.NamespaceFormResult) (tea.
 	if result.IsEdit && m.currentView == ViewDetail && m.detailNamespaceID == result.Name {
 		if ns, ok := m.cfg.GetNamespace(result.Name); ok {
 			permissions := m.cfg.GetToolPermissionsForNamespace(result.Name)
-			m.namespaceDetail.SetNamespace(result.Name, &ns, result.Name == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions)
+			serverTokens := m.getServerTokensForNamespace(result.Name)
+			m.namespaceDetail.SetNamespace(result.Name, &ns, result.Name == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions, serverTokens)
 		}
 	}
 
@@ -1721,7 +1752,8 @@ func (m Model) handleServerPickerResult(result views.ServerPickerResult) (tea.Mo
 
 	// Refresh detail view
 	permissions := m.cfg.GetToolPermissionsForNamespace(m.detailNamespaceID)
-	m.namespaceDetail.SetNamespace(m.detailNamespaceID, &ns, m.detailNamespaceID == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions)
+	serverTokens := m.getServerTokensForNamespace(m.detailNamespaceID)
+	m.namespaceDetail.SetNamespace(m.detailNamespaceID, &ns, m.detailNamespaceID == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions, serverTokens)
 	m.refreshNamespaceList()
 	m.refreshServerList() // Update server list badges
 
@@ -1771,8 +1803,10 @@ func (m Model) handleToolPermissionsResult(result views.ToolPermissionsResult) (
 	// Refresh detail view
 	if ns, ok := m.cfg.GetNamespace(m.detailNamespaceID); ok {
 		permissions := m.cfg.GetToolPermissionsForNamespace(m.detailNamespaceID)
-		m.namespaceDetail.SetNamespace(m.detailNamespaceID, &ns, m.detailNamespaceID == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions)
+		serverTokens := m.getServerTokensForNamespace(m.detailNamespaceID)
+		m.namespaceDetail.SetNamespace(m.detailNamespaceID, &ns, m.detailNamespaceID == m.cfg.DefaultNamespace, m.cfg.ServerEntries(), permissions, serverTokens)
 	}
+	m.refreshNamespaceList()
 
 	return m, m.toast.ShowSuccess("Tool permissions updated")
 }
@@ -1785,11 +1819,136 @@ func (m *Model) refreshNamespaceList() {
 	entries := m.cfg.NamespaceEntries()
 	items := make([]views.NamespaceItem, len(entries))
 	for i, entry := range entries {
+		tokenCount, hasCache := m.getNamespaceTokenCount(entry.Name)
 		items[i] = views.NamespaceItem{
-			Name:      entry.Name,
-			Config:    entry.Config,
-			IsDefault: entry.Name == m.cfg.DefaultNamespace,
+			Name:       entry.Name,
+			Config:     entry.Config,
+			IsDefault:  entry.Name == m.cfg.DefaultNamespace,
+			TokenCount: tokenCount,
+			HasCache:   hasCache,
 		}
 	}
 	m.namespaceList.SetItems(items)
+}
+
+// getNamespaceTokenCount calculates total tokens for enabled tools in a namespace.
+func (m *Model) getNamespaceTokenCount(nsName string) (total int, hasAnyCache bool) {
+	if m.toolCache == nil {
+		return 0, false
+	}
+	ns, ok := m.cfg.GetNamespace(nsName)
+	if !ok {
+		return 0, false
+	}
+
+	for _, serverID := range ns.ServerIDs {
+		srv, ok := m.cfg.GetServer(serverID)
+		if !ok || !srv.IsEnabled() {
+			continue
+		}
+
+		cachedTools, ok := m.toolCache.Get(serverID)
+		if !ok {
+			continue
+		}
+		hasAnyCache = true
+
+		for _, tool := range cachedTools {
+			allowed, _ := server.IsToolAllowed(m.cfg, nsName, serverID, tool.Name)
+			if allowed {
+				total += tool.TokenCount
+			}
+		}
+	}
+	return total, hasAnyCache
+}
+
+// getServerTokensForNamespace returns per-server token counts for enabled tools.
+func (m *Model) getServerTokensForNamespace(nsName string) map[string]int {
+	result := make(map[string]int)
+	if m.toolCache == nil {
+		return result
+	}
+	ns, ok := m.cfg.GetNamespace(nsName)
+	if !ok {
+		return result
+	}
+	for _, serverID := range ns.ServerIDs {
+		srv, ok := m.cfg.GetServer(serverID)
+		if !ok || !srv.IsEnabled() {
+			continue
+		}
+		cachedTools, ok := m.toolCache.Get(serverID)
+		if !ok {
+			continue
+		}
+		total := 0
+		for _, tool := range cachedTools {
+			allowed, _ := server.IsToolAllowed(m.cfg, nsName, serverID, tool.Name)
+			if allowed {
+				total += tool.TokenCount
+			}
+		}
+		result[serverID] = total
+	}
+	return result
+}
+
+// refreshNamespaceDetailIfShowing refreshes the namespace detail view if currently showing.
+func (m *Model) refreshNamespaceDetailIfShowing() {
+	if m.activeTab != TabNamespaces || m.currentView != ViewDetail || m.detailNamespaceID == "" {
+		return
+	}
+	ns, ok := m.cfg.GetNamespace(m.detailNamespaceID)
+	if !ok {
+		return
+	}
+	serverTokens := m.getServerTokensForNamespace(m.detailNamespaceID)
+	permissions := m.cfg.GetToolPermissionsForNamespace(m.detailNamespaceID)
+	m.namespaceDetail.SetNamespace(
+		m.detailNamespaceID,
+		&ns,
+		m.detailNamespaceID == m.cfg.DefaultNamespace,
+		m.cfg.ServerEntries(),
+		permissions,
+		serverTokens,
+	)
+}
+
+// getServerToolsForDetail returns tools and token info for the server detail view.
+// Prefers live tools; falls back to cache when server is not running.
+func (m *Model) getServerToolsForDetail(serverID string) (tools []mcp.Tool, toolTokens map[string]int, fromCache bool) {
+	toolTokens = make(map[string]int)
+
+	// Check for live tools first — presence in the map means the server has
+	// reported tools (even if the list is empty, that's authoritative).
+	if liveTools, ok := m.serverTools[serverID]; ok {
+		tools = m.convertTools(liveTools)
+		// Get token counts from cache if available
+		if m.toolCache != nil {
+			if cachedTools, ok := m.toolCache.Get(serverID); ok {
+				for _, ct := range cachedTools {
+					toolTokens[ct.Name] = ct.TokenCount
+				}
+			}
+		}
+		return tools, toolTokens, false
+	}
+
+	// Fall back to cache
+	if m.toolCache != nil {
+		if cachedTools, ok := m.toolCache.Get(serverID); ok {
+			tools = make([]mcp.Tool, len(cachedTools))
+			for i, ct := range cachedTools {
+				tools[i] = mcp.Tool{
+					Name:        ct.Name,
+					Description: ct.Description,
+				}
+				toolTokens[ct.Name] = ct.TokenCount
+			}
+			return tools, toolTokens, true
+		}
+	}
+
+	return nil, toolTokens, false
 }

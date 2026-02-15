@@ -13,9 +13,11 @@ import (
 
 // NamespaceItem represents a namespace in the list.
 type NamespaceItem struct {
-	Name      string // Namespace name (map key)
-	Config    config.NamespaceConfig
-	IsDefault bool
+	Name       string // Namespace name (map key)
+	Config     config.NamespaceConfig
+	IsDefault  bool
+	TokenCount int  // Estimated token count for enabled tools
+	HasCache   bool // Whether any tool cache data exists
 }
 
 func (i NamespaceItem) Title() string       { return i.Name }
@@ -195,5 +197,19 @@ func (d namespaceDelegate) Render(w io.Writer, m list.Model, index int, item lis
 		line2 += d.theme.Faint.Render("No servers assigned")
 	}
 
+	// Token count
+	if ni.HasCache {
+		line2 += "  " + d.theme.Muted.Render(formatTokenCount(ni.TokenCount))
+	} else if serverCount > 0 {
+		line2 += "  " + d.theme.Faint.Render("(tokens unknown)")
+	}
+
 	_, _ = fmt.Fprint(w, line1+"\n"+line2)
+}
+
+func formatTokenCount(tokens int) string {
+	if tokens >= 1000 {
+		return fmt.Sprintf("~%.1fk tokens", float64(tokens)/1000)
+	}
+	return fmt.Sprintf("~%d tokens", tokens)
 }

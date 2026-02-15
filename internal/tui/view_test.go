@@ -22,7 +22,7 @@ func newTestModelWithSize(t *testing.T, width, height int) Model {
 		CredentialStoreMode: "file",
 	})
 
-	m := NewModel(cfg, supervisor, bus, "")
+	m := NewModel(cfg, supervisor, bus, "", nil)
 	newModel, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return newModel.(Model)
 }
@@ -35,7 +35,7 @@ func TestView_Loading(t *testing.T) {
 	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
 		CredentialStoreMode: "file",
 	})
-	m := NewModel(cfg, supervisor, bus, "")
+	m := NewModel(cfg, supervisor, bus, "", nil)
 
 	// Before WindowSizeMsg, width/height are 0
 	view := m.View()
@@ -154,7 +154,7 @@ func TestView_WithServers(t *testing.T) {
 		CredentialStoreMode: "file",
 	})
 
-	m := NewModel(cfg, supervisor, bus, "")
+	m := NewModel(cfg, supervisor, bus, "", nil)
 	newModel, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = newModel.(Model)
 
