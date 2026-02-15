@@ -279,6 +279,16 @@ With optional fields:
 | `mcp_oauth_credentials_store` | Where to store OAuth tokens: `"auto"`, `"keyring"`, or `"file"` (default: auto) |
 | `mcp_oauth_callback_port` | Port for the OAuth callback server (default: auto-assigned) |
 
+## Shell Completions
+
+Tab-completion for server names, namespace names, and subcommand arguments. If installed via Homebrew:
+
+```bash
+mcpmu completion zsh > "$(brew --prefix)/share/zsh/site-functions/_mcpmu"
+```
+
+For bash, fish, and PowerShell setup see [docs/completions.md](docs/completions.md).
+
 ## Building from source
 
 ```bash

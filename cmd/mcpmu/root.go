@@ -31,9 +31,6 @@ Use 'mcpmu serve --stdio' to run as an MCP server (spawned by Claude Code).`,
 }
 
 func init() {
-	// Disable automatic completion command
-	rootCmd.CompletionOptions.DisableDefaultCmd = true
-
 	// Suppress errors from being printed twice
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
