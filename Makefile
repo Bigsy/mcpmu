@@ -1,4 +1,4 @@
-.PHONY: build install test test-v test-integration lint fmt fmt-check check clean run debug
+.PHONY: build install test test-v test-integration lint fmt fmt-check fix check clean run debug
 
 build:
 	go build -o mcpmu ./cmd/mcpmu
@@ -20,13 +20,16 @@ test-integration:
 lint:
 	golangci-lint run
 
+fix:
+	go fix ./...
+
 fmt:
 	gofmt -w .
 
 fmt-check:
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed on:"; gofmt -l .; exit 1)
 
-check: fmt-check lint test
+check: fix fmt-check lint test
 
 clean:
 	rm -f mcpmu

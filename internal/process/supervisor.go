@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
@@ -299,9 +300,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 
 	// Build HTTP headers
 	headers := make(map[string]string)
-	for k, v := range srv.HTTPHeaders {
-		headers[k] = v
-	}
+	maps.Copy(headers, srv.HTTPHeaders)
 	for headerName, envVarName := range srv.EnvHTTPHeaders {
 		if value := os.Getenv(envVarName); value != "" {
 			headers[headerName] = value
@@ -559,8 +558,8 @@ func buildEnv(customEnv map[string]string) []string {
 
 	// Find and update PATH
 	for i, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			currentPath := strings.TrimPrefix(e, "PATH=")
+		if after, ok := strings.CutPrefix(e, "PATH="); ok {
+			currentPath := after
 			// Prepend additional paths
 			newPath := strings.Join(pathDirs, ":") + ":" + currentPath
 			env[i] = "PATH=" + newPath
@@ -930,9 +929,7 @@ func (s *Supervisor) retryHTTPConnection(ctx context.Context, name string) error
 
 	// Build HTTP headers
 	headers := make(map[string]string)
-	for k, v := range cfg.HTTPHeaders {
-		headers[k] = v
-	}
+	maps.Copy(headers, cfg.HTTPHeaders)
 	for headerName, envVarName := range cfg.EnvHTTPHeaders {
 		if value := os.Getenv(envVarName); value != "" {
 			headers[headerName] = value

@@ -528,7 +528,7 @@ func parseEnvVars(s string) map[string]string {
 	}
 
 	env := make(map[string]string)
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || !strings.Contains(line, "=") {
 			continue

@@ -225,10 +225,7 @@ func (m *LogPanelModel) updateContent() {
 			prefixWidth := len(ts) + 1 + len(serverTag) + 1
 
 			// Calculate available width for log content
-			contentWidth := m.viewport.Width - prefixWidth
-			if contentWidth < 10 {
-				contentWidth = 10
-			}
+			contentWidth := max(m.viewport.Width-prefixWidth, 10)
 
 			// Wrap the log line
 			wrappedLines := wrapText(entry.Line, contentWidth)

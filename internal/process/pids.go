@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -190,9 +191,7 @@ func (pt *PIDTracker) CleanupOrphans() int {
 	}
 
 	// Apply updates (retry count increments)
-	for serverID, entry := range toUpdate {
-		pt.pids[serverID] = entry
-	}
+	maps.Copy(pt.pids, toUpdate)
 
 	// Save the updated state
 	if err := pt.save(); err != nil {

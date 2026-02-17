@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 )
@@ -350,15 +351,11 @@ func determineAuthMethod(metadata *AuthorizationServerMetadata, clientSecret str
 	}
 
 	// Prefer client_secret_post (simpler), fall back to client_secret_basic
-	for _, method := range supportedMethods {
-		if method == "client_secret_post" {
-			return TokenAuthSecretPost
-		}
+	if slices.Contains(supportedMethods, "client_secret_post") {
+		return TokenAuthSecretPost
 	}
-	for _, method := range supportedMethods {
-		if method == "client_secret_basic" {
-			return TokenAuthSecretBasic
-		}
+	if slices.Contains(supportedMethods, "client_secret_basic") {
+		return TokenAuthSecretBasic
 	}
 
 	// Server doesn't support our methods - try post anyway
@@ -516,7 +513,7 @@ func Logout(ctx context.Context, store CredentialStore, serverURL string) error 
 }
 
 // RequestBody helper for creating JSON request bodies.
-func RequestBody(v interface{}) (io.Reader, error) {
+func RequestBody(v any) (io.Reader, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return nil, err

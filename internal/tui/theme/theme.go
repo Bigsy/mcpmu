@@ -184,10 +184,9 @@ func (t Theme) RenderPane(title, content string, width int, focused bool) string
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(borderColor)
 
 	// Calculate widths (account for box drawing characters and padding)
-	contentWidth := width - 4 // 2 for borders, 2 for padding
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
+	contentWidth := max(
+		// 2 for borders, 2 for padding
+		width-4, 1)
 
 	// Build header: ╭─┤ Title ├───...───╮
 	titleText := titleStyle.Render(title)
@@ -195,10 +194,7 @@ func (t Theme) RenderPane(title, content string, width int, focused bool) string
 	// Header structure: "╭─┤ " + title + " ├" + "─" * rest + "╮"
 	// Total = 4 + titleWidth + 2 + rest + 1 = width
 	// rest = width - titleWidth - 7
-	restWidth := width - titleWidth - 7
-	if restWidth < 0 {
-		restWidth = 0
-	}
+	restWidth := max(width-titleWidth-7, 0)
 
 	header := borderStyle.Render("╭─┤ ") + titleText + borderStyle.Render(" ├"+strings.Repeat("─", restWidth)+"╮")
 
@@ -207,10 +203,7 @@ func (t Theme) RenderPane(title, content string, width int, focused bool) string
 	var body strings.Builder
 	for _, line := range lines {
 		lineWidth := lipgloss.Width(line)
-		padding := contentWidth - lineWidth
-		if padding < 0 {
-			padding = 0
-		}
+		padding := max(contentWidth-lineWidth, 0)
 		body.WriteString(borderStyle.Render("│ "))
 		body.WriteString(line)
 		body.WriteString(strings.Repeat(" ", padding))
@@ -219,10 +212,7 @@ func (t Theme) RenderPane(title, content string, width int, focused bool) string
 	}
 
 	// Build footer: ╰───...───╯
-	footerWidth := width - 2
-	if footerWidth < 0 {
-		footerWidth = 0
-	}
+	footerWidth := max(width-2, 0)
 	footer := borderStyle.Render("╰" + strings.Repeat("─", footerWidth) + "╯")
 
 	return header + "\n" + body.String() + footer

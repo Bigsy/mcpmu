@@ -38,7 +38,7 @@ func TestNewPKCE(t *testing.T) {
 func TestNewPKCE_Uniqueness(t *testing.T) {
 	// Generate multiple PKCE pairs and verify they're unique
 	seen := make(map[string]bool)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		pkce, err := NewPKCE()
 		if err != nil {
 			t.Fatalf("NewPKCE failed: %v", err)
@@ -62,7 +62,7 @@ func TestGenerateState(t *testing.T) {
 
 	// Verify uniqueness
 	seen := make(map[string]bool)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		s, err := GenerateState()
 		if err != nil {
 			t.Fatalf("GenerateState failed: %v", err)

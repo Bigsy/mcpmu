@@ -28,9 +28,9 @@ type McpClient interface {
 
 // Tool represents an MCP tool definition.
 type Tool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description,omitempty"`
-	InputSchema interface{} `json:"inputSchema,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	InputSchema any    `json:"inputSchema,omitempty"`
 }
 
 // StdioTransportConfig holds configuration for stdio transport.

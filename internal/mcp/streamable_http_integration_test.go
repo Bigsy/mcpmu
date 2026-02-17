@@ -127,22 +127,22 @@ func (m *MockMCPServer) handlePost(w http.ResponseWriter, r *http.Request) {
 	switch req.Method {
 	case "initialize":
 		// Update ID in response
-		resp := make(map[string]interface{})
+		resp := make(map[string]any)
 		_ = json.Unmarshal(m.initResponse, &resp)
 		resp["id"] = req.ID
 		_ = json.NewEncoder(w).Encode(resp)
 
 	case "tools/list":
-		resp := make(map[string]interface{})
+		resp := make(map[string]any)
 		_ = json.Unmarshal(m.toolsResponse, &resp)
 		resp["id"] = req.ID
 		_ = json.NewEncoder(w).Encode(resp)
 
 	default:
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
-			"error": map[string]interface{}{
+			"error": map[string]any{
 				"code":    -32601,
 				"message": "Method not found",
 			},
@@ -627,7 +627,7 @@ func TestStreamableHTTPTransport_CloseWhileSendInFlight_NoPanic(t *testing.T) {
 
 	transport := NewStreamableHTTPTransport(StreamableHTTPConfig{URL: server.URL})
 
-	result := make(chan interface{}, 1)
+	result := make(chan any, 1)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -774,13 +774,13 @@ func (m *LegacySSEMockServer) handlePost(w http.ResponseWriter, r *http.Request)
 
 	switch req.Method {
 	case "initialize":
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
-			"result": map[string]interface{}{
+			"result": map[string]any{
 				"protocolVersion": "2024-11-05",
-				"capabilities":    map[string]interface{}{},
-				"serverInfo": map[string]interface{}{
+				"capabilities":    map[string]any{},
+				"serverInfo": map[string]any{
 					"name":    "legacy-mock-server",
 					"version": "1.0.0",
 				},
@@ -792,11 +792,11 @@ func (m *LegacySSEMockServer) handlePost(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusAccepted)
 
 	case "tools/list":
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
-			"result": map[string]interface{}{
-				"tools": []map[string]interface{}{
+			"result": map[string]any{
+				"tools": []map[string]any{
 					{"name": "legacyTool", "description": "A legacy test tool"},
 				},
 			},
@@ -807,11 +807,11 @@ func (m *LegacySSEMockServer) handlePost(w http.ResponseWriter, r *http.Request)
 		m.toolCallCount++
 		m.mu.Unlock()
 
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
-			"result": map[string]interface{}{
-				"content": []map[string]interface{}{
+			"result": map[string]any{
+				"content": []map[string]any{
 					{"type": "text", "text": "tool called successfully"},
 				},
 				"isError": false,
@@ -819,10 +819,10 @@ func (m *LegacySSEMockServer) handlePost(w http.ResponseWriter, r *http.Request)
 		})
 
 	default:
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
-			"error": map[string]interface{}{
+			"error": map[string]any{
 				"code":    -32601,
 				"message": "Method not found",
 			},

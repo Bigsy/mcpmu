@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -296,12 +297,13 @@ func (r *Router) handleServerLogs(ctx context.Context, arguments json.RawMessage
 		logs = logs[len(logs)-args.Lines:]
 	}
 
-	result := fmt.Sprintf("Last %d log lines from %s:\n", len(logs), serverName)
+	var result strings.Builder
+	_, _ = fmt.Fprintf(&result, "Last %d log lines from %s:\n", len(logs), serverName)
 	for _, line := range logs {
-		result += line + "\n"
+		result.WriteString(line + "\n")
 	}
 
-	return textResult(result), nil
+	return textResult(result.String()), nil
 }
 
 // handleNamespacesList returns the list of namespaces with active namespace info.

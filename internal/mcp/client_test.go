@@ -225,7 +225,7 @@ func TestClient_LargeToolList(t *testing.T) {
 
 	// Generate 100 tools
 	tools := make([]fakeserver.Tool, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		tools[i] = fakeserver.Tool{
 			Name:        "tool_" + string(rune('a'+i%26)),
 			Description: "Test tool",

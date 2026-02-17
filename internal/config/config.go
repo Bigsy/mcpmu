@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -350,10 +351,8 @@ func (c *Config) AssignServerToNamespace(namespaceName, serverName string) error
 	}
 
 	// Check if already assigned
-	for _, sid := range ns.ServerIDs {
-		if sid == serverName {
-			return nil // Already assigned, no-op
-		}
+	if slices.Contains(ns.ServerIDs, serverName) {
+		return nil // Already assigned, no-op
 	}
 
 	ns.ServerIDs = append(ns.ServerIDs, serverName)

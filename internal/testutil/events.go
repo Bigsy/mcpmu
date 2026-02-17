@@ -2,6 +2,7 @@
 package testutil
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -101,10 +102,8 @@ func (c *EventCollector) WaitForState(serverID string, state events.RuntimeState
 
 	for {
 		// Check if state already observed
-		for _, s := range c.states[serverID] {
-			if s == state {
-				return true
-			}
+		if slices.Contains(c.states[serverID], state) {
+			return true
 		}
 
 		// Check timeout
@@ -127,12 +126,7 @@ func (c *EventCollector) WaitForState(serverID string, state events.RuntimeState
 		select {
 		case <-done:
 			// Timeout expired, check one more time then return
-			for _, s := range c.states[serverID] {
-				if s == state {
-					return true
-				}
-			}
-			return false
+			return slices.Contains(c.states[serverID], state)
 		default:
 			// Continue waiting
 		}

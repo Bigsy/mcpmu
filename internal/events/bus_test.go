@@ -57,7 +57,7 @@ func TestBus_MultipleSubscribers(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Add 3 subscribers
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		wg.Add(1)
 		bus.Subscribe(func(e Event) {
 			count.Add(1)
@@ -130,7 +130,7 @@ func TestBus_ChannelOverflow_DropsEvents(t *testing.T) {
 	defer log.SetOutput(originalOutput)
 
 	// Fill the buffer completely
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		bus.Publish(newTestEvent(i, "server-1"))
 	}
 
@@ -169,7 +169,7 @@ func TestBus_ChannelOverflow_CountsDrops(t *testing.T) {
 	defer log.SetOutput(originalOutput)
 
 	// Publish more events than the buffer can hold
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		bus.Publish(newTestEvent(i, fmt.Sprintf("server-%d", i)))
 	}
 
@@ -205,7 +205,7 @@ func TestBus_EventOrdering(t *testing.T) {
 	})
 
 	// Publish events in order
-	for i := 0; i < numEvents; i++ {
+	for i := range numEvents {
 		bus.Publish(newTestEvent(i, "server-1"))
 	}
 
@@ -248,7 +248,7 @@ func TestBus_EventOrderingNearCapacity(t *testing.T) {
 	})
 
 	// Publish events rapidly
-	for i := 0; i < numEvents; i++ {
+	for i := range numEvents {
 		bus.Publish(newTestEvent(i, "server-1"))
 	}
 
@@ -291,11 +291,11 @@ func TestBus_ConcurrentPublish(t *testing.T) {
 
 	// Publish from multiple goroutines concurrently
 	var wg sync.WaitGroup
-	for g := 0; g < numGoroutines; g++ {
+	for g := range numGoroutines {
 		wg.Add(1)
 		go func(goroutineID int) {
 			defer wg.Done()
-			for i := 0; i < eventsPerGoroutine; i++ {
+			for i := range eventsPerGoroutine {
 				bus.Publish(newTestEvent(goroutineID*100+i, fmt.Sprintf("server-%d", goroutineID)))
 			}
 		}(g)
@@ -324,7 +324,7 @@ func TestBus_SlowSubscriberDoesNotBlockPublisher(t *testing.T) {
 
 	// Publishing should not block (returns immediately due to buffered channel)
 	start := time.Now()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		bus.Publish(newTestEvent(i, "server-1"))
 	}
 	elapsed := time.Since(start)

@@ -32,10 +32,10 @@ type Client struct {
 
 // rpcRequest is a JSON-RPC 2.0 request.
 type rpcRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      int64       `json:"id,omitempty"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
+	JSONRPC string `json:"jsonrpc"`
+	ID      int64  `json:"id,omitempty"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
 }
 
 // rpcResponse is a JSON-RPC 2.0 response.
@@ -238,7 +238,7 @@ func (c *Client) Close() error {
 
 // call makes a JSON-RPC call and waits for the response.
 // The call is serialized with a mutex to prevent concurrent transport access.
-func (c *Client) call(ctx context.Context, method string, params interface{}, result interface{}) error {
+func (c *Client) call(ctx context.Context, method string, params any, result any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -311,7 +311,7 @@ func (c *Client) call(ctx context.Context, method string, params interface{}, re
 }
 
 // notify sends a JSON-RPC notification (no response expected).
-func (c *Client) notify(ctx context.Context, method string, params interface{}) error {
+func (c *Client) notify(ctx context.Context, method string, params any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

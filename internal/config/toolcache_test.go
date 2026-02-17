@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -145,16 +146,17 @@ func TestCountAggregatedToolTokens_EmptyDescription(t *testing.T) {
 
 func TestCountAggregatedToolTokens_LargeSchema(t *testing.T) {
 	// Build a moderately large schema
-	schema := `{"type":"object","properties":{`
-	for i := 0; i < 50; i++ {
+	var schema strings.Builder
+	schema.WriteString(`{"type":"object","properties":{`)
+	for i := range 50 {
 		if i > 0 {
-			schema += ","
+			schema.WriteString(",")
 		}
-		schema += `"field` + string(rune('a'+i%26)) + `":{"type":"string","description":"A field"}`
+		schema.WriteString(`"field` + string(rune('a'+i%26)) + `":{"type":"string","description":"A field"}`)
 	}
-	schema += `}}`
+	schema.WriteString(`}}`)
 
-	tokens := CountAggregatedToolTokens("srv", "tool", "A tool with a large schema", json.RawMessage(schema))
+	tokens := CountAggregatedToolTokens("srv", "tool", "A tool with a large schema", json.RawMessage(schema.String()))
 	if tokens < 50 {
 		t.Errorf("expected at least 50 tokens for large schema, got %d", tokens)
 	}
@@ -291,7 +293,7 @@ func TestToolCache_ConcurrentUpdates(t *testing.T) {
 	tc := newTestCache(t)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()

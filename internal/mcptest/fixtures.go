@@ -24,7 +24,7 @@ func EmptyToolsConfig() FakeServerConfig {
 // LargeToolListConfig returns a config with many tools (for performance testing).
 func LargeToolListConfig(count int) FakeServerConfig {
 	tools := make([]Tool, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		tools[i] = Tool{
 			Name:        "tool_" + string(rune('a'+i%26)) + "_" + string(rune('0'+i/26)),
 			Description: "A test tool for performance testing",

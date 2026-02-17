@@ -75,10 +75,7 @@ func (m *NamespaceListModel) SetSize(width, height int) {
 	}
 	if listHeight < 3 {
 		// Preserve a minimum usable list height by reducing top padding first.
-		m.topPad = height - 2 - 3
-		if m.topPad < 0 {
-			m.topPad = 0
-		}
+		m.topPad = max(height-2-3, 0)
 		listHeight = 3
 	}
 	m.list.SetSize(listWidth, listHeight)

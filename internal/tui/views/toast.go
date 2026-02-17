@@ -179,15 +179,9 @@ func (m ToastModel) ViewWithMaxWidth(maxWidth int) string {
 
 	// The toast styles include 1-char padding on both sides.
 	// We'll conservatively reserve 2 columns for that padding.
-	availableText := maxWidth - 2
-	if availableText < 0 {
-		availableText = 0
-	}
+	availableText := max(maxWidth-2, 0)
 
-	availableMsg := availableText - lipgloss.Width(icon)
-	if availableMsg < 0 {
-		availableMsg = 0
-	}
+	availableMsg := max(availableText-lipgloss.Width(icon), 0)
 
 	msg := m.message
 	if lipgloss.Width(msg) > availableMsg {
@@ -199,13 +193,6 @@ func (m ToastModel) ViewWithMaxWidth(maxWidth int) string {
 	}
 
 	return style.Render(icon + msg)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // RenderOverlay renders the toast positioned above the status bar.

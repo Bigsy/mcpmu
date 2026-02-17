@@ -520,13 +520,13 @@ func (s *sseScanner) Next() (*sseEvent, error) {
 
 		// Parse field
 		var field, value []byte
-		colonIdx := bytes.IndexByte(line, ':')
-		if colonIdx == -1 {
+		before, after, ok := bytes.Cut(line, []byte{':'})
+		if !ok {
 			field = line
 			value = nil
 		} else {
-			field = line[:colonIdx]
-			value = line[colonIdx+1:]
+			field = before
+			value = after
 			// Remove leading space from value if present
 			if len(value) > 0 && value[0] == ' ' {
 				value = value[1:]

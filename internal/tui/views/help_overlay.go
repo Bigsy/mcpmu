@@ -34,10 +34,9 @@ func (m *HelpOverlayModel) SetSize(width, height int) {
 
 	// Calculate viewport size (dialog is ~60 wide, leave room for borders)
 	vpWidth := 54
-	vpHeight := height - 10 // Leave room for title, footer, borders
-	if vpHeight < 5 {
-		vpHeight = 5
-	}
+	vpHeight := max(
+		// Leave room for title, footer, borders
+		height-10, 5)
 
 	if !m.ready {
 		m.viewport = viewport.New(vpWidth, vpHeight)
@@ -138,10 +137,7 @@ func (m HelpOverlayModel) renderSection(title string, bindings [][]string) strin
 
 		// Right-align keys in a 12-char column
 		keyWidth := 12
-		padding := keyWidth - len(binding[0])
-		if padding < 0 {
-			padding = 0
-		}
+		padding := max(keyWidth-len(binding[0]), 0)
 
 		sb.WriteString(strings.Repeat(" ", padding))
 		sb.WriteString(key)

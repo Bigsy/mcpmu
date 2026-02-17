@@ -198,18 +198,18 @@ func TestCLI_Add(t *testing.T) {
 		t.Fatalf("failed to read config: %v", err)
 	}
 
-	var config map[string]interface{}
+	var config map[string]any
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatalf("failed to parse config: %v", err)
 	}
 
-	servers := config["servers"].(map[string]interface{})
+	servers := config["servers"].(map[string]any)
 	if len(servers) != 1 {
 		t.Errorf("expected 1 server, got %d", len(servers))
 	}
 
 	// Server name is now the map key
-	srv, exists := servers["my-server"].(map[string]interface{})
+	srv, exists := servers["my-server"].(map[string]any)
 	if !exists {
 		t.Fatal("expected server 'my-server' to exist")
 	}
@@ -234,17 +234,17 @@ func TestCLI_Add_WithEnv(t *testing.T) {
 
 	// Verify env in config
 	data, _ := os.ReadFile(configPath)
-	var config map[string]interface{}
+	var config map[string]any
 	_ = json.Unmarshal(data, &config)
 
-	servers := config["servers"].(map[string]interface{})
-	var srv map[string]interface{}
+	servers := config["servers"].(map[string]any)
+	var srv map[string]any
 	for _, s := range servers {
-		srv = s.(map[string]interface{})
+		srv = s.(map[string]any)
 		break
 	}
 
-	env := srv["env"].(map[string]interface{})
+	env := srv["env"].(map[string]any)
 	if env["FOO"] != "bar" || env["BAZ"] != "qux" {
 		t.Errorf("expected env FOO=bar BAZ=qux, got %v", env)
 	}
@@ -337,18 +337,18 @@ func TestCLI_Add_HTTP_PositionalURL(t *testing.T) {
 		t.Fatalf("failed to read config: %v", err)
 	}
 
-	var cfg map[string]interface{}
+	var cfg map[string]any
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("failed to parse config: %v", err)
 	}
 
-	servers := cfg["servers"].(map[string]interface{})
+	servers := cfg["servers"].(map[string]any)
 	if len(servers) != 1 {
 		t.Errorf("expected 1 server, got %d", len(servers))
 	}
 
 	// Server name is now the map key
-	srv, exists := servers["my-api"].(map[string]interface{})
+	srv, exists := servers["my-api"].(map[string]any)
 	if !exists {
 		t.Fatal("expected server 'my-api' to exist")
 	}
@@ -374,13 +374,13 @@ func TestCLI_Add_HTTP_PositionalURL_WithBearerEnv(t *testing.T) {
 
 	// Verify bearer env in config
 	data, _ := os.ReadFile(configPath)
-	var cfg map[string]interface{}
+	var cfg map[string]any
 	_ = json.Unmarshal(data, &cfg)
 
-	servers := cfg["servers"].(map[string]interface{})
-	var srv map[string]interface{}
+	servers := cfg["servers"].(map[string]any)
+	var srv map[string]any
 	for _, s := range servers {
-		srv = s.(map[string]interface{})
+		srv = s.(map[string]any)
 		break
 	}
 
@@ -425,7 +425,7 @@ func TestCLI_List_JSON(t *testing.T) {
 		t.Fatalf("list --json failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
 
-	var servers []map[string]interface{}
+	var servers []map[string]any
 	if err := json.Unmarshal([]byte(stdout), &servers); err != nil {
 		t.Fatalf("failed to parse JSON: %v\noutput: %s", err, stdout)
 	}
@@ -516,16 +516,16 @@ func TestCLI_Namespace_Add(t *testing.T) {
 
 	// Verify in config
 	data, _ := os.ReadFile(configPath)
-	var config map[string]interface{}
+	var config map[string]any
 	_ = json.Unmarshal(data, &config)
 
-	namespaces := config["namespaces"].(map[string]interface{})
+	namespaces := config["namespaces"].(map[string]any)
 	if len(namespaces) != 1 {
 		t.Errorf("expected 1 namespace, got %d", len(namespaces))
 	}
 
 	// Namespace name is now the map key
-	ns, exists := namespaces["dev"].(map[string]interface{})
+	ns, exists := namespaces["dev"].(map[string]any)
 	if !exists {
 		t.Fatal("expected namespace 'dev' to exist")
 	}
@@ -583,7 +583,7 @@ func TestCLI_Namespace_List_JSON(t *testing.T) {
 		t.Fatalf("namespace list --json failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
 
-	var namespaces []map[string]interface{}
+	var namespaces []map[string]any
 	if err := json.Unmarshal([]byte(stdout), &namespaces); err != nil {
 		t.Fatalf("failed to parse JSON: %v\noutput: %s", err, stdout)
 	}
@@ -825,7 +825,7 @@ func TestCLI_Permission_List_JSON(t *testing.T) {
 		t.Fatalf("permission list --json failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		t.Fatalf("failed to parse JSON: %v\noutput: %s", err, stdout)
 	}
@@ -834,7 +834,7 @@ func TestCLI_Permission_List_JSON(t *testing.T) {
 		t.Errorf("expected namespace 'prod', got %v", result["namespace"])
 	}
 
-	permissions := result["permissions"].([]interface{})
+	permissions := result["permissions"].([]any)
 	if len(permissions) != 1 {
 		t.Errorf("expected 1 permission, got %d", len(permissions))
 	}

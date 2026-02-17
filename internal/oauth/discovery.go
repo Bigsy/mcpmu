@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -43,12 +44,7 @@ type AuthorizationServerMetadata struct {
 
 // SupportsS256 returns true if the server supports S256 PKCE.
 func (m *AuthorizationServerMetadata) SupportsS256() bool {
-	for _, method := range m.CodeChallengeMethodsSupported {
-		if method == "S256" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(m.CodeChallengeMethodsSupported, "S256")
 }
 
 // DiscoverResult holds the result of OAuth discovery.

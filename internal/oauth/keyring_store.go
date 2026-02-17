@@ -3,6 +3,7 @@ package oauth
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -171,10 +172,8 @@ func (s *KeyringStore) addToIndex(url string) error {
 	}
 
 	// Check if already exists
-	for _, u := range urls {
-		if u == url {
-			return nil
-		}
+	if slices.Contains(urls, url) {
+		return nil
 	}
 
 	urls = append(urls, url)

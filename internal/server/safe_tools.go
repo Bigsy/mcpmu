@@ -79,8 +79,8 @@ func ClassifyTool(toolName string) ToolClassification {
 // "filesystem.read_file" → "read_file"
 // "read_file" → "read_file" (unchanged)
 func stripServerPrefix(qualifiedName string) string {
-	if idx := strings.Index(qualifiedName, "."); idx != -1 {
-		return qualifiedName[idx+1:]
+	if _, after, ok := strings.Cut(qualifiedName, "."); ok {
+		return after
 	}
 	return qualifiedName
 }

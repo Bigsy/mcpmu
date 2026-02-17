@@ -1073,7 +1073,7 @@ func TestServer_ReloadDuringActiveRequest(t *testing.T) {
 		Error *RPCError `json:"error"`
 	}
 
-	for i := 0; i < 3; i++ { // Try a few times to get the right response
+	for range 3 { // Try a few times to get the right response
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			t.Fatalf("Failed to read response after reload: %v", err)

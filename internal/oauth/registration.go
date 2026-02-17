@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -110,9 +111,10 @@ func joinScopes(scopes []string) string {
 	if len(scopes) == 0 {
 		return ""
 	}
-	result := scopes[0]
+	var result strings.Builder
+	result.WriteString(scopes[0])
 	for i := 1; i < len(scopes); i++ {
-		result += " " + scopes[i]
+		result.WriteString(" " + scopes[i])
 	}
-	return result
+	return result.String()
 }

@@ -147,12 +147,12 @@ func TestServerConfig_IsEnabled(t *testing.T) {
 		},
 		{
 			name:     "true means enabled",
-			enabled:  boolPtr(true),
+			enabled:  new(true),
 			expected: true,
 		},
 		{
 			name:     "false means disabled",
-			enabled:  boolPtr(false),
+			enabled:  new(false),
 			expected: false,
 		},
 	}
@@ -440,10 +440,6 @@ func TestConfig_ServerEntries(t *testing.T) {
 			t.Error("expected entry to have name")
 		}
 	}
-}
-
-func boolPtr(b bool) *bool {
-	return &b
 }
 
 // ============================================================================

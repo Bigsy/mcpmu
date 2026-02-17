@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -350,13 +351,7 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 	// Manager tools are always allowed
 	if !isManager && serverName != "" {
 		// Check if the server is in the active namespace
-		allowed := false
-		for _, name := range activeServerNames {
-			if name == serverName {
-				allowed = true
-				break
-			}
-		}
+		allowed := slices.Contains(activeServerNames, serverName)
 		if !allowed {
 			return nil, ErrServerNotFound(serverName)
 		}

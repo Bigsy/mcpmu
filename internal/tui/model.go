@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -942,11 +943,8 @@ func (m *Model) refreshServerList() {
 		// Find namespaces this server belongs to
 		var namespaceNames []string
 		for nsName, ns := range m.cfg.Namespaces {
-			for _, sid := range ns.ServerIDs {
-				if sid == entry.Name {
-					namespaceNames = append(namespaceNames, nsName)
-					break
-				}
+			if slices.Contains(ns.ServerIDs, entry.Name) {
+				namespaceNames = append(namespaceNames, nsName)
 			}
 		}
 		sort.Strings(namespaceNames)
@@ -996,10 +994,9 @@ func (m *Model) updateLayout() {
 	}
 
 	// Available height for main content
-	contentHeight := m.height - headerHeight - statusHeight - logHeight
-	if contentHeight < 5 {
-		contentHeight = 5 // Minimum content height
-	}
+	contentHeight := max(m.height-headerHeight-statusHeight-logHeight,
+		// Minimum content height
+		5)
 
 	// Available width: total width minus App padding (2)
 	contentWidth := m.width - 4
@@ -1132,10 +1129,7 @@ func (m Model) renderHeader() string {
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabViews...)
 
 	// Align title left, tabs right
-	padding := m.width - lipgloss.Width(title) - lipgloss.Width(tabBar) - 4
-	if padding < 1 {
-		padding = 1
-	}
+	padding := max(m.width-lipgloss.Width(title)-lipgloss.Width(tabBar)-4, 1)
 
 	return title + strings.Repeat(" ", padding) + tabBar
 }
@@ -1181,19 +1175,13 @@ func (m Model) renderStatusBar() string {
 	// right (so notifications don't hide navigation hints).
 	if m.toast.IsVisible() {
 		// Ensure the toast doesn't overflow into the key hints area.
-		available := m.width - lipgloss.Width(keys) - 4
-		if available < 10 {
-			available = 10
-		}
+		available := max(m.width-lipgloss.Width(keys)-4, 10)
 		if toast := m.toast.ViewWithMaxWidth(available); toast != "" {
 			left = toast
 		}
 	}
 
-	padding := m.width - lipgloss.Width(left) - lipgloss.Width(keys) - 4
-	if padding < 1 {
-		padding = 1
-	}
+	padding := max(m.width-lipgloss.Width(left)-lipgloss.Width(keys)-4, 1)
 
 	return m.theme.StatusBar.Render(left + strings.Repeat(" ", padding) + keys)
 }
