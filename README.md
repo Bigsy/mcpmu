@@ -9,6 +9,8 @@ Key differentiators:
 - **Namespace profiles** — Group servers by context (work, personal, project) with per-namespace tool permissions
 - **Multi-transport** — Manage both local stdio processes and remote HTTP/SSE endpoints
 - **Interactive TUI** — Monitor, test, and manage servers with a terminal interface
+- **Tool permissions TUI** — Block unused tools (or maybe write tools) to avoid mishaps for wasted tokens
+
 
 <table>
   <tr>
