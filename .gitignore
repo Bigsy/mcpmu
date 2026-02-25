@@ -39,5 +39,6 @@ AGENTS.md
 # Planning docs (keep local, not in repo)
 PLAN*.md
 
-# Claude Code local config
-.claude/
+# Claude Code local config (allow skills/ to be tracked)
+.claude/*
+!.claude/skills/

@@ -291,6 +291,19 @@ mcpmu completion zsh > "$(brew --prefix)/share/zsh/site-functions/_mcpmu"
 
 For bash, fish, and PowerShell setup see [docs/completions.md](docs/completions.md).
 
+## Claude Code Skill
+
+mcpmu ships with a Claude Code skill that teaches Claude how to use the mcpmu CLI. Install it to your personal skills directory so it's available across all projects:
+
+```bash
+git clone https://github.com/Bigsy/mcpmu.git /tmp/mcpmu-skill && \
+  mkdir -p ~/.claude/skills && \
+  cp -r /tmp/mcpmu-skill/.claude/skills/mcpmu ~/.claude/skills/ && \
+  rm -rf /tmp/mcpmu-skill
+```
+
+Once installed, Claude Code will automatically know how to use mcpmu commands when you ask about MCP server management. You can also invoke it directly with `/mcpmu`.
+
 ## Building from source
 
 ```bash
