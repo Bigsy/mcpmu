@@ -94,6 +94,32 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	return m.form.Init()
 }
 
+// ShowAddWithDefaults displays the form for adding a new server with pre-populated values.
+// Used by the registry browser to pre-fill the form with install spec data.
+// Returns a tea.Cmd to initialize the form.
+func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bearerTokenEnvVar string) tea.Cmd {
+	m.visible = true
+	m.isEdit = false
+	m.showConfirmDiscard = false
+	m.originalServer = nil
+	m.originalName = ""
+	m.name = name
+	m.commandOrURL = commandOrURL
+	m.args = args
+	m.cwd = ""
+	m.env = env
+	m.bearerTokenEnvVar = bearerTokenEnvVar
+	// Save initial values for dirty checking (so form isn't dirty on open)
+	m.initialName = name
+	m.initialCommandOrURL = commandOrURL
+	m.initialArgs = args
+	m.initialCwd = ""
+	m.initialEnv = env
+	m.initialBearerTokenEnvVar = bearerTokenEnvVar
+	m.buildForm()
+	return m.form.Init()
+}
+
 // ShowEdit displays the form for editing an existing server.
 // Returns a tea.Cmd to initialize the form.
 func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd {
