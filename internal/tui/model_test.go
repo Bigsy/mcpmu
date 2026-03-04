@@ -11,6 +11,7 @@ import (
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/mcptest"
 	"github.com/Bigsy/mcpmu/internal/process"
+	"github.com/Bigsy/mcpmu/internal/registry"
 	"github.com/Bigsy/mcpmu/internal/testutil"
 	"github.com/Bigsy/mcpmu/internal/tui/views"
 	tea "github.com/charmbracelet/bubbletea"
@@ -1002,5 +1003,290 @@ func TestGetServerToolsForDetail_FallsBackToCacheWhenNoLiveData(t *testing.T) {
 	}
 	if toolTokens["cached_tool"] <= 0 {
 		t.Errorf("expected positive token count for cached tool, got %d", toolTokens["cached_tool"])
+	}
+}
+
+// ============================================================================
+// Registry browser integration tests
+// ============================================================================
+
+func TestModel_AddKeyOpensAddMethodSelector(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press 'a' on server list tab
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if !m.addMethod.IsVisible() {
+		t.Error("expected add method selector to be visible after 'a' key")
+	}
+}
+
+func TestModel_AddMethodManualOpensServerForm(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Send AddMethodResult for manual
+	m, _ = updateModel(m, views.AddMethodResult{Method: "manual", Submitted: true})
+	if !m.serverForm.IsVisible() {
+		t.Error("expected server form to be visible after manual selection")
+	}
+}
+
+func TestModel_AddMethodRegistryOpensBrowser(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Send AddMethodResult for registry
+	m, _ = updateModel(m, views.AddMethodResult{Method: "registry", Submitted: true})
+	if !m.registryBrowser.IsVisible() {
+		t.Error("expected registry browser to be visible after registry selection")
+	}
+}
+
+func TestModel_AddMethodCancelDoesNothing(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Send cancelled AddMethodResult
+	m, _ = updateModel(m, views.AddMethodResult{Submitted: false})
+	if m.serverForm.IsVisible() {
+		t.Error("expected server form NOT to be visible after cancel")
+	}
+	if m.registryBrowser.IsVisible() {
+		t.Error("expected registry browser NOT to be visible after cancel")
+	}
+}
+
+func TestModel_AddKeyOnNamespaceTabStillOpensNamespaceForm(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Switch to namespaces tab
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+
+	// Press 'a' on namespaces tab
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if m.addMethod.IsVisible() {
+		t.Error("expected add method selector NOT to be visible on namespaces tab")
+	}
+	if !m.namespaceForm.IsVisible() {
+		t.Error("expected namespace form to be visible after 'a' on namespaces tab")
+	}
+}
+
+func TestModel_RegistryBrowserResult_SubmittedSetsPendingInstall(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Open browser
+	m.registryBrowser.Show()
+	if !m.registryBrowser.IsVisible() {
+		t.Fatal("precondition: browser should be visible")
+	}
+
+	// Simulate browser result
+	m, _ = updateModel(m, views.RegistryBrowserResult{
+		Submitted: true,
+		Spec: registry.InstallSpec{
+			Name:         "brave-search",
+			CommandOrURL: "npx",
+			Args:         "-y @brave/brave-search-mcp-server",
+			Env:          map[string]string{"BRAVE_API_KEY": "<your-BRAVE_API_KEY>"},
+		},
+	})
+
+	if m.registryBrowser.IsVisible() {
+		t.Error("expected browser to be hidden after result")
+	}
+
+	// Next update should trigger the pending install and open the server form
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}}) // any msg triggers pending
+	if !m.serverForm.IsVisible() {
+		t.Error("expected server form to be visible after pending registry install")
+	}
+}
+
+func TestModel_RegistryBrowserResult_NotSubmittedJustCloses(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	m.registryBrowser.Show()
+
+	m, _ = updateModel(m, views.RegistryBrowserResult{Submitted: false})
+
+	if m.registryBrowser.IsVisible() {
+		t.Error("expected browser to be hidden after cancel result")
+	}
+	if m.serverForm.IsVisible() {
+		t.Error("expected server form NOT to be visible after cancel")
+	}
+}
+
+func TestModel_RegistryBrowserResult_EmptySpecShowsToast(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	m.registryBrowser.Show()
+
+	// Submit with empty CommandOrURL (unsupported server)
+	m, _ = updateModel(m, views.RegistryBrowserResult{
+		Submitted: true,
+		Spec:      registry.InstallSpec{}, // empty CommandOrURL
+	})
+
+	// Process pending install
+	m, cmd := updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}})
+	if m.serverForm.IsVisible() {
+		t.Error("expected server form NOT to be visible for empty spec")
+	}
+	// The toast error command should have been returned
+	if cmd != nil {
+		msg := cmd()
+		// Just verify it produced a message (toast message)
+		if msg == nil {
+			t.Error("expected toast message from empty spec")
+		}
+	}
+}
+
+func TestModel_RegistryBrowserOverlayRendersInView(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	m.registryBrowser.Show()
+	m.registryBrowser.SetSize(120, 40)
+
+	view := m.View()
+	stripped := testutil.StripANSI(view)
+	if !strings.Contains(stripped, "Install from Registry") {
+		t.Error("expected 'Install from Registry' in view when browser is visible")
+	}
+}
+
+func TestModel_StatusBarShowsAddHint(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := m.View()
+	stripped := testutil.StripANSI(view)
+	if !strings.Contains(stripped, "a:add") {
+		t.Error("expected 'a:add' in status bar on server list tab")
+	}
+	if strings.Contains(stripped, "i:install") {
+		t.Error("expected 'i:install' NOT in status bar")
+	}
+}
+
+// TestModel_RegistryBrowserInstallE2E exercises the real key→cmd→msg cycle
+// that goes through the browser component, producing a deferred result.
+// This catches the bug where the browser hides itself before the result cmd
+// is executed, so the result arrives when browser.IsVisible() is false.
+func TestModel_RegistryBrowserInstallE2E(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 120
+	m.height = 40
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Open browser and populate with search results
+	m.registryBrowser.Show()
+	m.registryBrowser.SetSize(120, 40)
+
+	// Inject search results via test helper
+	m.registryBrowser.SetTestServers("brave", []registry.Server{
+		{
+			Name:        "io.github.brave/brave-search-mcp-server",
+			Title:       "Brave Search MCP Server",
+			Description: "Web search",
+			Version:     "2.0.75",
+			Packages: []registry.Package{
+				{
+					RegistryType: "npm",
+					Identifier:   "@brave/brave-search-mcp-server",
+					Version:      "2.0.75",
+					RuntimeHint:  "npx",
+					Transport:    registry.Transport{Type: "stdio"},
+					EnvironmentVariables: []registry.EnvironmentVar{
+						{Name: "BRAVE_API_KEY", IsRequired: true, IsSecret: true},
+					},
+				},
+			},
+		},
+	})
+
+	// Press Enter to go to detail view
+	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Press Enter again to install — this produces a cmd (not a direct message)
+	m, cmd := updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Browser should have hidden itself
+	if m.registryBrowser.IsVisible() {
+		t.Error("expected browser hidden after install Enter")
+	}
+
+	// Execute the returned command to get the RegistryBrowserResult
+	if cmd == nil {
+		t.Fatal("expected a command from install Enter")
+	}
+	msg := cmd()
+	result, ok := msg.(views.RegistryBrowserResult)
+	if !ok {
+		t.Fatalf("expected RegistryBrowserResult from cmd, got %T", msg)
+	}
+	if !result.Submitted {
+		t.Error("expected Submitted=true")
+	}
+
+	// Feed the result back to the model (this is what Bubble Tea does)
+	m, _ = updateModel(m, result)
+
+	// Now on next tick, pending install should trigger the form
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	if !m.serverForm.IsVisible() {
+		t.Error("expected server form to open from registry install E2E flow")
+	}
+}
+
+func TestFormatEnvMap(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"nil", nil, ""},
+		{"empty", map[string]string{}, ""},
+		{"single", map[string]string{"KEY": "val"}, "KEY=val"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatEnvMap(tt.env)
+			if tt.want != "" && got != tt.want {
+				t.Errorf("formatEnvMap() = %q, want %q", got, tt.want)
+			}
+			if tt.want == "" && got != "" {
+				t.Errorf("formatEnvMap() = %q, want empty", got)
+			}
+		})
 	}
 }

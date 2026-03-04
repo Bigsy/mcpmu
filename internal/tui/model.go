@@ -13,6 +13,7 @@ import (
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/process"
+	"github.com/Bigsy/mcpmu/internal/registry"
 	"github.com/Bigsy/mcpmu/internal/server"
 	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	"github.com/Bigsy/mcpmu/internal/tui/views"
@@ -68,11 +69,13 @@ type Model struct {
 	namespaceForm   *views.NamespaceFormModel
 	serverPicker    views.ServerPickerModel
 	toolPerms       views.ToolPermissionsModel
+	registryBrowser views.RegistryBrowserModel
 
 	// Shared Components
 	logPanel    views.LogPanelModel
 	helpOverlay views.HelpOverlayModel
 	confirmDlg  views.ConfirmModel
+	addMethod   views.AddMethodModel
 	toast       views.ToastModel
 
 	// Server status tracking
@@ -95,6 +98,9 @@ type Model struct {
 	// Tool permission discovery state
 	permDiscoveryServers  []string // Servers we're waiting for tools from
 	permDiscoveryExpected int      // Number of servers expected to report tools
+
+	// Pending registry install (deferred form opening)
+	pendingRegistryInstall *registry.InstallSpec
 
 	// Event channel for Bubble Tea integration
 	eventCh chan events.Event
@@ -139,9 +145,11 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 		namespaceForm:   newNamespaceFormPtr(th),
 		serverPicker:    views.NewServerPicker(th),
 		toolPerms:       views.NewToolPermissions(th),
+		registryBrowser: views.NewRegistryBrowser(th),
 		logPanel:        views.NewLogPanel(th),
 		helpOverlay:     views.NewHelpOverlay(th),
 		confirmDlg:      views.NewConfirm(th),
+		addMethod:       views.NewAddMethod(th),
 		toast:           views.NewToast(th),
 		serverStatuses:  make(map[string]events.ServerStatus),
 		serverTools:     make(map[string][]events.McpTool),
@@ -270,6 +278,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateWithToolPerms(msg)
 	}
 
+	// Add method selector modal
+	if m.addMethod.IsVisible() {
+		return m.updateWithAddMethod(msg)
+	}
+
+	// Registry browser modal
+	if m.registryBrowser.IsVisible() {
+		return m.updateWithRegistryBrowser(msg)
+	}
+
+	// Handle pending registry install (deferred form opening after browser closes)
+	if m.pendingRegistryInstall != nil {
+		spec := m.pendingRegistryInstall
+		m.pendingRegistryInstall = nil
+		if spec.CommandOrURL == "" {
+			return m, m.toast.ShowError("Server has no installable packages")
+		}
+		cmd := m.serverForm.ShowAddWithDefaults(spec.Name, spec.CommandOrURL, spec.Args, formatEnvMap(spec.Env), spec.BearerTokenEnvVar)
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -331,6 +360,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case views.ToolPermissionsResult:
 		return m.handleToolPermissionsResult(msg)
+
+	case views.AddMethodResult:
+		m.addMethod.Hide()
+		if msg.Submitted {
+			switch msg.Method {
+			case "manual":
+				return m, m.serverForm.ShowAdd()
+			case "registry":
+				m.registryBrowser.Show()
+			}
+		}
+		return m, nil
+
+	case views.RegistryBrowserResult:
+		if msg.Submitted {
+			m.pendingRegistryInstall = &msg.Spec
+		}
+		m.registryBrowser.Hide()
+		return m, nil
 
 	case views.ConfirmResult:
 		return m.handleConfirmResult(msg)
@@ -598,8 +646,8 @@ func (m *Model) handleServerListKey(msg tea.KeyMsg) (handled bool, model tea.Mod
 		return true, m, nil
 
 	case key.Matches(msg, m.keys.Add):
-		cmd := m.serverForm.ShowAdd()
-		return true, m, cmd
+		m.addMethod.Show()
+		return true, m, nil
 
 	case key.Matches(msg, m.keys.Edit):
 		if item := m.serverList.SelectedItem(); item != nil {
@@ -639,6 +687,7 @@ func (m *Model) handleServerListKey(msg tea.KeyMsg) (handled bool, model tea.Mod
 			return true, m, m.toast.ShowError("OAuth logout only applies to OAuth HTTP servers")
 		}
 		return true, m, nil
+
 	}
 
 	return false, m, nil // Let list handle navigation keys
@@ -1012,6 +1061,8 @@ func (m *Model) updateLayout() {
 	// Modal/overlay sizes
 	m.serverPicker.SetSize(m.width, m.height)
 	m.toolPerms.SetSize(m.width, m.height)
+	m.addMethod.SetSize(m.width, m.height)
+	m.registryBrowser.SetSize(m.width, m.height)
 
 	if m.logPanel.IsVisible() {
 		m.logPanel.SetSize(contentWidth, logHeight)
@@ -1083,6 +1134,16 @@ func (m Model) View() string {
 	// Tool permissions overlay
 	if m.toolPerms.IsVisible() {
 		content = m.toolPerms.RenderOverlay(content, m.width, m.height)
+	}
+
+	// Add method selector overlay
+	if m.addMethod.IsVisible() {
+		content = m.addMethod.RenderOverlay(content, m.width, m.height)
+	}
+
+	// Registry browser overlay
+	if m.registryBrowser.IsVisible() {
+		content = m.registryBrowser.RenderOverlay(content, m.width, m.height)
 	}
 
 	// Confirm dialog overlay (delete, etc.)
@@ -1264,6 +1325,54 @@ func (m Model) updateModal(msg tea.Msg, cfg modalUpdateConfig) (tea.Model, tea.C
 	return m, tea.Batch(cmds...)
 }
 
+func (m Model) updateWithAddMethod(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if key.Matches(msg, m.keys.CtrlC) {
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateLayout()
+	case views.AddMethodResult:
+		m.addMethod.Hide()
+		if msg.Submitted {
+			switch msg.Method {
+			case "manual":
+				return m, m.serverForm.ShowAdd()
+			case "registry":
+				m.registryBrowser.Show()
+			}
+		}
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.addMethod, cmd = m.addMethod.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	// Handle events while modal is open
+	if evt, ok := msg.(events.Event); ok {
+		if eCmd := m.handleEvent(evt); eCmd != nil {
+			cmds = append(cmds, eCmd)
+		}
+		cmds = append(cmds, m.waitForEvent())
+	}
+
+	var toastCmd tea.Cmd
+	m.toast, toastCmd = m.toast.Update(msg)
+	if toastCmd != nil {
+		cmds = append(cmds, toastCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
 func (m Model) updateWithServerForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m.updateModal(msg, modalUpdateConfig{
 		setSize: func(w, h int) {
@@ -1381,6 +1490,62 @@ func (m Model) updateWithToolPerms(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m Model) updateWithRegistryBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if key.Matches(msg, m.keys.CtrlC) {
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateLayout()
+		m.registryBrowser.SetSize(msg.Width, msg.Height)
+	case views.RegistryBrowserResult:
+		if msg.Submitted {
+			m.pendingRegistryInstall = &msg.Spec
+		}
+		m.registryBrowser.Hide()
+		return m, nil
+	}
+
+	// Update the browser directly on m so visibility changes persist
+	if cmd := m.registryBrowser.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	// Handle events
+	if evt, ok := msg.(events.Event); ok {
+		if cmd := m.handleEvent(evt); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, m.waitForEvent())
+	}
+
+	// Toast updates
+	var toastCmd tea.Cmd
+	m.toast, toastCmd = m.toast.Update(msg)
+	if toastCmd != nil {
+		cmds = append(cmds, toastCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+// formatEnvMap converts a map of env vars to the "KEY=value\nKEY2=value2" format.
+func formatEnvMap(env map[string]string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	var parts []string
+	for k, v := range env {
+		parts = append(parts, k+"="+v)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // ============================================================================

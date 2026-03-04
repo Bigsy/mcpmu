@@ -125,15 +125,14 @@ mcpmu.namespaces_list
 
 `serverId` is a stable internal identifier (auto-generated short `[a-z0-9]`, no `.`), not the human display name.
 
-## Phase Overview
+## Registry Browser
 
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 1 | Core: config, MCP client, supervisor, event bus | Planned |
-| 1.1 | Testing infrastructure | Planned |
-| 1.5 | **stdio server mode** (primary feature) | Planned |
-| 2 | TUI for config management | Planned |
-| 3 | Namespaces and tool permissions | Planned |
+The TUI includes a registry browser for discovering and installing servers from the official MCP registry (`registry.modelcontextprotocol.io`). Press `a` on the server list to open an add-method selector:
+
+- **Manual** — opens the blank add-server form
+- **Official Registry** — opens a searchable browser with debounced live search, detail view with install preview, and pre-populates the add-server form with the selected server's command/args/env
+
+The registry client (`internal/registry/`) handles API calls, type mapping, and install spec generation (package selection, runtime hints, env var placeholders).
 
 ## Key Design Principles
 

@@ -8,6 +8,7 @@ Key differentiators:
 - **Single configuration, universal access** — Define servers once, use everywhere
 - **Namespace profiles** — Group servers by context (work, personal, project) with per-namespace tool permissions
 - **Multi-transport** — Manage both local stdio processes and remote HTTP/SSE endpoints
+- **Registry browser** — Search the official MCP registry and install servers with pre-populated config
 - **Interactive TUI** — Monitor, test, and manage servers with a terminal interface
 - **Tool permissions TUI** — Block unused tools (or maybe write tools) to avoid mishaps for wasted tokens
 
@@ -127,6 +128,7 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 - **OAuth support** — Full OAuth 2.1 with PKCE, dynamic client registration, and token management
 - **Hot-reload** — Serve mode watches the config file and automatically applies changes without restart
 - **Lazy or eager startup** — Start servers on-demand or pre-start everything with `--eager`
+- **Registry browser** — Search the official MCP server registry from the TUI and install with pre-populated config (`a` → Official Registry)
 - **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
 
 ---

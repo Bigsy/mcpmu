@@ -98,7 +98,7 @@ func (m HelpOverlayModel) helpContent() string {
 		m.renderSection("Server Actions", [][]string{
 			{"t", "Test server (start/stop)"},
 			{"E", "Enable/disable server"},
-			{"a", "Add new server"},
+			{"a", "Add server"},
 			{"e", "Edit server"},
 			{"d", "Delete server"},
 			{"L", "OAuth login (HTTP servers)"},
