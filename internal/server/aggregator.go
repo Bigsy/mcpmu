@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	// ToolDiscoveryTimeout is the max time to wait for tool discovery per server
-	ToolDiscoveryTimeout = 5 * time.Second
+	// DefaultToolDiscoveryTimeout is the fallback timeout for tool discovery per server.
+	// Per-server StartupTimeout (from config) is preferred when available.
+	DefaultToolDiscoveryTimeout = 30 * time.Second
 	// MaxConcurrentDiscovery is the max number of servers to discover tools from concurrently
 	MaxConcurrentDiscovery = 8
 )
@@ -136,12 +137,15 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string)
 		return nil, nil
 	}
 
+	// Use per-server startup timeout (default 10s), with a floor of DefaultToolDiscoveryTimeout
+	discoveryTimeout := max(time.Duration(srv.StartupTimeout())*time.Second, DefaultToolDiscoveryTimeout)
+
 	// Check if server is already running
 	handle := a.supervisor.Get(serverName)
 	if handle == nil || !handle.IsRunning() {
 		// Start the server
 		var err error
-		timeoutCtx, cancel := context.WithTimeout(ctx, ToolDiscoveryTimeout)
+		timeoutCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
 		defer cancel()
 
 		handle, err = a.supervisor.Start(timeoutCtx, serverName, srv)
@@ -151,7 +155,7 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string)
 	}
 
 	// Wait for async tool discovery to complete
-	toolsCtx, cancel := context.WithTimeout(ctx, ToolDiscoveryTimeout)
+	toolsCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
 	defer cancel()
 	if err := handle.WaitForTools(toolsCtx); err != nil {
 		return nil, fmt.Errorf("wait for tools: %w", err)
