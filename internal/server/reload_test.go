@@ -692,16 +692,28 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 
 	reader := bufio.NewReader(stdout)
 
-	// Helper to send request and read response
+	// Helper to send request and read the next response (skipping notifications)
 	sendAndRead := func(req string) (json.RawMessage, error) {
 		if _, err := stdin.Write([]byte(req + "\n")); err != nil {
 			return nil, err
 		}
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			return nil, err
+		// Read lines, skipping any JSON-RPC notifications (messages without "id")
+		for {
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return nil, err
+			}
+			// Quick check: if the line has an "id" field, it's a response
+			var peek struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if jsonErr := json.Unmarshal(line, &peek); jsonErr == nil && peek.ID == nil && peek.Method != "" {
+				t.Logf("Skipping notification: %s", peek.Method)
+				continue
+			}
+			return json.RawMessage(line), nil
 		}
-		return json.RawMessage(line), nil
 	}
 
 	// Step 1: Initialize
@@ -936,16 +948,26 @@ func TestServer_ReloadDuringActiveRequest(t *testing.T) {
 
 	reader := bufio.NewReader(stdout)
 
-	// Helper to send request and read response
+	// Helper to send request and read the next response (skipping notifications)
 	sendAndRead := func(req string) (json.RawMessage, error) {
 		if _, err := stdin.Write([]byte(req + "\n")); err != nil {
 			return nil, err
 		}
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			return nil, err
+		for {
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return nil, err
+			}
+			var peek struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if jsonErr := json.Unmarshal(line, &peek); jsonErr == nil && peek.ID == nil && peek.Method != "" {
+				t.Logf("Skipping notification: %s", peek.Method)
+				continue
+			}
+			return json.RawMessage(line), nil
 		}
-		return json.RawMessage(line), nil
 	}
 
 	// Helper to send request without waiting for response
@@ -1073,7 +1095,7 @@ func TestServer_ReloadDuringActiveRequest(t *testing.T) {
 		Error *RPCError `json:"error"`
 	}
 
-	for range 3 { // Try a few times to get the right response
+	for range 5 { // Try a few times to get the right response (may skip notifications and other responses)
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			t.Fatalf("Failed to read response after reload: %v", err)

@@ -34,7 +34,6 @@ check: fix fmt-check lint test
 clean:
 	rm -f mcpmu
 	go clean -testcache
-
 run:
 	go run ./cmd/mcpmu
 

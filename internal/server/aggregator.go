@@ -19,6 +19,10 @@ const (
 	DefaultToolDiscoveryTimeout = 30 * time.Second
 	// MaxConcurrentDiscovery is the max number of servers to discover tools from concurrently
 	MaxConcurrentDiscovery = 8
+	// ListToolsGracePeriod is the max time tools/list will block waiting for
+	// server discovery before returning partial results. Kept under typical
+	// client timeouts (Codex defaults to 10s).
+	ListToolsGracePeriod = 8 * time.Second
 )
 
 // AggregatedTool represents a tool with qualified name and server info.
@@ -107,6 +111,22 @@ func (a *Aggregator) ListTools(ctx context.Context, serverNames []string) ([]Agg
 	}
 
 	return allTools, nil
+}
+
+// PendingServers returns enabled servers that have not yet finished tool discovery.
+func (a *Aggregator) PendingServers(serverNames []string) []string {
+	var pending []string
+	for _, name := range serverNames {
+		srv, ok := a.cfg.GetServer(name)
+		if !ok || !srv.IsEnabled() {
+			continue
+		}
+		handle := a.supervisor.Get(name)
+		if handle == nil || !handle.IsRunning() || !handle.ToolsReady() {
+			pending = append(pending, name)
+		}
+	}
+	return pending
 }
 
 // GetTool returns a tool by its qualified name.

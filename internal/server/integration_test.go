@@ -773,3 +773,514 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 
 	t.Log("End-to-end namespace tool permissions test passed!")
 }
+
+// TestServer_ProgressiveDiscovery verifies that:
+// 1. tools/list returns immediately with tools from fast servers only
+// 2. A notifications/tools/list_changed notification is sent when slow servers finish
+// 3. A second tools/list returns the complete tool set
+//
+// Uses an in-process server with a short grace period (100ms) so the slow server
+// (500ms tools/list delay) reliably exceeds it, guaranteeing the notification path
+// is exercised every run.
+func TestServer_ProgressiveDiscovery(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	// Config: one fast server, one slow server (500ms delay on tools/list)
+	enabled := true
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"fast-srv": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"fast_tool","description":"A fast tool"}],"echoToolCalls":true}`,
+				},
+			},
+			"slow-srv": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					// 500ms delay on tools/list — exceeds the 100ms test grace period
+					"FAKE_MCP_CFG": `{"tools":[{"name":"slow_tool","description":"A slow tool"}],"delays":{"tools/list":500000000},"echoToolCalls":true}`,
+				},
+			},
+		},
+		Namespaces: map[string]config.NamespaceConfig{},
+	}
+
+	// Use pipes so we control the server lifecycle and can read output interactively
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	defer func() { _ = stdinReader.Close() }()
+	defer func() { _ = stdinWriter.Close() }()
+
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	defer func() { _ = stdoutReader.Close() }()
+	defer func() { _ = stdoutWriter.Close() }()
+
+	srv, err := New(Options{
+		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
+		Stdin:           stdinReader,
+		Stdout:          stdoutWriter,
+		ServerName:      "mcpmu-test",
+		ServerVersion:   "1.0.0",
+		ProtocolVersion: "2024-11-05",
+		LogLevel:        "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Set a very short grace period so the slow server (500ms) always exceeds it
+	srv.listToolsGracePeriod = 100 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Run server in background
+	done := make(chan error, 1)
+	go func() { done <- srv.Run(ctx) }()
+
+	// Helper: send a JSON-RPC request
+	send := func(msg string) {
+		t.Helper()
+		if _, err := stdinWriter.WriteString(msg + "\n"); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+
+	// Step 1: Initialize
+	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`)
+	// Give the server time to process
+	time.Sleep(100 * time.Millisecond)
+
+	// Use a goroutine to read stdout lines so we can interleave sends and reads
+	type lineResult struct {
+		data string
+		err  error
+	}
+	outLines := make(chan lineResult, 10)
+	outReader := bufio.NewReader(stdoutReader)
+	go func() {
+		for {
+			line, err := outReader.ReadString('\n')
+			if line != "" {
+				outLines <- lineResult{data: strings.TrimSpace(line)}
+			}
+			if err != nil {
+				outLines <- lineResult{err: err}
+				return
+			}
+		}
+	}()
+
+	readLine := func(timeout time.Duration) (string, error) {
+		select {
+		case r := <-outLines:
+			return r.data, r.err
+		case <-time.After(timeout):
+			return "", context.DeadlineExceeded
+		}
+	}
+
+	// Wait for init response
+	time.Sleep(100 * time.Millisecond)
+	initLine, err := readLine(2 * time.Second)
+	if err != nil {
+		t.Fatalf("Init read: %v", err)
+	}
+
+	var initResp struct {
+		Result struct {
+			Capabilities struct {
+				Tools struct {
+					ListChanged bool `json:"listChanged"`
+				} `json:"tools"`
+			} `json:"capabilities"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(initLine), &initResp); err != nil {
+		t.Fatalf("Parse init: %v\nLine: %s", err, initLine)
+	}
+	if initResp.Error != nil {
+		t.Fatalf("Init error: %v", initResp.Error)
+	}
+	if !initResp.Result.Capabilities.Tools.ListChanged {
+		t.Error("Expected tools.listChanged=true in capabilities")
+	}
+
+	// Step 2: Send tools/list — grace period is 100ms, so the slow server (500ms) will be pending
+	send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+
+	// Read first tools/list response
+	toolsLine1, err := readLine(5 * time.Second)
+	if err != nil {
+		t.Fatalf("tools/list read: %v", err)
+	}
+
+	var toolsResp1 struct {
+		ID     int `json:"id"`
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(toolsLine1), &toolsResp1); err != nil {
+		t.Fatalf("Parse tools/list: %v\nLine: %s", err, toolsLine1)
+	}
+	if toolsResp1.Error != nil {
+		t.Fatalf("tools/list error: %v", toolsResp1.Error)
+	}
+
+	firstToolNames := make(map[string]bool)
+	for _, tool := range toolsResp1.Result.Tools {
+		firstToolNames[tool.Name] = true
+	}
+	t.Logf("First tools/list: %v", firstToolNames)
+
+	if !firstToolNames["fast-srv.fast_tool"] {
+		t.Error("Expected fast-srv.fast_tool in first tools/list")
+	}
+	if firstToolNames["slow-srv.slow_tool"] {
+		t.Fatal("slow-srv.slow_tool should NOT be in first tools/list (grace period too short)")
+	}
+
+	// Step 3: Wait for notifications/tools/list_changed from background discovery
+	notifLine, err := readLine(10 * time.Second)
+	if err != nil {
+		t.Fatalf("notification read: %v", err)
+	}
+	var notif struct {
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal([]byte(notifLine), &notif); err != nil {
+		t.Fatalf("Parse notification: %v\nLine: %s", err, notifLine)
+	}
+	if notif.Method != "notifications/tools/list_changed" {
+		t.Fatalf("Expected notifications/tools/list_changed, got %q", notif.Method)
+	}
+	t.Log("Received notifications/tools/list_changed")
+
+	// Step 4: Send tools/list again — should now include slow server's tools
+	send(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
+
+	toolsLine2, err := readLine(15 * time.Second)
+	if err != nil {
+		t.Fatalf("second tools/list read: %v", err)
+	}
+
+	var toolsResp2 struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(toolsLine2), &toolsResp2); err != nil {
+		t.Fatalf("Parse second tools/list: %v\nLine: %s", err, toolsLine2)
+	}
+	if toolsResp2.Error != nil {
+		t.Fatalf("second tools/list error: %v", toolsResp2.Error)
+	}
+
+	secondToolNames := make(map[string]bool)
+	for _, tool := range toolsResp2.Result.Tools {
+		secondToolNames[tool.Name] = true
+	}
+	t.Logf("Second tools/list: %v", secondToolNames)
+
+	if !secondToolNames["fast-srv.fast_tool"] {
+		t.Error("Expected fast-srv.fast_tool in second tools/list")
+	}
+	if !secondToolNames["slow-srv.slow_tool"] {
+		t.Error("Expected slow-srv.slow_tool in second tools/list after notification")
+	}
+
+	// Cleanup: close stdin to stop the server
+	_ = stdinWriter.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("Server did not stop")
+	}
+
+	t.Log("Progressive discovery test passed!")
+}
+
+// TestServer_ReloadSendsToolsListChanged verifies that config reloads
+// send a notifications/tools/list_changed notification to the client.
+func TestServer_ReloadSendsToolsListChanged(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping end-to-end test in short mode")
+	}
+
+	// Build the binary
+	tmpBin := t.TempDir() + "/mcpmu"
+	cmd := exec.Command("go", "build", "-o", tmpBin, "../../cmd/mcpmu")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to build binary: %v\n%s", err, output)
+	}
+
+	// Create initial config with one server
+	tmpConfig := t.TempDir() + "/config.json"
+	enabled := true
+	initialCfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"tool_a","description":"Tool A"}],"echoToolCalls":true}`,
+				},
+			},
+		},
+		Namespaces: map[string]config.NamespaceConfig{},
+	}
+	if err := config.SaveTo(initialCfg, tmpConfig); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	// Start the server
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	serverCmd := exec.CommandContext(ctx, tmpBin, "serve", "--stdio", "--config", tmpConfig, "--log-level", "debug")
+	stdin, err := serverCmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe: %v", err)
+	}
+	stdout, err := serverCmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	stderr, err := serverCmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
+	}
+
+	stderrBuf := &bytes.Buffer{}
+	stderrDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(stderrBuf, stderr)
+		close(stderrDone)
+	}()
+
+	if err := serverCmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = serverCmd.Process.Kill()
+		_ = serverCmd.Wait()
+		<-stderrDone
+		if t.Failed() {
+			t.Logf("Server stderr:\n%s", stderrBuf.String())
+		}
+	})
+
+	reader := bufio.NewReader(stdout)
+
+	// Use a single reader goroutine to avoid races on bufio.Reader
+	type lineResult struct {
+		data []byte
+		err  error
+	}
+	lines := make(chan lineResult, 10)
+	go func() {
+		for {
+			line, err := reader.ReadBytes('\n')
+			lines <- lineResult{line, err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	send := func(req string) {
+		t.Helper()
+		if _, err := stdin.Write([]byte(req + "\n")); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+
+	readMsg := func(timeout time.Duration) (json.RawMessage, error) {
+		select {
+		case r := <-lines:
+			return json.RawMessage(r.data), r.err
+		case <-time.After(timeout):
+			return nil, context.DeadlineExceeded
+		}
+	}
+
+	// Step 1: Initialize
+	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`)
+	initResp, err := readMsg(5 * time.Second)
+	if err != nil {
+		t.Fatalf("Initialize read: %v", err)
+	}
+	var initResult struct {
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal(initResp, &initResult); err != nil {
+		t.Fatalf("Parse init: %v", err)
+	}
+	if initResult.Error != nil {
+		t.Fatalf("Init error: %v", initResult.Error)
+	}
+	t.Log("Initialize: OK")
+
+	// Step 2: Get initial tools
+	send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	toolsResp1, err := readMsg(15 * time.Second)
+	if err != nil {
+		t.Fatalf("tools/list read: %v", err)
+	}
+
+	var toolsResult1 struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(toolsResp1, &toolsResult1); err != nil {
+		t.Fatalf("Parse tools/list: %v", err)
+	}
+
+	initialToolCount := len(toolsResult1.Result.Tools)
+	t.Logf("Initial tools: %d", initialToolCount)
+
+	// Drain any pending notification from background discovery (if any)
+	drainedNotif, _ := readMsg(500 * time.Millisecond)
+	if drainedNotif != nil {
+		t.Log("Drained background discovery notification")
+	}
+
+	// Step 3: Modify config to add a second server
+	updatedCfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"tool_a","description":"Tool A"}],"echoToolCalls":true}`,
+				},
+			},
+			"srv2": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"tool_b","description":"Tool B"}],"echoToolCalls":true}`,
+				},
+			},
+		},
+		Namespaces: map[string]config.NamespaceConfig{},
+	}
+	if err := config.SaveTo(updatedCfg, tmpConfig); err != nil {
+		t.Fatalf("Failed to save updated config: %v", err)
+	}
+	t.Log("Config updated: added srv2")
+
+	// Step 4: Read the notifications/tools/list_changed notification from reload
+	notifMsg, err := readMsg(5 * time.Second)
+	if err != nil {
+		t.Fatalf("notification read: %v", err)
+	}
+
+	var notif struct {
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(notifMsg, &notif); err != nil {
+		t.Fatalf("Parse notification: %v", err)
+	}
+	if notif.Method != "notifications/tools/list_changed" {
+		t.Errorf("Expected notifications/tools/list_changed, got %q", notif.Method)
+	}
+	t.Log("Received notifications/tools/list_changed after config reload")
+
+	// Step 5: Send tools/list again to get updated tools
+	send(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
+	toolsResp2, err := readMsg(15 * time.Second)
+	if err != nil {
+		t.Fatalf("second tools/list read: %v", err)
+	}
+
+	var toolsResult2 struct {
+		ID     int `json:"id"`
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+
+	// The response might be a notification from background discovery — skip to the actual response
+	if err := json.Unmarshal(toolsResp2, &toolsResult2); err != nil {
+		t.Fatalf("Parse second tools/list: %v", err)
+	}
+
+	// If we got a notification instead of the response, read again
+	if toolsResult2.ID == 0 {
+		t.Log("Got another notification, reading actual response")
+		toolsResp2, err = readMsg(15 * time.Second)
+		if err != nil {
+			t.Fatalf("reading after notification: %v", err)
+		}
+		if err := json.Unmarshal(toolsResp2, &toolsResult2); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+	}
+
+	if toolsResult2.Error != nil {
+		t.Fatalf("second tools/list error: %v", toolsResult2.Error)
+	}
+
+	toolNames := make(map[string]bool)
+	for _, tool := range toolsResult2.Result.Tools {
+		toolNames[tool.Name] = true
+	}
+	t.Logf("After reload tools/list: %d tools: %v", len(toolsResult2.Result.Tools), toolNames)
+
+	if !toolNames["srv1.tool_a"] {
+		t.Error("Expected srv1.tool_a after reload")
+	}
+	if !toolNames["srv2.tool_b"] {
+		t.Error("Expected srv2.tool_b after reload")
+	}
+
+	t.Log("Reload notification test passed!")
+}

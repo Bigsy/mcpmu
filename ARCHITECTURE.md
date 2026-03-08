@@ -108,6 +108,19 @@ Namespaces are the preferred mechanism for selecting toolsets, but separate conf
 }
 ```
 
+## Progressive Tool Discovery
+
+Serve mode uses a two-phase `tools/list` flow so clients are not blocked behind slow upstream discovery.
+
+1. On `initialize`, `mcpmu` advertises `tools.listChanged: true`.
+2. On the first `tools/list`, `mcpmu` starts or probes all selected servers concurrently.
+3. It waits up to an 8 second grace period and returns the tools that are already ready.
+4. Any remaining discovery continues in the background with the normal per-server timeout.
+5. If background discovery makes progress, `mcpmu` sends `notifications/tools/list_changed` so the client can refresh with another `tools/list`.
+6. Config reloads that may change the visible tool set also send `notifications/tools/list_changed`.
+
+This keeps `tools/list` responsive for clients with tight request timeouts while still converging to the full aggregated tool set.
+
 ## Tool Namespacing
 
 Tools from managed servers are exposed with `serverId.toolName` format:
@@ -138,6 +151,7 @@ The registry client (`internal/registry/`) handles API calls, type mapping, and 
 
 1. **Non-blocking initialize**: Return immediately; optionally start `eager` servers in background (otherwise start on-demand)
 2. **Lazy server start**: Servers start on first tool call (configurable)
-3. **Graceful degradation**: If one server fails, others still work
-4. **Strict output discipline**: stdout = MCP protocol only, stderr = logs
-5. **Transport-agnostic core**: Easy to add HTTP later if needed
+3. **Progressive tool discovery**: `tools/list` returns ready tools within a grace window, then notifies clients when stragglers finish
+4. **Graceful degradation**: If one server fails, others still work
+5. **Strict output discipline**: stdout = MCP protocol only, stderr = logs
+6. **Transport-agnostic core**: Easy to add HTTP later if needed

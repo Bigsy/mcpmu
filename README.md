@@ -200,6 +200,12 @@ mcpmu serve --stdio --expose-manager-tools  # include mcpmu.* tools
 - `--eager` — pre-start all servers on init (default: lazy start)
 - `--expose-manager-tools` — include mcpmu.* management tools in tools/list
 
+**`tools/list` behavior:**
+- `mcpmu` advertises `tools.listChanged: true` during `initialize`
+- On `tools/list`, `mcpmu` waits up to 8 seconds for upstream tool discovery, then returns whatever is ready
+- If some servers are still discovering, `mcpmu` continues in the background and sends `notifications/tools/list_changed` when new tools become available
+- Config reloads that may change the visible tool set also send `notifications/tools/list_changed`
+
 ## Configuration
 
 Default config path: `~/.config/mcpmu/config.json`

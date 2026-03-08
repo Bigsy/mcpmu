@@ -59,7 +59,9 @@ func TestServer_Initialize(t *testing.T) {
 				Version string `json:"version"`
 			} `json:"serverInfo"`
 			Capabilities struct {
-				Tools *struct{} `json:"tools"`
+				Tools *struct {
+					ListChanged bool `json:"listChanged"`
+				} `json:"tools"`
 			} `json:"capabilities"`
 		} `json:"result"`
 		Error *RPCError `json:"error"`
@@ -82,7 +84,11 @@ func TestServer_Initialize(t *testing.T) {
 	}
 
 	if resp.Result.Capabilities.Tools == nil {
-		t.Error("Expected tools capability to be present")
+		t.Fatal("Expected tools capability to be present")
+	}
+
+	if !resp.Result.Capabilities.Tools.ListChanged {
+		t.Error("Expected tools.listChanged to be true")
 	}
 }
 

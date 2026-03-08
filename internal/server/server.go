@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -72,6 +73,10 @@ type Server struct {
 	reader  *bufio.Reader
 	writer  io.Writer
 	writeMu sync.Mutex
+
+	// Background discovery
+	bgDiscovering        atomic.Bool
+	listToolsGracePeriod time.Duration // 0 means use ListToolsGracePeriod constant
 
 	// Hot-reload
 	reloadCh chan *config.Config // Serializes reload with request handling
@@ -281,7 +286,7 @@ func (s *Server) handleInitialize(ctx context.Context, params json.RawMessage) (
 			Version: s.opts.ServerVersion,
 		},
 		Capabilities: capabilities{
-			Tools: &toolsCapability{},
+			Tools: &toolsCapability{ListChanged: true},
 		},
 	}, nil
 }
@@ -302,10 +307,23 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	activeServerNames := s.activeServerNames
 	s.mu.RUnlock()
 
-	// Get aggregated tools
-	tools, err := s.aggregator.ListTools(ctx, activeServerNames)
-	if err != nil {
-		return nil, ErrInternalError(err.Error())
+	// Discover tools with a grace period. ListTools starts servers
+	// concurrently and returns whatever succeeds within the deadline.
+	// Already-running servers with tools return instantly.
+	gracePeriod := s.listToolsGracePeriod
+	if gracePeriod == 0 {
+		gracePeriod = ListToolsGracePeriod
+	}
+	graceCtx, cancel := context.WithTimeout(context.Background(), gracePeriod)
+	defer cancel()
+	tools, _ := s.aggregator.ListTools(graceCtx, activeServerNames)
+
+	// If any servers didn't finish in time, continue in the background.
+	// Pass the caller's snapshot of activeServerNames so the goroutine
+	// doesn't re-read state that a concurrent reload could change.
+	stillPending := s.aggregator.PendingServers(activeServerNames)
+	if len(stillPending) > 0 && s.bgDiscovering.CompareAndSwap(false, true) {
+		go s.discoverAndNotify(stillPending, activeServerNames)
 	}
 
 	// Filter tools based on permissions (if namespace is active)
@@ -328,6 +346,43 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	}
 
 	return toolsListResult{Tools: tools}, nil
+}
+
+// sendNotification sends a JSON-RPC notification (no ID, no response expected).
+func (s *Server) sendNotification(method string) {
+	msg := struct {
+		JSONRPC string `json:"jsonrpc"`
+		Method  string `json:"method"`
+	}{
+		JSONRPC: "2.0",
+		Method:  method,
+	}
+	s.send(msg)
+}
+
+// discoverAndNotify continues tool discovery for straggling servers in the background,
+// then notifies the client that the tool list has changed only if discovery made progress.
+// pendingNames is the set of servers that were still pending when the grace period expired.
+// allServerNames is the caller's snapshot of activeServerNames (not re-read from s.mu).
+func (s *Server) discoverAndNotify(pendingNames []string, allServerNames []string) {
+	defer s.bgDiscovering.Store(false)
+
+	// Use the full per-server timeout for stragglers (not the grace period)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultToolDiscoveryTimeout)
+	defer cancel()
+
+	_, _ = s.aggregator.ListTools(ctx, allServerNames)
+
+	// Only notify if at least one straggler actually completed discovery
+	stillPending := s.aggregator.PendingServers(pendingNames)
+	if len(stillPending) < len(pendingNames) {
+		s.sendNotification("notifications/tools/list_changed")
+		log.Printf("Sent tools/list_changed notification (%d of %d stragglers discovered in background)",
+			len(pendingNames)-len(stillPending), len(pendingNames))
+	} else {
+		log.Printf("Background discovery made no progress (%d still pending), skipping notification",
+			len(stillPending))
+	}
 }
 
 // handleToolsCall handles the tools/call request.
@@ -626,6 +681,9 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 	if s.opts.EagerStart {
 		go s.startEagerServers(ctx)
 	}
+
+	// Notify client that the tool list may have changed
+	s.sendNotification("notifications/tools/list_changed")
 
 	log.Printf("Config reload complete")
 }

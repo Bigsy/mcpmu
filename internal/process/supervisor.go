@@ -145,8 +145,11 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 	// Emit starting event
 	s.emitStatus(name, events.StateStarting, 0, nil, "")
 
-	// Build command
-	cmd := exec.CommandContext(ctx, srv.Command, srv.Args...)
+	// Build command. Don't use exec.CommandContext — process lifecycle is
+	// managed by Handle.Stop() (SIGTERM → SIGKILL). Tying the process to
+	// a caller context would kill it when short-lived contexts (like the
+	// tools/list grace period) expire.
+	cmd := exec.Command(srv.Command, srv.Args...)
 
 	// Set working directory
 	if srv.Cwd != "" {
@@ -660,6 +663,16 @@ func (h *Handle) signalToolsReady() {
 		// Already closed
 	default:
 		close(h.toolsReady)
+	}
+}
+
+// ToolsReady returns true if tool discovery has completed (non-blocking).
+func (h *Handle) ToolsReady() bool {
+	select {
+	case <-h.toolsReady:
+		return true
+	default:
+		return false
 	}
 }
 
