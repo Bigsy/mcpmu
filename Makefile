@@ -1,4 +1,4 @@
-.PHONY: build install test test-v test-integration lint fmt fmt-check fix check clean run debug
+.PHONY: build install test test-v test-integration test-all lint fmt fmt-check fix check clean run debug
 
 build:
 	go build -o mcpmu ./cmd/mcpmu
@@ -16,6 +16,9 @@ test-v:
 
 test-integration:
 	go test -tags=integration -race ./...
+
+test-all:
+	go test -tags=integration -race -timeout=5m ./...
 
 lint:
 	golangci-lint run

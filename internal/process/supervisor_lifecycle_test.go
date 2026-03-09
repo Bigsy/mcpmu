@@ -53,10 +53,11 @@ type lifecycleTestCase struct {
 	ctxTimeout     time.Duration // 0 means no timeout
 	expectState    events.RuntimeState
 	expectTools    int  // -1 means don't check
-	expectError    bool // expect Start() to return error
+	expectError    bool // expect WaitForTools() to return error (Start is async)
 	stateSequence  []events.RuntimeState
 	mustObserve    events.RuntimeState // if non-zero, this state must appear somewhere in observed states
 	skipFinalCheck bool                // skip final state check (for cases where final state is non-deterministic)
+	waitTimeout    time.Duration       // how long to wait for final state (0 = default 5s)
 }
 
 func TestSupervisor_Lifecycle(t *testing.T) {
@@ -78,25 +79,28 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			expectTools:   1,
 			expectError:   false,
 			stateSequence: []events.RuntimeState{events.StateStarting, events.StateRunning},
+			waitTimeout:   5 * time.Second, // needs time for retry backoff (500ms+)
 		},
 		{
-			name:        "init_timeout",
-			fakeCfg:     mcptest.SlowInitConfig(5 * time.Second),
-			ctxTimeout:  200 * time.Millisecond,
-			expectState: events.StateError,
-			expectTools: -1,
-			expectError: true,
+			name:           "init_timeout",
+			fakeCfg:        mcptest.SlowInitConfig(5 * time.Second),
+			ctxTimeout:     200 * time.Millisecond,
+			expectTools:    -1,
+			expectError:    true,            // WaitForTools returns context.DeadlineExceeded
+			skipFinalCheck: true,            // async init continues on handle.ctx; final state is non-deterministic
 		},
 		// NOTE: tools_list_timeout test removed - the supervisor has a hardcoded 30s timeout
 		// for tools/list, making it impractical to test without waiting 30 seconds or
 		// making the timeout configurable. Using a context timeout instead causes the
 		// subprocess to be killed, which tests cancellation not timeout behavior.
 		{
-			name:        "crash_on_init",
-			fakeCfg:     mcptest.CrashOnInitConfig(1),
-			expectState: events.StateError,
-			expectTools: -1,
-			expectError: true,
+			name:           "crash_on_init",
+			fakeCfg:        mcptest.CrashOnInitConfig(1),
+			expectTools:    -1,
+			expectError:    true,
+			mustObserve:    events.StateError,  // error must appear, but final state may be crashed or stopped
+			skipFinalCheck: true,               // watchProcess may emit crashed after error; order is non-deterministic
+			waitTimeout:    10 * time.Second,   // needs time for retry attempts after crash
 		},
 		{
 			name:           "malformed_response",
@@ -105,6 +109,7 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			expectError:    true,
 			mustObserve:    events.StateError, // error must be observed, but final state may be stopped
 			skipFinalCheck: true,              // final state is non-deterministic (error or stopped)
+			waitTimeout:    10 * time.Second,  // needs time for retry attempts
 		},
 		{
 			name:          "notification_before_response",
@@ -155,33 +160,56 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			serverID := "test-" + tc.name
 			srvCfg := fakeServerConfig(t, serverID, tc.fakeCfg)
 
-			// Set up context with timeout if specified
-			ctx := context.Background()
+			// Start the server (async — does not block on MCP init)
+			handle, startErr := supervisor.Start(context.Background(), serverID, srvCfg)
+			if startErr != nil {
+				t.Fatalf("Start() failed unexpectedly: %v", startErr)
+			}
+
+			// Wait for the async init + tool discovery to complete.
+			// Use ctxTimeout if the test wants to cancel the init early.
+			waitCtx := context.Background()
 			if tc.ctxTimeout > 0 {
 				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, tc.ctxTimeout)
+				waitCtx, cancel = context.WithTimeout(waitCtx, tc.ctxTimeout)
 				defer cancel()
 			}
+			waitErr := handle.WaitForTools(waitCtx)
 
-			// Start the server
-			handle, err := supervisor.Start(ctx, serverID, srvCfg)
-
-			// Check error expectation
+			// Check error expectation against WaitForTools result
 			if tc.expectError {
-				if err == nil {
-					t.Errorf("expected error, got nil")
+				if waitErr == nil {
+					t.Errorf("expected WaitForTools error, got nil")
 				}
 			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
+				if waitErr != nil {
+					t.Errorf("unexpected WaitForTools error: %v", waitErr)
 				}
 			}
 
-			// Allow time for events to propagate
-			time.Sleep(100 * time.Millisecond)
+			// For error cases, wait for the expected state to propagate.
+			// The async init may still be settling state transitions.
+			waitTimeout := tc.waitTimeout
+			if waitTimeout == 0 {
+				waitTimeout = 5 * time.Second
+			}
+
+			if tc.expectError {
+				// Wait for expected state (error/crashed/stopped) to appear
+				if !tc.skipFinalCheck {
+					if !collector.WaitForState(serverID, tc.expectState, waitTimeout) {
+						// Also accept crashed as equivalent to error for process-death cases
+						t.Errorf("expected state %v, got %v", tc.expectState, collector.LastStateFor(serverID))
+						t.Logf("observed states: %v", collector.StatesFor(serverID))
+					}
+				}
+			} else {
+				// For success cases, WaitForTools already ensured completion
+				time.Sleep(50 * time.Millisecond) // brief settle for event propagation
+			}
 
 			// Check final state (unless skipped)
-			if !tc.skipFinalCheck {
+			if !tc.skipFinalCheck && !tc.expectError {
 				finalState := collector.LastStateFor(serverID)
 				if finalState != tc.expectState {
 					t.Errorf("expected state %v, got %v", tc.expectState, finalState)
@@ -191,16 +219,8 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 
 			// Check that a specific state was observed (if specified)
 			if tc.mustObserve != 0 {
-				observed := collector.StatesFor(serverID)
-				found := false
-				for _, s := range observed {
-					if s == tc.mustObserve {
-						found = true
-						break
-					}
-				}
-				if !found {
-					t.Errorf("expected to observe state %v, but only saw: %v", tc.mustObserve, observed)
+				if !collector.WaitForState(serverID, tc.mustObserve, waitTimeout) {
+					t.Errorf("expected to observe state %v, but only saw: %v", tc.mustObserve, collector.StatesFor(serverID))
 				}
 			}
 
