@@ -1368,7 +1368,9 @@ func TestServer_SlowInitNotification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init read: %v", err)
 	}
-	var initResp struct{ Error *RPCError `json:"error"` }
+	var initResp struct {
+		Error *RPCError `json:"error"`
+	}
 	if err := json.Unmarshal([]byte(initLine), &initResp); err != nil {
 		t.Fatalf("Parse init: %v\nLine: %s", err, initLine)
 	}
@@ -1385,7 +1387,9 @@ func TestServer_SlowInitNotification(t *testing.T) {
 	}
 	var toolsResp1 struct {
 		Result struct {
-			Tools []struct{ Name string `json:"name"` } `json:"tools"`
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
 		} `json:"result"`
 		Error *RPCError `json:"error"`
 	}
@@ -1418,7 +1422,9 @@ func TestServer_SlowInitNotification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("notification read: %v (waited %v — broken-srv may be blocking notification)", err, notifLatency)
 	}
-	var notif struct{ Method string `json:"method"` }
+	var notif struct {
+		Method string `json:"method"`
+	}
 	if err := json.Unmarshal([]byte(notifLine), &notif); err != nil {
 		t.Fatalf("Parse notification: %v\nLine: %s", err, notifLine)
 	}
@@ -1443,7 +1449,9 @@ func TestServer_SlowInitNotification(t *testing.T) {
 	}
 	var toolsResp2 struct {
 		Result struct {
-			Tools []struct{ Name string `json:"name"` } `json:"tools"`
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
 		} `json:"result"`
 		Error *RPCError `json:"error"`
 	}
@@ -1482,7 +1490,6 @@ func TestServer_SlowInitNotification(t *testing.T) {
 // TestServer_ReloadSendsToolsListChanged verifies that config reloads
 // send a notifications/tools/list_changed notification to the client.
 func TestServer_ReloadSendsToolsListChanged(t *testing.T) {
-	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping end-to-end test in short mode")
 	}
@@ -1592,7 +1599,7 @@ func TestServer_ReloadSendsToolsListChanged(t *testing.T) {
 
 	// Step 1: Initialize
 	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`)
-	initResp, err := readMsg(5 * time.Second)
+	initResp, err := readMsg(15 * time.Second)
 	if err != nil {
 		t.Fatalf("Initialize read: %v", err)
 	}

@@ -305,7 +305,10 @@ func getProcessStartTicksLinux(pid int) (int64, error) {
 // getProcessStartTicksDarwin uses ps to get process start time as Unix epoch.
 func getProcessStartTicksDarwin(pid int) (int64, error) {
 	// ps -p <pid> -o lstart= gives something like "Sat Jan 25 19:00:00 2026"
-	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "lstart=").Output()
+	cmd := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "lstart=")
+	// Force a stable locale so month/day names stay parseable on non-English systems.
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
+	out, err := cmd.Output()
 	if err != nil {
 		return 0, err
 	}
