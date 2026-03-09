@@ -124,18 +124,36 @@ func (s *Supervisor) CredentialStore() oauth.CredentialStore {
 // The name parameter is used as the identifier for the server.
 func (s *Supervisor) Start(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// Check if already running
 	if h, exists := s.handles[name]; exists && h.IsRunning() {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("server %s is already running", name)
 	}
+	s.mu.Unlock()
 
-	// Dispatch based on server type
+	// Dispatch based on server type — initialization runs without the
+	// global lock so that multiple servers can start concurrently.
+	var (
+		handle *Handle
+		err    error
+	)
 	if srv.IsHTTP() {
-		return s.startHTTP(ctx, name, srv)
+		handle, err = s.startHTTP(ctx, name, srv)
+	} else {
+		handle, err = s.startStdio(ctx, name, srv)
 	}
-	return s.startStdio(ctx, name, srv)
+
+	if err != nil {
+		// Clean up any partially-registered handle
+		s.mu.Lock()
+		if h, exists := s.handles[name]; exists && !h.IsRunning() {
+			delete(s.handles, name)
+		}
+		s.mu.Unlock()
+	}
+
+	return handle, err
 }
 
 // startStdio starts a stdio-based MCP server process.
@@ -195,7 +213,7 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 	transport := mcp.NewStdioTransport(stdin, stdout)
 	client := mcp.NewClient(transport)
 
-	// Create handle
+	// Create handle and register under lock
 	handleCtx, handleCancel := context.WithCancel(context.Background())
 	handle := &Handle{
 		id:             name,
@@ -212,7 +230,9 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 		done:           make(chan struct{}),
 	}
 
+	s.mu.Lock()
 	s.handles[name] = handle
+	s.mu.Unlock()
 
 	// Start stderr reader goroutine
 	go handle.readStderr(stderr)
@@ -220,10 +240,28 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 	// Start process watcher goroutine
 	go handle.watchProcess()
 
+	// Initialize MCP and discover tools in the background.
+	// Start() returns immediately so that multiple servers can start concurrently.
+	// Callers wait via handle.WaitForTools(), which blocks until init + discovery
+	// complete (or the caller's context expires). The process stays alive even if
+	// the caller's context expires — only handle.Stop() kills it.
+	go s.initAndDiscoverAsync(handle, client, name)
+
+	return handle, nil
+}
+
+// initAndDiscoverAsync initializes the MCP connection (with retries) and then
+// discovers tools. It signals handle.toolsReady when done (success or failure).
+// Uses handle.ctx so the init is not tied to any caller's short-lived context
+// (e.g. the tools/list grace period).
+func (s *Supervisor) initAndDiscoverAsync(handle *Handle, client *mcp.Client, name string) {
+	defer handle.signalToolsReady()
+
 	// Initialize MCP connection with retry and exponential backoff
 	var initErr error
+initLoop:
 	for attempt := 1; attempt <= MaxInitRetries; attempt++ {
-		initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		initCtx, cancel := context.WithTimeout(handle.ctx, 30*time.Second)
 		initErr = client.Initialize(initCtx)
 		cancel()
 
@@ -234,26 +272,68 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 		log.Printf("MCP init attempt %d/%d failed: %v", attempt, MaxInitRetries, initErr)
 
 		if attempt < MaxInitRetries {
-			// Exponential backoff: 500ms, 1s, 2s...
+			// Exponential backoff: 500ms, 1s, 2s... (context-aware)
 			delay := InitRetryBaseDelay * time.Duration(1<<(attempt-1))
 			log.Printf("Retrying in %v", delay)
-			time.Sleep(delay)
+			select {
+			case <-handle.ctx.Done():
+				initErr = handle.ctx.Err()
+				break initLoop
+			case <-time.After(delay):
+			}
 		}
 	}
 
 	if initErr != nil {
+		handle.setInitError(initErr)
 		_ = handle.Stop()
-		s.emitStatus(name, events.StateError, cmd.Process.Pid, nil, fmt.Sprintf("MCP init failed after %d attempts: %v", MaxInitRetries, initErr))
-		return nil, fmt.Errorf("initialize mcp: %w", initErr)
+		s.emitStatus(name, events.StateError, handle.PID(), nil, fmt.Sprintf("MCP init failed after %d attempts: %v", MaxInitRetries, initErr))
+		return
 	}
 
-	// Emit running event immediately (tool discovery happens in background)
-	s.emitStatus(name, events.StateRunning, cmd.Process.Pid, nil, "")
+	// Emit running event
+	s.emitStatus(name, events.StateRunning, handle.PID(), nil, "")
 
-	// Discover tools in background (non-blocking)
-	go s.discoverToolsAsync(handle, client, name)
+	// Discover tools
+	ctx, cancel := context.WithTimeout(handle.ctx, 30*time.Second)
+	defer cancel()
 
-	return handle, nil
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		s.bus.Publish(events.NewErrorEvent(name, err, "Failed to list tools"))
+		return
+	}
+
+	handle.SetTools(tools)
+
+	mcpTools := make([]events.McpTool, len(tools))
+	for i, t := range tools {
+		var schema json.RawMessage
+		if t.InputSchema != nil {
+			schema, _ = json.Marshal(t.InputSchema)
+		}
+		mcpTools[i] = events.McpTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: schema,
+		}
+	}
+	// Update tool cache before publishing event so TUI reads fresh data
+	if s.toolCache != nil {
+		cacheInputs := make([]config.CachedToolInput, len(mcpTools))
+		for i, t := range mcpTools {
+			cacheInputs[i] = config.CachedToolInput{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+			}
+		}
+		if err := s.toolCache.Update(name, cacheInputs); err != nil {
+			log.Printf("Warning: failed to update tool cache for %s: %v", name, err)
+		}
+	}
+
+	s.bus.Publish(events.NewToolsUpdatedEvent(name, mcpTools))
 }
 
 // startHTTP starts an HTTP-based MCP server connection.
@@ -332,7 +412,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 	// Create client
 	client := mcp.NewClient(httpTransport)
 
-	// Create handle
+	// Create handle and register under lock
 	handleCtx, handleCancel := context.WithCancel(context.Background())
 	handle := &Handle{
 		id:            name,
@@ -351,7 +431,9 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 		done:          make(chan struct{}),
 	}
 
+	s.mu.Lock()
 	s.handles[name] = handle
+	s.mu.Unlock()
 
 	// Initialize MCP connection
 	initCtx, cancel := context.WithTimeout(ctx, time.Duration(srv.StartupTimeout())*time.Second)
@@ -500,8 +582,8 @@ func (s *Supervisor) emitStatus(id string, state events.RuntimeState, pid int, l
 	s.bus.Publish(events.NewStatusChangedEvent(id, events.StateIdle, state, status))
 }
 
-// discoverToolsAsync discovers tools from an MCP server in the background.
-// It signals the handle when discovery is complete (whether successful or not).
+// discoverToolsAsync discovers tools from an already-initialized MCP server in the background.
+// Used by startHTTP (which does its own sync init) and retryHTTPConnection.
 func (s *Supervisor) discoverToolsAsync(handle *Handle, client *mcp.Client, name string) {
 	defer handle.signalToolsReady()
 
@@ -528,7 +610,6 @@ func (s *Supervisor) discoverToolsAsync(handle *Handle, client *mcp.Client, name
 			InputSchema: schema,
 		}
 	}
-	// Update tool cache before publishing event so TUI reads fresh data
 	if s.toolCache != nil {
 		cacheInputs := make([]config.CachedToolInput, len(mcpTools))
 		for i, t := range mcpTools {
@@ -619,8 +700,10 @@ type Handle struct {
 	client       *mcp.Client
 	tools        []mcp.Tool
 	toolsMu      sync.RWMutex
-	toolsReady   chan struct{} // closed when tools are discovered
+	toolsReady   chan struct{} // closed when init + tool discovery complete
 	toolsReadyMu sync.Mutex    // protects toolsReady close
+	initErr      error         // set if MCP init fails (checked by WaitForTools)
+	initErrMu    sync.Mutex
 	logs         []string
 	logsMu       sync.RWMutex
 	bus          *events.Bus
@@ -676,14 +759,32 @@ func (h *Handle) ToolsReady() bool {
 	}
 }
 
-// WaitForTools waits for tool discovery to complete or context to be cancelled.
+// WaitForTools waits for init + tool discovery to complete or context to be cancelled.
+// Returns initErr if MCP initialization failed.
 func (h *Handle) WaitForTools(ctx context.Context) error {
 	select {
 	case <-h.toolsReady:
+		if err := h.InitError(); err != nil {
+			return err
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// setInitError records an MCP initialization error.
+func (h *Handle) setInitError(err error) {
+	h.initErrMu.Lock()
+	defer h.initErrMu.Unlock()
+	h.initErr = err
+}
+
+// InitError returns the MCP initialization error, if any.
+func (h *Handle) InitError() error {
+	h.initErrMu.Lock()
+	defer h.initErrMu.Unlock()
+	return h.initErr
 }
 
 // Logs returns the captured stderr logs.

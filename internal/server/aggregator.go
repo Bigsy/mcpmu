@@ -157,27 +157,19 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string)
 		return nil, nil
 	}
 
-	// Use per-server startup timeout (default 10s), with a floor of DefaultToolDiscoveryTimeout
-	discoveryTimeout := max(time.Duration(srv.StartupTimeout())*time.Second, DefaultToolDiscoveryTimeout)
-
-	// Check if server is already running
+	// Check if server is already running (or starting — async init may be in progress)
 	handle := a.supervisor.Get(serverName)
 	if handle == nil || !handle.IsRunning() {
-		// Start the server
+		// Start the server (returns immediately — init + tool discovery happen async)
 		var err error
-		timeoutCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
-		defer cancel()
-
-		handle, err = a.supervisor.Start(timeoutCtx, serverName, srv)
+		handle, err = a.supervisor.Start(ctx, serverName, srv)
 		if err != nil {
 			return nil, fmt.Errorf("start server: %w", err)
 		}
 	}
 
-	// Wait for async tool discovery to complete
-	toolsCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
-	defer cancel()
-	if err := handle.WaitForTools(toolsCtx); err != nil {
+	// Wait for init + tool discovery to complete (respects caller's context)
+	if err := handle.WaitForTools(ctx); err != nil {
 		return nil, fmt.Errorf("wait for tools: %w", err)
 	}
 
@@ -267,6 +259,23 @@ func (a *Aggregator) buildManagerTools() []AggregatedTool {
 			InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
 		},
 	}
+}
+
+// DiscoverServer discovers tools from a single server and updates the cache.
+// Returns the tools found, or an error if discovery failed.
+func (a *Aggregator) DiscoverServer(ctx context.Context, serverName string) ([]AggregatedTool, error) {
+	tools, err := a.discoverServerTools(ctx, serverName)
+	if err != nil {
+		return nil, err
+	}
+
+	a.toolsMu.Lock()
+	for _, t := range tools {
+		a.tools[t.Name] = t
+	}
+	a.toolsMu.Unlock()
+
+	return tools, nil
 }
 
 // RefreshServerTools refreshes the tool cache for a specific server.

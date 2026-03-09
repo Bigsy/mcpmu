@@ -81,6 +81,11 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 		if err != nil {
 			return nil, ErrServerFailedToStart(serverName, err.Error())
 		}
+
+		// Wait for init + tool discovery to complete
+		if err := handle.WaitForTools(startCtx); err != nil {
+			return nil, ErrServerFailedToStart(serverName, err.Error())
+		}
 	}
 
 	// Call the tool on the upstream server
@@ -190,6 +195,11 @@ func (r *Router) handleServersStart(ctx context.Context, arguments json.RawMessa
 		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}
 
+	// Wait for init + tool discovery
+	if err := handle.WaitForTools(ctx); err != nil {
+		return nil, ErrServerFailedToStart(serverName, err.Error())
+	}
+
 	// Refresh tools after starting
 	if err := r.aggregator.RefreshServerTools(ctx, serverName); err != nil {
 		log.Printf("Failed to refresh tools after start: %v", err)
@@ -252,6 +262,11 @@ func (r *Router) handleServersRestart(ctx context.Context, arguments json.RawMes
 	// Start the server
 	handle, err := r.supervisor.Start(ctx, serverName, srv)
 	if err != nil {
+		return nil, ErrServerFailedToStart(serverName, err.Error())
+	}
+
+	// Wait for init + tool discovery
+	if err := handle.WaitForTools(ctx); err != nil {
 		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}
 

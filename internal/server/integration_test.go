@@ -1027,6 +1027,458 @@ func TestServer_ProgressiveDiscovery(t *testing.T) {
 	t.Log("Progressive discovery test passed!")
 }
 
+// TestServer_ConcurrentServerInit verifies that multiple servers initialize
+// concurrently rather than sequentially. This catches mutex serialization bugs
+// in Supervisor.Start() where a global lock during initialization would cause
+// slow-starting servers to block fast ones.
+//
+// Setup:
+//   - 1 fast server (no init delay)
+//   - 2 slow servers (each with init delay exceeding the grace period)
+//   - Grace period shorter than a single slow server's init time
+//
+// If starts are serialized, the fast server would be blocked behind the slow
+// ones and no tools would be returned within the grace period.
+// If starts are concurrent, the fast server finishes independently and its
+// tools appear in the first tools/list response.
+func TestServer_ConcurrentServerInit(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	enabled := true
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"fast-srv": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"fast_tool","description":"A fast tool"}]}`,
+				},
+			},
+			"slow-srv-1": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					// 800ms init delay — exceeds the 200ms grace period on its own
+					"FAKE_MCP_CFG": `{"tools":[{"name":"slow_tool_1","description":"Slow tool 1"}],"delays":{"initialize":800000000}}`,
+				},
+			},
+			"slow-srv-2": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					// 800ms init delay
+					"FAKE_MCP_CFG": `{"tools":[{"name":"slow_tool_2","description":"Slow tool 2"}],"delays":{"initialize":800000000}}`,
+				},
+			},
+		},
+		Namespaces: map[string]config.NamespaceConfig{},
+	}
+
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	defer func() { _ = stdinReader.Close() }()
+	defer func() { _ = stdinWriter.Close() }()
+
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	defer func() { _ = stdoutReader.Close() }()
+	defer func() { _ = stdoutWriter.Close() }()
+
+	srv, err := New(Options{
+		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
+		Stdin:           stdinReader,
+		Stdout:          stdoutWriter,
+		ServerName:      "mcpmu-test",
+		ServerVersion:   "1.0.0",
+		ProtocolVersion: "2024-11-05",
+		LogLevel:        "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Grace period shorter than a single slow server's init.
+	// If starts are serialized (fast behind slow), fast would be blocked
+	// and this test would fail.
+	srv.listToolsGracePeriod = 200 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Run(ctx) }()
+
+	send := func(msg string) {
+		t.Helper()
+		if _, err := stdinWriter.WriteString(msg + "\n"); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+
+	// Initialize
+	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`)
+	time.Sleep(100 * time.Millisecond)
+
+	type concLineResult struct {
+		data string
+		err  error
+	}
+	outLines := make(chan concLineResult, 10)
+	outReader := bufio.NewReader(stdoutReader)
+	go func() {
+		for {
+			line, err := outReader.ReadString('\n')
+			if line != "" {
+				outLines <- concLineResult{data: strings.TrimSpace(line)}
+			}
+			if err != nil {
+				outLines <- concLineResult{err: err}
+				return
+			}
+		}
+	}()
+
+	readLine := func(timeout time.Duration) (string, error) {
+		select {
+		case r := <-outLines:
+			return r.data, r.err
+		case <-time.After(timeout):
+			return "", context.DeadlineExceeded
+		}
+	}
+
+	// Read init response
+	initLine, err := readLine(2 * time.Second)
+	if err != nil {
+		t.Fatalf("Init read: %v", err)
+	}
+	var initResp struct {
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(initLine), &initResp); err != nil {
+		t.Fatalf("Parse init: %v\nLine: %s", err, initLine)
+	}
+	if initResp.Error != nil {
+		t.Fatalf("Init error: %v", initResp.Error)
+	}
+
+	// Send tools/list
+	send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+
+	toolsLine, err := readLine(5 * time.Second)
+	if err != nil {
+		t.Fatalf("tools/list read: %v", err)
+	}
+
+	var toolsResp struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(toolsLine), &toolsResp); err != nil {
+		t.Fatalf("Parse tools/list: %v\nLine: %s", err, toolsLine)
+	}
+	if toolsResp.Error != nil {
+		t.Fatalf("tools/list error: %v", toolsResp.Error)
+	}
+
+	toolNames := make(map[string]bool)
+	for _, tool := range toolsResp.Result.Tools {
+		toolNames[tool.Name] = true
+	}
+	t.Logf("First tools/list returned: %v", toolNames)
+
+	// Key assertion: the fast server's tools MUST be present.
+	// With serialized starts, the slow servers would block the fast one
+	// and no tools would be returned within the 200ms grace period.
+	if !toolNames["fast-srv.fast_tool"] {
+		t.Fatal("fast-srv.fast_tool missing from first tools/list — " +
+			"concurrent server initialization may be broken (slow servers blocking fast ones)")
+	}
+
+	// Cleanup
+	_ = stdinWriter.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("Server did not stop")
+	}
+
+	t.Log("Concurrent server init test passed!")
+}
+
+// TestServer_SlowInitNotification is a realistic end-to-end test that verifies
+// the full progressive discovery cycle when a server's initialization exceeds
+// the grace period:
+//
+//  1. tools/list returns partial results (fast server only) within the grace period
+//  2. The slow-init server finishes in the background
+//  3. A notifications/tools/list_changed is sent promptly (not blocked by failures)
+//  4. A second tools/list returns the complete tool set
+//
+// This simulates the real scenario: e.g. playwright finishes fast, grafana/sentry
+// take longer to initialise, and kubernetes/atlassian are broken. The client
+// should learn about grafana/sentry as soon as they're ready, without waiting
+// for the broken servers to time out.
+func TestServer_SlowInitNotification(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	enabled := true
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"fast-srv": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"fast_tool","description":"Fast tool"}]}`,
+				},
+			},
+			"slow-init-srv": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					// 400ms init delay — exceeds the 100ms grace period but finishes
+					// well within the 30s background timeout.
+					"FAKE_MCP_CFG": `{"tools":[{"name":"slow_init_tool","description":"Slow init tool"}],"delays":{"initialize":400000000}}`,
+				},
+			},
+			"broken-srv": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					// Crash on init — simulates kubernetes/atlassian that never come up
+					"FAKE_MCP_CFG": `{"crashOnMethod":"initialize","crashExitCode":1}`,
+				},
+			},
+		},
+		Namespaces: map[string]config.NamespaceConfig{},
+	}
+
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	defer func() { _ = stdinReader.Close() }()
+	defer func() { _ = stdinWriter.Close() }()
+
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	defer func() { _ = stdoutReader.Close() }()
+	defer func() { _ = stdoutWriter.Close() }()
+
+	srv, err := New(Options{
+		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
+		Stdin:           stdinReader,
+		Stdout:          stdoutWriter,
+		ServerName:      "mcpmu-test",
+		ServerVersion:   "1.0.0",
+		ProtocolVersion: "2024-11-05",
+		LogLevel:        "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Grace period: fast-srv finishes, slow-init-srv (400ms init) does not,
+	// broken-srv crashes. Background picks up the stragglers.
+	srv.listToolsGracePeriod = 100 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Run(ctx) }()
+
+	send := func(msg string) {
+		t.Helper()
+		if _, err := stdinWriter.WriteString(msg + "\n"); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+
+	type notifLineResult struct {
+		data string
+		err  error
+	}
+	outLines := make(chan notifLineResult, 10)
+	go func() {
+		r := bufio.NewReader(stdoutReader)
+		for {
+			line, err := r.ReadString('\n')
+			if line != "" {
+				outLines <- notifLineResult{data: strings.TrimSpace(line)}
+			}
+			if err != nil {
+				outLines <- notifLineResult{err: err}
+				return
+			}
+		}
+	}()
+
+	readLine := func(timeout time.Duration) (string, error) {
+		select {
+		case r := <-outLines:
+			return r.data, r.err
+		case <-time.After(timeout):
+			return "", context.DeadlineExceeded
+		}
+	}
+
+	// Step 1: Initialize
+	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`)
+	time.Sleep(100 * time.Millisecond)
+
+	initLine, err := readLine(2 * time.Second)
+	if err != nil {
+		t.Fatalf("Init read: %v", err)
+	}
+	var initResp struct{ Error *RPCError `json:"error"` }
+	if err := json.Unmarshal([]byte(initLine), &initResp); err != nil {
+		t.Fatalf("Parse init: %v\nLine: %s", err, initLine)
+	}
+	if initResp.Error != nil {
+		t.Fatalf("Init error: %v", initResp.Error)
+	}
+
+	// Step 2: tools/list — grace period is 100ms, so slow-init-srv (400ms) will be pending
+	send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+
+	toolsLine1, err := readLine(5 * time.Second)
+	if err != nil {
+		t.Fatalf("tools/list read: %v", err)
+	}
+	var toolsResp1 struct {
+		Result struct {
+			Tools []struct{ Name string `json:"name"` } `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(toolsLine1), &toolsResp1); err != nil {
+		t.Fatalf("Parse tools/list: %v\nLine: %s", err, toolsLine1)
+	}
+	if toolsResp1.Error != nil {
+		t.Fatalf("tools/list error: %v", toolsResp1.Error)
+	}
+
+	firstTools := make(map[string]bool)
+	for _, tool := range toolsResp1.Result.Tools {
+		firstTools[tool.Name] = true
+	}
+	t.Logf("First tools/list: %v", firstTools)
+
+	if !firstTools["fast-srv.fast_tool"] {
+		t.Fatal("fast-srv.fast_tool missing from first tools/list")
+	}
+	if firstTools["slow-init-srv.slow_init_tool"] {
+		t.Fatal("slow-init-srv.slow_init_tool should NOT be in first tools/list (grace period too short)")
+	}
+
+	// Step 3: Wait for notifications/tools/list_changed.
+	// The slow-init-srv takes 400ms — the notification should arrive within a
+	// few seconds, NOT after 30s (which would mean it's blocked by broken-srv).
+	start := time.Now()
+	notifLine, err := readLine(10 * time.Second)
+	notifLatency := time.Since(start)
+	if err != nil {
+		t.Fatalf("notification read: %v (waited %v — broken-srv may be blocking notification)", err, notifLatency)
+	}
+	var notif struct{ Method string `json:"method"` }
+	if err := json.Unmarshal([]byte(notifLine), &notif); err != nil {
+		t.Fatalf("Parse notification: %v\nLine: %s", err, notifLine)
+	}
+	if notif.Method != "notifications/tools/list_changed" {
+		t.Fatalf("Expected notifications/tools/list_changed, got %q", notif.Method)
+	}
+	t.Logf("Received notifications/tools/list_changed after %v", notifLatency)
+
+	// The notification should arrive promptly (slow-init-srv finishes in ~400ms
+	// after the grace period). If it takes >5s, the notification is likely blocked
+	// by the broken server's retries/timeouts.
+	if notifLatency > 5*time.Second {
+		t.Errorf("Notification took %v — should arrive within a few seconds, not blocked by broken servers", notifLatency)
+	}
+
+	// Step 4: Second tools/list should include the slow-init-srv's tools
+	send(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
+
+	toolsLine2, err := readLine(5 * time.Second)
+	if err != nil {
+		t.Fatalf("second tools/list read: %v", err)
+	}
+	var toolsResp2 struct {
+		Result struct {
+			Tools []struct{ Name string `json:"name"` } `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(toolsLine2), &toolsResp2); err != nil {
+		t.Fatalf("Parse second tools/list: %v\nLine: %s", err, toolsLine2)
+	}
+	if toolsResp2.Error != nil {
+		t.Fatalf("second tools/list error: %v", toolsResp2.Error)
+	}
+
+	secondTools := make(map[string]bool)
+	for _, tool := range toolsResp2.Result.Tools {
+		secondTools[tool.Name] = true
+	}
+	t.Logf("Second tools/list: %v", secondTools)
+
+	if !secondTools["fast-srv.fast_tool"] {
+		t.Error("fast-srv.fast_tool missing from second tools/list")
+	}
+	if !secondTools["slow-init-srv.slow_init_tool"] {
+		t.Error("slow-init-srv.slow_init_tool missing from second tools/list after notification")
+	}
+
+	// Cleanup
+	_ = stdinWriter.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("Server did not stop")
+	}
+
+	t.Log("Slow init notification test passed!")
+}
+
 // TestServer_ReloadSendsToolsListChanged verifies that config reloads
 // send a notifications/tools/list_changed notification to the client.
 func TestServer_ReloadSendsToolsListChanged(t *testing.T) {

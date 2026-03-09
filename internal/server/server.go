@@ -323,7 +323,7 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	// doesn't re-read state that a concurrent reload could change.
 	stillPending := s.aggregator.PendingServers(activeServerNames)
 	if len(stillPending) > 0 && s.bgDiscovering.CompareAndSwap(false, true) {
-		go s.discoverAndNotify(stillPending, activeServerNames)
+		go s.discoverAndNotify(stillPending)
 	}
 
 	// Filter tools based on permissions (if namespace is active)
@@ -360,28 +360,60 @@ func (s *Server) sendNotification(method string) {
 	s.send(msg)
 }
 
-// discoverAndNotify continues tool discovery for straggling servers in the background,
-// then notifies the client that the tool list has changed only if discovery made progress.
+// discoverAndNotify continues tool discovery for straggling servers in the background.
+// It discovers pending servers concurrently and sends a notifications/tools/list_changed
+// as soon as the first straggler succeeds, so the client can refresh promptly instead of
+// waiting for all servers (including broken ones) to time out.
+//
 // pendingNames is the set of servers that were still pending when the grace period expired.
-// allServerNames is the caller's snapshot of activeServerNames (not re-read from s.mu).
-func (s *Server) discoverAndNotify(pendingNames []string, allServerNames []string) {
+func (s *Server) discoverAndNotify(pendingNames []string) {
 	defer s.bgDiscovering.Store(false)
 
-	// Use the full per-server timeout for stragglers (not the grace period)
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultToolDiscoveryTimeout)
 	defer cancel()
 
-	_, _ = s.aggregator.ListTools(ctx, allServerNames)
+	// Channel signals when any single server finishes discovery successfully.
+	notify := make(chan struct{}, 1)
+	notified := false
 
-	// Only notify if at least one straggler actually completed discovery
-	stillPending := s.aggregator.PendingServers(pendingNames)
-	if len(stillPending) < len(pendingNames) {
-		s.sendNotification("notifications/tools/list_changed")
-		log.Printf("Sent tools/list_changed notification (%d of %d stragglers discovered in background)",
-			len(pendingNames)-len(stillPending), len(pendingNames))
-	} else {
+	var wg sync.WaitGroup
+	for _, name := range pendingNames {
+		wg.Add(1)
+		go func(serverName string) {
+			defer wg.Done()
+
+			tools, err := s.aggregator.DiscoverServer(ctx, serverName)
+			if err != nil {
+				log.Printf("Background discovery failed for %s: %v", serverName, err)
+				return
+			}
+			log.Printf("Background discovery succeeded for %s (%d tools)", serverName, len(tools))
+
+			// Signal that at least one server made progress
+			select {
+			case notify <- struct{}{}:
+			default:
+			}
+		}(name)
+	}
+
+	// Wait for first success (or all to finish)
+	go func() {
+		wg.Wait()
+		close(notify)
+	}()
+
+	for range notify {
+		if !notified {
+			notified = true
+			s.sendNotification("notifications/tools/list_changed")
+			log.Printf("Sent tools/list_changed notification (background discovery made progress)")
+		}
+	}
+
+	if !notified {
 		log.Printf("Background discovery made no progress (%d still pending), skipping notification",
-			len(stillPending))
+			len(pendingNames))
 	}
 }
 
