@@ -121,6 +121,17 @@ Serve mode uses a two-phase `tools/list` flow so clients are not blocked behind 
 
 This keeps `tools/list` responsive for clients with tight request timeouts while still converging to the full aggregated tool set.
 
+## Permission Resolution
+
+Tool access within a namespace follows a three-tier resolution:
+
+1. **Explicit tool permission** (`permission set`) — highest priority
+2. **Per-server default** (`permission set-server-default`) — overrides namespace default for one server
+3. **Namespace default** (`namespace set-deny-default`) — fallback for all servers
+4. **Allow** — if nothing else applies
+
+This enables fine-grained control: deny a tool-heavy server by default and allowlist only the tools you need, without affecting other servers in the same namespace.
+
 ## Tool Namespacing
 
 Tools from managed servers are exposed with `serverId.toolName` format:

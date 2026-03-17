@@ -62,7 +62,8 @@ type ToolPermissionsModel struct {
 	currentPerms  map[string]bool
 
 	// If true, unconfigured tools default to denied
-	denyByDefault bool
+	denyByDefault  bool
+	serverDefaults map[string]bool // per-server deny-default overrides
 
 	// Auto-start tracking
 	autoStartedServers []string // Servers we started for this session
@@ -77,9 +78,17 @@ type ToolPermissionsModel struct {
 	denyAllKey    key.Binding
 }
 
+// defaultAllowed returns whether tools from the given server are allowed by default.
+func (m *ToolPermissionsModel) defaultAllowed(serverID string) bool {
+	if sd, ok := m.serverDefaults[serverID]; ok {
+		return !sd
+	}
+	return !m.denyByDefault
+}
+
 // NewToolPermissions creates a new tool permissions editor.
 func NewToolPermissions(th theme.Theme) ToolPermissionsModel {
-	delegate := newToolPermDelegate(th, make(map[string]bool), false)
+	delegate := newToolPermDelegate(th, make(map[string]bool), false, nil)
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = "Tool Permissions"
 	l.SetShowStatusBar(false)
@@ -126,10 +135,12 @@ func (m *ToolPermissionsModel) Show(
 	servers []config.ServerEntry,
 	permissions []config.ToolPermission,
 	denyByDefault bool,
+	serverDefaults map[string]bool,
 ) {
 	m.visible = true
 	m.namespaceID = namespaceName
 	m.denyByDefault = denyByDefault
+	m.serverDefaults = serverDefaults
 	m.originalPerms = make(map[string]bool)
 	m.currentPerms = make(map[string]bool)
 
@@ -161,8 +172,7 @@ func (m *ToolPermissionsModel) Show(
 			key := serverName + ":" + tool.Name
 			enabled, hasExplicit := m.currentPerms[key]
 			if !hasExplicit {
-				// Use namespace default
-				enabled = !denyByDefault
+				enabled = m.defaultAllowed(serverName)
 			}
 
 			items = append(items, toolPermItem{
@@ -177,7 +187,7 @@ func (m *ToolPermissionsModel) Show(
 	}
 
 	m.list.SetItems(items)
-	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault))
+	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults))
 }
 
 // Hide hides the editor.
@@ -231,10 +241,12 @@ func (m *ToolPermissionsModel) FinishDiscovery(
 	servers []config.ServerEntry,
 	permissions []config.ToolPermission,
 	denyByDefault bool,
+	serverDefaults map[string]bool,
 ) {
 	m.discovering = false
 	m.discoveryTimeout = false
 	m.denyByDefault = denyByDefault
+	m.serverDefaults = serverDefaults
 
 	// Build permission lookup
 	for _, perm := range permissions {
@@ -264,7 +276,7 @@ func (m *ToolPermissionsModel) FinishDiscovery(
 			key := serverName + ":" + tool.Name
 			enabled, hasExplicit := m.currentPerms[key]
 			if !hasExplicit {
-				enabled = !denyByDefault
+				enabled = m.defaultAllowed(serverName)
 			}
 
 			items = append(items, toolPermItem{
@@ -279,7 +291,7 @@ func (m *ToolPermissionsModel) FinishDiscovery(
 	}
 
 	m.list.SetItems(items)
-	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault))
+	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults))
 }
 
 // SetSize sets the available size.
@@ -385,31 +397,30 @@ func (m *ToolPermissionsModel) Update(msg tea.Msg) tea.Cmd {
 					key := ti.serverID + ":" + ti.toolName
 					current, has := m.currentPerms[key]
 					if !has {
-						// No explicit permission, use inverse of default
-						current = !m.denyByDefault
+						current = m.defaultAllowed(ti.serverID)
 					}
 					newValue := !current
 					// If new value matches default, remove explicit permission (revert to default)
-					defaultValue := !m.denyByDefault
+					defaultValue := m.defaultAllowed(ti.serverID)
 					if newValue == defaultValue {
 						delete(m.currentPerms, key)
 					} else {
 						m.currentPerms[key] = newValue
 					}
 					// Update delegate
-					m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault))
+					m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults))
 				}
 			}
 			return nil
 		case key.Matches(msg, m.enableSafeKey):
 			// Enable all safe tools (those classified as ToolSafe)
 			m.applyBulkEnableSafe()
-			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault))
+			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults))
 			return nil
 		case key.Matches(msg, m.denyAllKey):
 			// Deny all tools
 			m.applyBulkDenyAll()
-			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault))
+			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults))
 			return nil
 		}
 	}
@@ -435,9 +446,7 @@ func (m *ToolPermissionsModel) applyBulkEnableSafe() {
 		}
 
 		key := ti.serverID + ":" + ti.toolName
-		// If the default is allow (denyByDefault=false), we need to explicitly set
-		// only if it's currently denied. If default is deny, we need to explicitly allow.
-		defaultValue := !m.denyByDefault
+		defaultValue := m.defaultAllowed(ti.serverID)
 		if defaultValue {
 			// Default is allow - remove any explicit deny
 			delete(m.currentPerms, key)
@@ -457,9 +466,7 @@ func (m *ToolPermissionsModel) applyBulkDenyAll() {
 		}
 
 		key := ti.serverID + ":" + ti.toolName
-		// If default is deny (denyByDefault=true), we can remove explicit permissions
-		// If default is allow, we need to explicitly deny
-		defaultValue := !m.denyByDefault
+		defaultValue := m.defaultAllowed(ti.serverID)
 		if !defaultValue {
 			// Default is deny - remove any explicit allow
 			delete(m.currentPerms, key)
@@ -529,6 +536,21 @@ func (m ToolPermissionsModel) RenderOverlay(base string, width, height int) stri
 		}
 
 		footer.WriteString(m.theme.Faint.Render("space=toggle  /=filter  a=enable-safe  d=deny-all  enter=save  esc=cancel"))
+
+		// Show per-server policy for selected tool if applicable
+		if item := m.list.SelectedItem(); item != nil {
+			if ti, ok := item.(toolPermItem); ok && !ti.isHeader {
+				if sd, hasSd := m.serverDefaults[ti.serverID]; hasSd {
+					footer.WriteString("\n")
+					if sd {
+						footer.WriteString(m.theme.Warn.Render("Server policy: deny unconfigured tools"))
+					} else {
+						footer.WriteString(m.theme.Muted.Render("Server policy: allow unconfigured tools"))
+					}
+				}
+			}
+		}
+
 		if m.denyByDefault {
 			footer.WriteString("\n")
 			footer.WriteString(m.theme.Warn.Render("Namespace policy: deny unconfigured tools"))
@@ -558,13 +580,22 @@ func (m ToolPermissionsModel) RenderOverlay(base string, width, height int) stri
 
 // toolPermDelegate renders items in the tool permissions editor.
 type toolPermDelegate struct {
-	theme         theme.Theme
-	perms         map[string]bool
-	denyByDefault bool
+	theme          theme.Theme
+	perms          map[string]bool
+	denyByDefault  bool
+	serverDefaults map[string]bool
 }
 
-func newToolPermDelegate(th theme.Theme, perms map[string]bool, denyByDefault bool) toolPermDelegate {
-	return toolPermDelegate{theme: th, perms: perms, denyByDefault: denyByDefault}
+// defaultAllowed returns whether tools from the given server are allowed by default.
+func (d toolPermDelegate) defaultAllowed(serverID string) bool {
+	if sd, ok := d.serverDefaults[serverID]; ok {
+		return !sd
+	}
+	return !d.denyByDefault
+}
+
+func newToolPermDelegate(th theme.Theme, perms map[string]bool, denyByDefault bool, serverDefaults map[string]bool) toolPermDelegate {
+	return toolPermDelegate{theme: th, perms: perms, denyByDefault: denyByDefault, serverDefaults: serverDefaults}
 }
 
 func (d toolPermDelegate) Height() int  { return 1 }
@@ -597,7 +628,7 @@ func (d toolPermDelegate) Render(w io.Writer, m list.Model, index int, item list
 	key := ti.serverID + ":" + ti.toolName
 	enabled, hasExplicit := d.perms[key]
 	if !hasExplicit {
-		enabled = !d.denyByDefault
+		enabled = d.defaultAllowed(ti.serverID)
 	}
 
 	var checkbox string
@@ -616,10 +647,17 @@ func (d toolPermDelegate) Render(w io.Writer, m list.Model, index int, item list
 		name = d.theme.Muted.Render(name)
 	}
 
-	// Show if explicitly configured vs default
+	// Show if explicitly configured vs default, and which default applies
 	suffix := ""
 	if !hasExplicit {
-		suffix = d.theme.Faint.Render(" (default)")
+		if _, hasSd := d.serverDefaults[ti.serverID]; hasSd {
+			suffix = d.theme.Faint.Render(" (server default)")
+		} else if len(d.serverDefaults) > 0 {
+			// Other servers have overrides, so clarify this is namespace-level
+			suffix = d.theme.Faint.Render(" (namespace default)")
+		} else {
+			suffix = d.theme.Faint.Render(" (default)")
+		}
 	}
 
 	_, _ = fmt.Fprintf(w, "%s%s %s%s", cursor, checkbox, name, suffix)

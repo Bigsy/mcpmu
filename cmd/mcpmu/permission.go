@@ -31,6 +31,8 @@ func init() {
 	permissionCmd.AddCommand(permissionSetCmd)
 	permissionCmd.AddCommand(permissionUnsetCmd)
 	permissionCmd.AddCommand(permissionListCmd)
+	permissionCmd.AddCommand(permissionSetServerDefaultCmd)
+	permissionCmd.AddCommand(permissionUnsetServerDefaultCmd)
 }
 
 // ============================================================================
@@ -235,9 +237,10 @@ func outputPermissionsJSON(namespaceName string, ns *config.NamespaceConfig, per
 	}
 
 	type resultView struct {
-		Namespace     string           `json:"namespace"`
-		DenyByDefault bool             `json:"denyByDefault"`
-		Permissions   []permissionView `json:"permissions"`
+		Namespace      string            `json:"namespace"`
+		DenyByDefault  bool              `json:"denyByDefault"`
+		ServerDefaults map[string]string `json:"serverDefaults,omitempty"`
+		Permissions    []permissionView  `json:"permissions"`
 	}
 
 	views := make([]permissionView, len(permissions))
@@ -254,10 +257,23 @@ func outputPermissionsJSON(namespaceName string, ns *config.NamespaceConfig, per
 		}
 	}
 
+	var serverDefaults map[string]string
+	if len(ns.ServerDefaults) > 0 {
+		serverDefaults = make(map[string]string, len(ns.ServerDefaults))
+		for srv, deny := range ns.ServerDefaults {
+			if deny {
+				serverDefaults[srv] = "deny"
+			} else {
+				serverDefaults[srv] = "allow"
+			}
+		}
+	}
+
 	result := resultView{
-		Namespace:     namespaceName,
-		DenyByDefault: ns.DenyByDefault,
-		Permissions:   views,
+		Namespace:      namespaceName,
+		DenyByDefault:  ns.DenyByDefault,
+		ServerDefaults: serverDefaults,
+		Permissions:    views,
 	}
 
 	data, err := json.MarshalIndent(result, "", "  ")
@@ -275,6 +291,25 @@ func outputPermissionsTable(namespaceName string, ns *config.NamespaceConfig, pe
 		denyDefault = "yes"
 	}
 	fmt.Printf("Namespace: %s (deny-by-default: %s)\n\n", namespaceName, denyDefault)
+
+	// Print server defaults if any
+	if len(ns.ServerDefaults) > 0 {
+		fmt.Println("Server defaults:")
+		// Sort by server name for stable output
+		serverNames := make([]string, 0, len(ns.ServerDefaults))
+		for srv := range ns.ServerDefaults {
+			serverNames = append(serverNames, srv)
+		}
+		sort.Strings(serverNames)
+		for _, srv := range serverNames {
+			policy := "allow"
+			if ns.ServerDefaults[srv] {
+				policy = "deny"
+			}
+			fmt.Printf("  %s: %s by default\n", srv, policy)
+		}
+		fmt.Println()
+	}
 
 	if len(permissions) == 0 {
 		fmt.Println("No explicit permissions configured")
@@ -307,6 +342,119 @@ func outputPermissionsTable(namespaceName string, ns *config.NamespaceConfig, pe
 		fmt.Printf("%-*s  %-*s  %s\n", serverWidth, p.Server, toolWidth, p.ToolName, perm)
 	}
 
+	return nil
+}
+
+// ============================================================================
+// permission set-server-default
+// ============================================================================
+
+var permissionSetServerDefaultConfigPath string
+
+var permissionSetServerDefaultCmd = &cobra.Command{
+	Use:   "set-server-default <namespace> <server> <deny|allow>",
+	Short: "Set per-server default policy in a namespace",
+	Long: `Set a per-server deny-default override within a namespace.
+
+When set, this overrides the namespace's deny-by-default setting for tools
+from the specified server. Explicit tool permissions still take priority.
+
+Resolution order: explicit tool permission > server default > namespace default > allow
+
+Examples:
+  mcpmu permission set-server-default work grafana deny
+  mcpmu permission set-server-default work filesystem allow`,
+	Args: cobra.ExactArgs(3),
+	RunE: runPermissionSetServerDefault,
+}
+
+func init() {
+	permissionSetServerDefaultCmd.Flags().StringVarP(&permissionSetServerDefaultConfigPath, "config", "c", "", "Path to config file")
+}
+
+func runPermissionSetServerDefault(cmd *cobra.Command, args []string) error {
+	namespaceName := args[0]
+	serverName := args[1]
+	permStr := strings.ToLower(args[2])
+
+	var denyByDefault bool
+	switch permStr {
+	case "deny", "no", "false", "0":
+		denyByDefault = true
+	case "allow", "yes", "true", "1":
+		denyByDefault = false
+	default:
+		return fmt.Errorf("invalid value %q: expected deny or allow", args[2])
+	}
+
+	cfg, err := loadConfig(permissionSetServerDefaultConfigPath)
+	if err != nil {
+		return err
+	}
+
+	if err := cfg.SetServerDefault(namespaceName, serverName, denyByDefault); err != nil {
+		return err
+	}
+
+	if err := saveConfig(cfg, permissionSetServerDefaultConfigPath); err != nil {
+		return err
+	}
+
+	policy := "allow"
+	if denyByDefault {
+		policy = "deny"
+	}
+	fmt.Printf("Set server default for %s in namespace %q to %s\n", serverName, namespaceName, policy)
+	return nil
+}
+
+// ============================================================================
+// permission unset-server-default
+// ============================================================================
+
+var permissionUnsetServerDefaultConfigPath string
+
+var permissionUnsetServerDefaultCmd = &cobra.Command{
+	Use:   "unset-server-default <namespace> <server>",
+	Short: "Remove per-server default policy",
+	Long: `Remove a per-server deny-default override, reverting to the namespace default.
+
+Examples:
+  mcpmu permission unset-server-default work grafana`,
+	Args: cobra.ExactArgs(2),
+	RunE: runPermissionUnsetServerDefault,
+}
+
+func init() {
+	permissionUnsetServerDefaultCmd.Flags().StringVarP(&permissionUnsetServerDefaultConfigPath, "config", "c", "", "Path to config file")
+}
+
+func runPermissionUnsetServerDefault(cmd *cobra.Command, args []string) error {
+	namespaceName := args[0]
+	serverName := args[1]
+
+	cfg, err := loadConfig(permissionUnsetServerDefaultConfigPath)
+	if err != nil {
+		return err
+	}
+
+	if _, ok := cfg.GetNamespace(namespaceName); !ok {
+		return fmt.Errorf("namespace %q not found", namespaceName)
+	}
+
+	if _, ok := cfg.GetServer(serverName); !ok {
+		return fmt.Errorf("server %q not found", serverName)
+	}
+
+	if err := cfg.UnsetServerDefault(namespaceName, serverName); err != nil {
+		return err
+	}
+
+	if err := saveConfig(cfg, permissionUnsetServerDefaultConfigPath); err != nil {
+		return err
+	}
+
+	fmt.Printf("Removed server default for %s in namespace %q\n", serverName, namespaceName)
 	return nil
 }
 

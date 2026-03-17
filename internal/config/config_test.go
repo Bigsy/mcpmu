@@ -311,7 +311,10 @@ func TestConfig_DeleteServer_NotFound(t *testing.T) {
 func TestConfig_DeleteServer_CleansUpReferences(t *testing.T) {
 	cfg := NewConfig()
 	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
-	cfg.Namespaces["ns1"] = NamespaceConfig{ServerIDs: []string{"srv1", "srv2"}}
+	cfg.Namespaces["ns1"] = NamespaceConfig{
+		ServerIDs:      []string{"srv1", "srv2"},
+		ServerDefaults: map[string]bool{"srv1": true, "srv2": false},
+	}
 	cfg.ToolPermissions = []ToolPermission{
 		{Namespace: "ns1", Server: "srv1", ToolName: "tool1", Enabled: true},
 		{Namespace: "ns1", Server: "srv2", ToolName: "tool2", Enabled: true},
@@ -335,12 +338,23 @@ func TestConfig_DeleteServer_CleansUpReferences(t *testing.T) {
 	if len(cfg.ToolPermissions) != 1 {
 		t.Error("expected srv1 tool permissions to be removed")
 	}
+
+	// Check server default was removed
+	if _, ok := ns.ServerDefaults["srv1"]; ok {
+		t.Error("expected srv1 server default to be removed")
+	}
+	if val, ok := ns.ServerDefaults["srv2"]; !ok || val != false {
+		t.Error("expected srv2 server default to be preserved")
+	}
 }
 
 func TestConfig_RenameServer(t *testing.T) {
 	cfg := NewConfig()
 	cfg.Servers["old-name"] = ServerConfig{Command: "echo"}
-	cfg.Namespaces["ns1"] = NamespaceConfig{ServerIDs: []string{"old-name", "other"}}
+	cfg.Namespaces["ns1"] = NamespaceConfig{
+		ServerIDs:      []string{"old-name", "other"},
+		ServerDefaults: map[string]bool{"old-name": true},
+	}
 	cfg.ToolPermissions = []ToolPermission{
 		{Namespace: "ns1", Server: "old-name", ToolName: "tool1", Enabled: true},
 	}
@@ -379,6 +393,14 @@ func TestConfig_RenameServer(t *testing.T) {
 	// Check tool permission was updated
 	if cfg.ToolPermissions[0].Server != "new-name" {
 		t.Error("expected tool permission server to be updated")
+	}
+
+	// Check server default was renamed
+	if _, ok := ns.ServerDefaults["old-name"]; ok {
+		t.Error("expected old-name server default to be removed")
+	}
+	if val, ok := ns.ServerDefaults["new-name"]; !ok || !val {
+		t.Error("expected new-name server default to be set to true")
 	}
 }
 
@@ -1062,5 +1084,168 @@ func TestUpdateServer_ValidatesConfig(t *testing.T) {
 	err = cfg.UpdateServer("test", ServerConfig{})
 	if err == nil {
 		t.Error("expected error for invalid server config")
+	}
+}
+
+// ============================================================================
+// Server Default Tests
+// ============================================================================
+
+func TestConfig_SetServerDefault(t *testing.T) {
+	testutil.SetupTestHome(t)
+
+	cfg := NewConfig()
+	cfg.Namespaces["dev"] = NamespaceConfig{ServerIDs: []string{}}
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
+
+	// Set server default
+	err := cfg.SetServerDefault("dev", "srv1", true)
+	if err != nil {
+		t.Fatalf("SetServerDefault failed: %v", err)
+	}
+
+	ns, _ := cfg.GetNamespace("dev")
+	if ns.ServerDefaults == nil {
+		t.Fatal("expected ServerDefaults to be initialized")
+	}
+	if val, ok := ns.ServerDefaults["srv1"]; !ok || !val {
+		t.Error("expected srv1 server default to be true")
+	}
+
+	// Overwrite
+	err = cfg.SetServerDefault("dev", "srv1", false)
+	if err != nil {
+		t.Fatalf("SetServerDefault overwrite failed: %v", err)
+	}
+	ns, _ = cfg.GetNamespace("dev")
+	if val, ok := ns.ServerDefaults["srv1"]; !ok || val {
+		t.Error("expected srv1 server default to be false after overwrite")
+	}
+
+	// Round-trip save/load
+	err = Save(cfg)
+	if err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	loadedNs, ok := loaded.GetNamespace("dev")
+	if !ok {
+		t.Fatal("expected to find namespace 'dev' after load")
+	}
+	if val, ok := loadedNs.ServerDefaults["srv1"]; !ok || val {
+		t.Error("expected srv1 server default to survive save/load round-trip")
+	}
+}
+
+func TestConfig_SetServerDefault_Errors(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces["dev"] = NamespaceConfig{}
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
+
+	// Non-existent namespace
+	err := cfg.SetServerDefault("nonexistent", "srv1", true)
+	if err == nil {
+		t.Error("expected error for non-existent namespace")
+	}
+
+	// Non-existent server
+	err = cfg.SetServerDefault("dev", "nonexistent", true)
+	if err == nil {
+		t.Error("expected error for non-existent server")
+	}
+}
+
+func TestConfig_GetServerDefault(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces["dev"] = NamespaceConfig{
+		ServerDefaults: map[string]bool{"srv1": true},
+	}
+
+	// Found
+	val, found := cfg.GetServerDefault("dev", "srv1")
+	if !found {
+		t.Error("expected to find server default")
+	}
+	if !val {
+		t.Error("expected server default to be true")
+	}
+
+	// Not found
+	_, found = cfg.GetServerDefault("dev", "srv2")
+	if found {
+		t.Error("expected not to find server default for srv2")
+	}
+
+	// Nil map
+	cfg.Namespaces["empty"] = NamespaceConfig{}
+	_, found = cfg.GetServerDefault("empty", "srv1")
+	if found {
+		t.Error("expected not to find server default with nil map")
+	}
+
+	// Non-existent namespace
+	_, found = cfg.GetServerDefault("nonexistent", "srv1")
+	if found {
+		t.Error("expected not to find server default for non-existent namespace")
+	}
+}
+
+func TestConfig_UnsetServerDefault(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces["dev"] = NamespaceConfig{
+		ServerDefaults: map[string]bool{"srv1": true, "srv2": false},
+	}
+
+	// Remove
+	err := cfg.UnsetServerDefault("dev", "srv1")
+	if err != nil {
+		t.Fatalf("UnsetServerDefault failed: %v", err)
+	}
+	ns, _ := cfg.GetNamespace("dev")
+	if _, ok := ns.ServerDefaults["srv1"]; ok {
+		t.Error("expected srv1 to be removed")
+	}
+	if _, ok := ns.ServerDefaults["srv2"]; !ok {
+		t.Error("expected srv2 to still exist")
+	}
+
+	// Idempotent
+	err = cfg.UnsetServerDefault("dev", "srv1")
+	if err != nil {
+		t.Fatalf("second UnsetServerDefault should not error: %v", err)
+	}
+
+	// Remove last entry - map should be nil
+	err = cfg.UnsetServerDefault("dev", "srv2")
+	if err != nil {
+		t.Fatalf("UnsetServerDefault for srv2 failed: %v", err)
+	}
+	ns, _ = cfg.GetNamespace("dev")
+	if ns.ServerDefaults != nil {
+		t.Error("expected ServerDefaults to be nil after removing all entries")
+	}
+}
+
+func TestConfig_UnassignServer_CleansUpServerDefault(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces["dev"] = NamespaceConfig{
+		ServerIDs:      []string{"srv1", "srv2"},
+		ServerDefaults: map[string]bool{"srv1": true, "srv2": false},
+	}
+
+	err := cfg.UnassignServerFromNamespace("dev", "srv1")
+	if err != nil {
+		t.Fatalf("UnassignServerFromNamespace failed: %v", err)
+	}
+
+	ns, _ := cfg.GetNamespace("dev")
+	if _, ok := ns.ServerDefaults["srv1"]; ok {
+		t.Error("expected srv1 server default to be removed on unassign")
+	}
+	if _, ok := ns.ServerDefaults["srv2"]; !ok {
+		t.Error("expected srv2 server default to be preserved")
 	}
 }

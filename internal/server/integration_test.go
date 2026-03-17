@@ -774,6 +774,186 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 	t.Log("End-to-end namespace tool permissions test passed!")
 }
 
+// TestServer_NamespaceServerDefaults_EndToEnd tests per-server deny-default:
+// - Namespace DenyByDefault=false (allow by default)
+// - srv1 has ServerDefaults["srv1"]=true (deny by default for srv1)
+// - srv2 has no server default (inherits namespace allow)
+// - Explicit allow for one srv1 tool
+// - Verify tools/list: srv1 tools denied except explicit allow, srv2 tools all visible
+// - Verify tools/call: denied srv1 tool returns permission error, srv2 tool succeeds
+func TestServer_NamespaceServerDefaults_EndToEnd(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping end-to-end test in short mode")
+	}
+
+	enabled := true
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"read_file","description":"Read a file"},{"name":"write_file","description":"Write a file"},{"name":"delete_file","description":"Delete a file"}],"echoToolCalls":true}`,
+				},
+			},
+			"srv2": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"get_time","description":"Get current time"},{"name":"set_timezone","description":"Set timezone"}],"echoToolCalls":true}`,
+				},
+			},
+		},
+		Namespaces: map[string]config.NamespaceConfig{
+			"mixed": {
+				Description:    "Mixed server defaults",
+				DenyByDefault:  false, // namespace allows by default
+				ServerIDs:      []string{"srv1", "srv2"},
+				ServerDefaults: map[string]bool{"srv1": true}, // srv1 denies by default
+			},
+		},
+		ToolPermissions: []config.ToolPermission{
+			// Explicitly allow read_file from srv1 (overrides server default deny)
+			{Namespace: "mixed", Server: "srv1", ToolName: "read_file", Enabled: true},
+			// write_file and delete_file from srv1: no explicit permission -> server default deny
+			// get_time and set_timezone from srv2: no explicit permission -> namespace default allow
+		},
+	}
+
+	var stdout bytes.Buffer
+	stdin := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n" +
+			// Call allowed tool (srv1.read_file - explicitly allowed, overrides server default)
+			`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"srv1.read_file","arguments":{"path":"/test"}}}` + "\n" +
+			// Call tool denied by server default (srv1.write_file)
+			`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"srv1.write_file","arguments":{"path":"/test","content":"hi"}}}` + "\n" +
+			// Call tool from srv2 (allowed, inherits namespace default)
+			`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"srv2.get_time","arguments":{}}}` + "\n",
+	)
+
+	srv, err := New(Options{
+		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
+		Namespace:       "mixed",
+		EagerStart:      false,
+		Stdin:           stdin,
+		Stdout:          &stdout,
+		ServerName:      "mcpmu-test",
+		ServerVersion:   "1.0.0",
+		ProtocolVersion: "2024-11-05",
+		LogLevel:        "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_ = srv.Run(ctx)
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 5 {
+		t.Fatalf("Expected at least 5 responses, got %d:\n%s", len(lines), stdout.String())
+	}
+
+	// Response 1: Initialize
+	var initResp struct {
+		ID    int       `json:"id"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &initResp); err != nil {
+		t.Fatalf("Unmarshal init: %v", err)
+	}
+	if initResp.Error != nil {
+		t.Fatalf("Initialize failed: %v", initResp.Error)
+	}
+
+	// Response 2: tools/list - should show srv1.read_file (explicit allow) + all srv2 tools
+	var toolsResp struct {
+		ID     int `json:"id"`
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &toolsResp); err != nil {
+		t.Fatalf("Unmarshal tools/list: %v", err)
+	}
+	if toolsResp.Error != nil {
+		t.Fatalf("tools/list failed: %v", toolsResp.Error)
+	}
+
+	toolNames := make(map[string]bool)
+	for _, tool := range toolsResp.Result.Tools {
+		toolNames[tool.Name] = true
+	}
+
+	// Should be visible
+	for _, name := range []string{"srv1.read_file", "srv2.get_time", "srv2.set_timezone"} {
+		if !toolNames[name] {
+			t.Errorf("tools/list missing expected tool %q", name)
+		}
+	}
+	// Should be denied (server default deny for srv1)
+	for _, name := range []string{"srv1.write_file", "srv1.delete_file"} {
+		if toolNames[name] {
+			t.Errorf("tools/list should NOT contain %q (denied by server default)", name)
+		}
+	}
+
+	// Response 3: srv1.read_file (allowed) - should not get ErrCodeToolDenied
+	var resp3 struct {
+		ID    int       `json:"id"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[2]), &resp3); err != nil {
+		t.Fatalf("Unmarshal resp3: %v", err)
+	}
+	if resp3.Error != nil && resp3.Error.Code == ErrCodeToolDenied {
+		t.Errorf("srv1.read_file should NOT be denied: %v", resp3.Error)
+	}
+
+	// Response 4: srv1.write_file (denied by server default)
+	var resp4 struct {
+		ID    int       `json:"id"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[3]), &resp4); err != nil {
+		t.Fatalf("Unmarshal resp4: %v", err)
+	}
+	if resp4.Error == nil {
+		t.Error("srv1.write_file should be denied by server default")
+	} else if resp4.Error.Code != ErrCodeToolDenied {
+		t.Errorf("Expected ErrCodeToolDenied (%d), got %d", ErrCodeToolDenied, resp4.Error.Code)
+	}
+
+	// Response 5: srv2.get_time (allowed, inherits namespace default)
+	var resp5 struct {
+		ID    int       `json:"id"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[4]), &resp5); err != nil {
+		t.Fatalf("Unmarshal resp5: %v", err)
+	}
+	if resp5.Error != nil {
+		t.Errorf("srv2.get_time should succeed (namespace allows): %v", resp5.Error)
+	}
+
+	t.Log("Server defaults end-to-end test passed!")
+}
+
 // TestServer_ProgressiveDiscovery verifies that:
 // 1. tools/list returns immediately with tools from fast servers only
 // 2. A notifications/tools/list_changed notification is sent when slow servers finish

@@ -63,5 +63,7 @@ mcpmu completion powershell > mcpmu.ps1
 | `permission list` | namespace | | | |
 | `permission set` | namespace | server | | allow/deny |
 | `permission unset` | namespace | server | | |
+| `permission set-server-default` | namespace | server | deny/allow | |
+| `permission unset-server-default` | namespace | server | | |
 | `serve --namespace` | namespace | | | |
 | `serve --log-level` | level | | | |

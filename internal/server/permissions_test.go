@@ -91,6 +91,7 @@ func TestIsToolAllowed(t *testing.T) {
 		"deny-by-default":  {DenyByDefault: true},
 	}
 	cfg.Servers["srv1"] = config.ServerConfig{Command: "echo"}
+	cfg.Servers["srv2"] = config.ServerConfig{Command: "echo"}
 	cfg.ToolPermissions = []config.ToolPermission{
 		{Namespace: "allow-by-default", Server: "srv1", ToolName: "explicitly_allowed", Enabled: true},
 		{Namespace: "allow-by-default", Server: "srv1", ToolName: "explicitly_denied", Enabled: false},
@@ -181,6 +182,91 @@ func TestIsToolAllowed(t *testing.T) {
 			allowed, reason := IsToolAllowed(cfg, tt.namespaceName, tt.serverName, tt.toolName)
 			if allowed != tt.allowed {
 				t.Errorf("expected allowed=%v, got %v", tt.allowed, allowed)
+			}
+			if tt.hasReason && reason == "" {
+				t.Error("expected a reason for denial")
+			}
+			if !tt.hasReason && reason != "" {
+				t.Errorf("expected no reason, got %q", reason)
+			}
+		})
+	}
+}
+
+func TestIsToolAllowed_ServerDefault(t *testing.T) {
+	t.Parallel()
+	cfg := config.NewConfig()
+	cfg.Servers["srv1"] = config.ServerConfig{Command: "echo"}
+	cfg.Servers["srv2"] = config.ServerConfig{Command: "echo"}
+	cfg.Namespaces = map[string]config.NamespaceConfig{
+		"allow-ns": {
+			ServerDefaults: map[string]bool{"srv1": true}, // srv1 denies by default in an allow namespace
+		},
+		"deny-ns": {
+			DenyByDefault:  true,
+			ServerDefaults: map[string]bool{"srv2": false}, // srv2 allows by default in a deny namespace
+		},
+	}
+	cfg.ToolPermissions = []config.ToolPermission{
+		// Explicit allow overrides server default
+		{Namespace: "allow-ns", Server: "srv1", ToolName: "allowed_tool", Enabled: true},
+	}
+
+	tests := []struct {
+		name          string
+		namespaceName string
+		serverName    string
+		toolName      string
+		allowed       bool
+		hasReason     bool
+	}{
+		{
+			name:          "explicit permission overrides server default deny",
+			namespaceName: "allow-ns",
+			serverName:    "srv1",
+			toolName:      "allowed_tool",
+			allowed:       true,
+			hasReason:     false,
+		},
+		{
+			name:          "server default deny in allow namespace",
+			namespaceName: "allow-ns",
+			serverName:    "srv1",
+			toolName:      "unknown_tool",
+			allowed:       false,
+			hasReason:     true,
+		},
+		{
+			name:          "server without default uses namespace allow",
+			namespaceName: "allow-ns",
+			serverName:    "srv2",
+			toolName:      "unknown_tool",
+			allowed:       true,
+			hasReason:     false,
+		},
+		{
+			name:          "server default allow in deny namespace",
+			namespaceName: "deny-ns",
+			serverName:    "srv2",
+			toolName:      "unknown_tool",
+			allowed:       true,
+			hasReason:     false,
+		},
+		{
+			name:          "server without default uses namespace deny",
+			namespaceName: "deny-ns",
+			serverName:    "srv1",
+			toolName:      "unknown_tool",
+			allowed:       false,
+			hasReason:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			allowed, reason := IsToolAllowed(cfg, tt.namespaceName, tt.serverName, tt.toolName)
+			if allowed != tt.allowed {
+				t.Errorf("expected allowed=%v, got %v (reason: %s)", tt.allowed, allowed, reason)
 			}
 			if tt.hasReason && reason == "" {
 				t.Error("expected a reason for denial")

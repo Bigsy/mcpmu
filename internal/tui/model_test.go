@@ -1268,6 +1268,136 @@ func TestModel_RegistryBrowserInstallE2E(t *testing.T) {
 	}
 }
 
+func TestModel_ServerDefaults_AffectsTokenCounts(t *testing.T) {
+	m := newTestModelWithToolCache(t)
+
+	// Add servers
+	srv1 := config.ServerConfig{Kind: config.ServerKindStdio, Command: "echo"}
+	_ = m.cfg.AddServer("srv1", srv1)
+	srv2 := config.ServerConfig{Kind: config.ServerKindStdio, Command: "echo"}
+	_ = m.cfg.AddServer("srv2", srv2)
+
+	// Add namespace with server default deny for srv1
+	ns := config.NamespaceConfig{
+		ServerIDs:      []string{"srv1", "srv2"},
+		ServerDefaults: map[string]bool{"srv1": true}, // deny by default
+	}
+	_ = m.cfg.AddNamespace("test-ns", ns)
+
+	// Explicitly allow one srv1 tool
+	_ = m.cfg.SetToolPermission("test-ns", "srv1", "read_file", true)
+
+	// Populate tool cache for both servers
+	_ = m.toolCache.Update("srv1", []config.CachedToolInput{
+		{Name: "read_file", Description: "Read a file"},
+		{Name: "write_file", Description: "Write a file"},
+		{Name: "delete_file", Description: "Delete a file"},
+	})
+	_ = m.toolCache.Update("srv2", []config.CachedToolInput{
+		{Name: "get_time", Description: "Get time"},
+		{Name: "set_tz", Description: "Set timezone"},
+	})
+
+	// Get token counts
+	serverTokens := m.getServerTokensForNamespace("test-ns")
+
+	// srv1: only read_file should be counted (explicitly allowed; others denied by server default)
+	srv1Tokens := serverTokens["srv1"]
+	// srv2: all tools should be counted (namespace allows by default, no server override)
+	srv2Tokens := serverTokens["srv2"]
+
+	// srv1 should have fewer tokens than srv2 proportionally
+	// (1 tool vs 2 tools, with srv1 having 3 tools total but 2 denied)
+	if srv1Tokens <= 0 {
+		t.Error("expected srv1 to have some tokens (read_file allowed)")
+	}
+	if srv2Tokens <= 0 {
+		t.Error("expected srv2 to have some tokens (all allowed)")
+	}
+
+	// The key assertion: srv1 should have less than if all 3 tools were counted
+	// Get what srv1 tokens would be with NO server default (all allowed)
+	delete(ns.ServerDefaults, "srv1")
+	m.cfg.Namespaces["test-ns"] = ns
+	_ = m.cfg.UnsetToolPermission("test-ns", "srv1", "read_file") // remove explicit allow too
+
+	allAllowedTokens := m.getServerTokensForNamespace("test-ns")
+	if srv1Tokens >= allAllowedTokens["srv1"] {
+		t.Errorf("expected srv1 tokens with server default deny (%d) to be less than all allowed (%d)",
+			srv1Tokens, allAllowedTokens["srv1"])
+	}
+}
+
+func TestModel_PermissionEditor_WithServerDefaults(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 80
+	m.height = 24
+
+	// Setup: add server and namespace with server defaults
+	srv := config.ServerConfig{Kind: config.ServerKindStdio, Command: "test"}
+	_ = m.cfg.AddServer("srv1", srv)
+	_ = m.cfg.AddServer("srv2", srv)
+
+	ns := config.NamespaceConfig{
+		ServerIDs:      []string{"srv1", "srv2"},
+		ServerDefaults: map[string]bool{"srv1": true}, // srv1 denies by default
+	}
+	_ = m.cfg.AddNamespace("test-ns", ns)
+
+	m.detailNamespaceID = "test-ns"
+
+	// Simulate servers running with tools available
+	m.serverStatuses = map[string]events.ServerStatus{
+		"srv1": {State: events.StateRunning},
+		"srv2": {State: events.StateRunning},
+	}
+	m.serverTools = map[string][]events.McpTool{
+		"srv1": {
+			{Name: "read_file", Description: "Read"},
+			{Name: "write_file", Description: "Write"},
+		},
+		"srv2": {
+			{Name: "get_time", Description: "Get time"},
+		},
+	}
+
+	// Call startToolPermissionEditor
+	nsRef := ns
+	handled, _, _ := m.startToolPermissionEditor("test-ns", &nsRef)
+	if !handled {
+		t.Fatal("expected startToolPermissionEditor to handle the request")
+	}
+
+	if !m.toolPerms.IsVisible() {
+		t.Fatal("expected tool permissions editor to be visible")
+	}
+
+	// Size the editor so the list renders items
+	m.toolPerms.SetSize(80, 40)
+
+	// Verify the permission editor received server defaults by checking rendered output.
+	// The overlay should contain "(server default)" for srv1 tools and the
+	// server policy footer line.
+	overlay := m.toolPerms.RenderOverlay("base", 80, 40)
+	if overlay == "base" {
+		t.Fatal("expected overlay to be rendered (not just base)")
+	}
+
+	// The overlay should show the server policy line when a srv1 tool is selected
+	if !strings.Contains(overlay, "server") {
+		t.Error("expected overlay to reference server defaults for srv1 tools")
+	}
+
+	// The overlay itself renders a list with checkbox markers.
+	// Check the overlay (which handles its own sizing) for the checkbox markers.
+	if !strings.Contains(overlay, "[-]") {
+		t.Errorf("expected [-] (denied) markers in overlay for srv1 tools with server default deny, got: %q", overlay)
+	}
+	if !strings.Contains(overlay, "[+]") {
+		t.Errorf("expected [+] (allowed) markers in overlay for srv2 tools with namespace default allow, got: %q", overlay)
+	}
+}
+
 func TestFormatEnvMap(t *testing.T) {
 	tests := []struct {
 		name string

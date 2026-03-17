@@ -144,6 +144,14 @@ func (m *NamespaceDetailModel) updateContent() {
 				serversContent.WriteString("\n")
 			}
 			serversContent.WriteString(m.theme.Primary.Render(serverName))
+			if sd, ok := m.namespace.ServerDefaults[serverName]; ok {
+				serversContent.WriteString("  ")
+				if sd {
+					serversContent.WriteString(m.theme.Warn.Render("[deny by default]"))
+				} else {
+					serversContent.WriteString(m.theme.Success.Render("[allow by default]"))
+				}
+			}
 			if tokens, ok := m.serverTokens[serverName]; ok {
 				serversContent.WriteString("  ")
 				serversContent.WriteString(m.theme.Muted.Render(fmt.Sprintf("(%d tokens)", tokens)))

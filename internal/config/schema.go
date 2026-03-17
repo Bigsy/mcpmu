@@ -56,9 +56,10 @@ type ServerEntry struct {
 // NamespaceConfig represents a namespace that groups servers and their tool permissions.
 // The namespace name/identifier is the map key, not stored in this struct.
 type NamespaceConfig struct {
-	Description   string   `json:"description,omitempty"`
-	ServerIDs     []string `json:"serverIds"`
-	DenyByDefault bool     `json:"denyByDefault,omitempty"` // If true, unconfigured tools are denied
+	Description    string          `json:"description,omitempty"`
+	ServerIDs      []string        `json:"serverIds"`
+	DenyByDefault  bool            `json:"denyByDefault,omitempty"`  // If true, unconfigured tools are denied
+	ServerDefaults map[string]bool `json:"serverDefaults,omitempty"` // Per-server deny-default override (true = deny)
 }
 
 // NamespaceEntry pairs a namespace name with its configuration.

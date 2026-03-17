@@ -32,6 +32,8 @@ func init() {
 	permissionListCmd.ValidArgsFunction = completeNamespaceNames
 	permissionSetCmd.ValidArgsFunction = completePermissionSetArgs
 	permissionUnsetCmd.ValidArgsFunction = completePermissionUnsetArgs
+	permissionSetServerDefaultCmd.ValidArgsFunction = completePermissionServerDefaultArgs
+	permissionUnsetServerDefaultCmd.ValidArgsFunction = completeNamespaceThenServer
 
 	// Flag completions
 	_ = serveCmd.RegisterFlagCompletionFunc("namespace", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -174,6 +176,20 @@ func completePermissionUnsetArgs(cmd *cobra.Command, args []string, toComplete s
 		return namespaceNames(cmd), cobra.ShellCompDirectiveNoFileComp
 	case 1:
 		return serverNames(cmd), cobra.ShellCompDirectiveNoFileComp
+	default:
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+}
+
+// completePermissionServerDefaultArgs completes: namespace, server, deny/allow.
+func completePermissionServerDefaultArgs(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	switch len(args) {
+	case 0:
+		return namespaceNames(cmd), cobra.ShellCompDirectiveNoFileComp
+	case 1:
+		return serverNames(cmd), cobra.ShellCompDirectiveNoFileComp
+	case 2:
+		return []string{"deny", "allow"}, cobra.ShellCompDirectiveNoFileComp
 	default:
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}

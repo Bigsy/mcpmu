@@ -116,7 +116,13 @@ mcpmu permission set work atlassian confluence_delete deny
 # Deny all tools by default, then allowlist what you need
 mcpmu namespace set-deny-default minimal true
 mcpmu permission set minimal context7 resolve allow
+
+# Per-server deny-default — deny a tool-heavy server, allow the rest
+mcpmu permission set-server-default work grafana deny
+mcpmu permission set work grafana query_loki_logs allow
 ```
+
+Permission resolution order: **explicit tool permission > server default > namespace default > allow**.
 
 A common pattern: keep a lean namespace with only your most-used tools for everyday work, and an "extra" namespace with the full suite that you add as a second MCP server when needed.
 
@@ -184,6 +190,8 @@ mcpmu namespace rename <old-name> <new-name>
 mcpmu permission list <namespace> [--json]
 mcpmu permission set <namespace> <server> <tool> <allow|deny>
 mcpmu permission unset <namespace> <server> <tool>
+mcpmu permission set-server-default <namespace> <server> <deny|allow>
+mcpmu permission unset-server-default <namespace> <server>
 ```
 
 ### Serve mode

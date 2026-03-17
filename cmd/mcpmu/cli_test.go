@@ -952,3 +952,143 @@ func TestCLI_Permission_DoesNotStripDotsInToolNames(t *testing.T) {
 		t.Logf("unexpected output while setting permission: stdout=%q stderr=%q", stdout, stderr)
 	}
 }
+
+// ============================================================================
+// Server Default CLI Tests
+// ============================================================================
+
+func TestCLI_Permission_SetServerDefault(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "grafana", "--", "echo", "hello")
+	_, _, _ = runCLI(testBinary, configPath, "namespace", "add", "work")
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "permission", "set-server-default", "work", "grafana", "deny")
+	if err != nil {
+		t.Fatalf("set-server-default failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "deny") {
+		t.Errorf("expected 'deny' in output, got: %s", stdout)
+	}
+}
+
+func TestCLI_Permission_UnsetServerDefault(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "grafana", "--", "echo", "hello")
+	_, _, _ = runCLI(testBinary, configPath, "namespace", "add", "work")
+	_, _, _ = runCLI(testBinary, configPath, "permission", "set-server-default", "work", "grafana", "deny")
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "permission", "unset-server-default", "work", "grafana")
+	if err != nil {
+		t.Fatalf("unset-server-default failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "Removed server default") {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
+	// Verify it's gone from list output
+	listOut, _, _ := runCLI(testBinary, configPath, "permission", "list", "work")
+	if strings.Contains(listOut, "grafana") && strings.Contains(listOut, "deny by default") {
+		t.Error("server default should have been removed from list output")
+	}
+}
+
+func TestCLI_Permission_SetServerDefault_NotFound(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "namespace", "add", "work")
+
+	// Non-existent server
+	stdout, stderr, err := runCLI(testBinary, configPath, "permission", "set-server-default", "work", "nonexistent", "deny")
+	if err == nil {
+		t.Fatal("expected error for non-existent server")
+	}
+	output := stdout + stderr
+	if !strings.Contains(output, "not found") {
+		t.Errorf("expected 'not found' error, got: %s", output)
+	}
+
+	// Non-existent namespace
+	_, _, _ = runCLI(testBinary, configPath, "add", "grafana", "--", "echo", "hello")
+	stdout, stderr, err = runCLI(testBinary, configPath, "permission", "set-server-default", "nonexistent", "grafana", "deny")
+	if err == nil {
+		t.Fatal("expected error for non-existent namespace")
+	}
+	output = stdout + stderr
+	if !strings.Contains(output, "not found") {
+		t.Errorf("expected 'not found' error, got: %s", output)
+	}
+}
+
+func TestCLI_Permission_List_WithServerDefaults(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "grafana", "--", "echo", "hello")
+	_, _, _ = runCLI(testBinary, configPath, "namespace", "add", "work")
+	_, _, _ = runCLI(testBinary, configPath, "permission", "set-server-default", "work", "grafana", "deny")
+
+	// Table output - with server defaults but no explicit tool permissions
+	stdout, stderr, err := runCLI(testBinary, configPath, "permission", "list", "work")
+	if err != nil {
+		t.Fatalf("permission list failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Server defaults:") {
+		t.Errorf("expected 'Server defaults:' section, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "grafana") || !strings.Contains(stdout, "deny") {
+		t.Errorf("expected both grafana and deny in output, got: %s", stdout)
+	}
+
+	// JSON output
+	stdout, stderr, err = runCLI(testBinary, configPath, "permission", "list", "work", "--json")
+	if err != nil {
+		t.Fatalf("permission list --json failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("failed to parse JSON: %v\noutput: %s", err, stdout)
+	}
+
+	sd, ok := result["serverDefaults"]
+	if !ok {
+		t.Fatal("expected 'serverDefaults' field in JSON output")
+	}
+	sdMap, ok := sd.(map[string]any)
+	if !ok {
+		t.Fatalf("expected serverDefaults to be a map, got %T", sd)
+	}
+	if sdMap["grafana"] != "deny" {
+		t.Errorf("expected grafana=deny, got %v", sdMap["grafana"])
+	}
+}
+
+func TestCLI_Permission_List_WithServerDefaults_AndToolPermissions(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "grafana", "--", "echo", "hello")
+	_, _, _ = runCLI(testBinary, configPath, "namespace", "add", "work")
+	_, _, _ = runCLI(testBinary, configPath, "permission", "set-server-default", "work", "grafana", "deny")
+	_, _, _ = runCLI(testBinary, configPath, "permission", "set", "work", "grafana", "query_loki_logs", "allow")
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "permission", "list", "work")
+	if err != nil {
+		t.Fatalf("permission list failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Should show both server defaults section and tool permissions
+	if !strings.Contains(stdout, "Server defaults:") {
+		t.Errorf("expected 'Server defaults:' section, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "query_loki_logs") {
+		t.Errorf("expected tool permission in output, got: %s", stdout)
+	}
+}

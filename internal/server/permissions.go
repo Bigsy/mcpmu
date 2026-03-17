@@ -33,7 +33,7 @@ func (p PermissionResult) String() string {
 //
 // Evaluation order:
 // 1. Check explicit ToolPermission entry → return Allow/Deny
-// 2. No explicit entry → return Default (caller should check namespace DenyByDefault)
+// 2. No explicit entry → return Default (caller applies server default, then namespace DenyByDefault)
 func CheckPermission(cfg *config.Config, namespaceName, serverName, toolName string) PermissionResult {
 	// Check for explicit permission
 	enabled, found := cfg.GetToolPermission(namespaceName, serverName, toolName)
@@ -49,14 +49,14 @@ func CheckPermission(cfg *config.Config, namespaceName, serverName, toolName str
 }
 
 // IsToolAllowed checks if a tool call should be allowed, taking into account
-// the namespace's DenyByDefault setting.
+// per-server defaults and the namespace's DenyByDefault setting.
 //
 // Evaluation order:
 // 1. If no namespace (namespaceName empty), allow all
 // 2. Check explicit ToolPermission → use it
-// 3. No explicit entry → check namespace DenyByDefault
-// 4. If DenyByDefault=true → deny
-// 5. Otherwise → allow
+// 3. No explicit entry → check per-server default (ServerDefaults)
+// 4. No server default → check namespace DenyByDefault
+// 5. If deny → deny; otherwise → allow
 func IsToolAllowed(cfg *config.Config, namespaceName, serverName, toolName string) (bool, string) {
 	// No namespace means no permission enforcement
 	if namespaceName == "" {
@@ -78,7 +78,14 @@ func IsToolAllowed(cfg *config.Config, namespaceName, serverName, toolName strin
 	case PermissionDeny:
 		return false, "tool is explicitly denied in this namespace"
 	default:
-		// PermissionDefault - check namespace setting
+		// PermissionDefault - check per-server default first
+		if serverDefault, found := cfg.GetServerDefault(namespaceName, serverName); found {
+			if serverDefault {
+				return false, "tool is not explicitly allowed and server denies by default in this namespace"
+			}
+			return true, ""
+		}
+		// Fall through to namespace default
 		if ns.DenyByDefault {
 			return false, "tool is not explicitly allowed and namespace denies by default"
 		}

@@ -184,9 +184,15 @@ func (c *Config) DeleteServer(name string) error {
 	}
 	delete(c.Servers, name)
 
-	// Clean up namespace references
+	// Clean up namespace references and server defaults
 	for nsName, ns := range c.Namespaces {
 		ns.ServerIDs = removeString(ns.ServerIDs, name)
+		if ns.ServerDefaults != nil {
+			delete(ns.ServerDefaults, name)
+			if len(ns.ServerDefaults) == 0 {
+				ns.ServerDefaults = nil
+			}
+		}
 		c.Namespaces[nsName] = ns
 	}
 
@@ -219,14 +225,20 @@ func (c *Config) RenameServer(oldName, newName string) error {
 	delete(c.Servers, oldName)
 	c.Servers[newName] = srv
 
-	// Update namespace references
+	// Update namespace references and server defaults
 	for nsName, ns := range c.Namespaces {
 		for i, sid := range ns.ServerIDs {
 			if sid == oldName {
 				ns.ServerIDs[i] = newName
-				c.Namespaces[nsName] = ns
 			}
 		}
+		if ns.ServerDefaults != nil {
+			if val, ok := ns.ServerDefaults[oldName]; ok {
+				delete(ns.ServerDefaults, oldName)
+				ns.ServerDefaults[newName] = val
+			}
+		}
+		c.Namespaces[nsName] = ns
 	}
 
 	// Update tool permissions
@@ -361,6 +373,7 @@ func (c *Config) AssignServerToNamespace(namespaceName, serverName string) error
 }
 
 // UnassignServerFromNamespace removes a server from a namespace's server list.
+// Also removes any per-server default for the unassigned server.
 func (c *Config) UnassignServerFromNamespace(namespaceName, serverName string) error {
 	ns, exists := c.Namespaces[namespaceName]
 	if !exists {
@@ -368,6 +381,12 @@ func (c *Config) UnassignServerFromNamespace(namespaceName, serverName string) e
 	}
 
 	ns.ServerIDs = removeString(ns.ServerIDs, serverName)
+	if ns.ServerDefaults != nil {
+		delete(ns.ServerDefaults, serverName)
+		if len(ns.ServerDefaults) == 0 {
+			ns.ServerDefaults = nil
+		}
+	}
 	c.Namespaces[namespaceName] = ns
 	return nil
 }
@@ -424,6 +443,57 @@ func (c *Config) GetToolPermission(namespaceName, serverName, toolName string) (
 		}
 	}
 	return false, false
+}
+
+// SetServerDefault sets a per-server deny-default override within a namespace.
+// If denyByDefault is true, unconfigured tools from this server are denied.
+func (c *Config) SetServerDefault(namespaceName, serverName string, denyByDefault bool) error {
+	ns, exists := c.Namespaces[namespaceName]
+	if !exists {
+		return fmt.Errorf("namespace %q not found", namespaceName)
+	}
+
+	if _, ok := c.GetServer(serverName); !ok {
+		return fmt.Errorf("server %q not found", serverName)
+	}
+
+	if ns.ServerDefaults == nil {
+		ns.ServerDefaults = make(map[string]bool)
+	}
+	ns.ServerDefaults[serverName] = denyByDefault
+	c.Namespaces[namespaceName] = ns
+	return nil
+}
+
+// GetServerDefault returns the per-server deny-default override.
+// Returns (denyByDefault, found).
+func (c *Config) GetServerDefault(namespaceName, serverName string) (bool, bool) {
+	ns, exists := c.Namespaces[namespaceName]
+	if !exists {
+		return false, false
+	}
+	if ns.ServerDefaults == nil {
+		return false, false
+	}
+	val, found := ns.ServerDefaults[serverName]
+	return val, found
+}
+
+// UnsetServerDefault removes a per-server deny-default override.
+func (c *Config) UnsetServerDefault(namespaceName, serverName string) error {
+	ns, exists := c.Namespaces[namespaceName]
+	if !exists {
+		return fmt.Errorf("namespace %q not found", namespaceName)
+	}
+
+	if ns.ServerDefaults != nil {
+		delete(ns.ServerDefaults, serverName)
+		if len(ns.ServerDefaults) == 0 {
+			ns.ServerDefaults = nil
+		}
+		c.Namespaces[namespaceName] = ns
+	}
+	return nil
 }
 
 // GetToolPermissionsForNamespace returns all tool permissions for a namespace.

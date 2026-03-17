@@ -1723,7 +1723,7 @@ func (m *Model) startToolPermissionEditor(nsName string, ns *config.NamespaceCon
 
 	// If all running servers already have tools, show editor immediately
 	if len(serversToStart) == 0 && len(serverTools) > 0 {
-		m.toolPerms.Show(nsName, serverTools, m.cfg.ServerEntries(), m.cfg.ToolPermissions, ns.DenyByDefault)
+		m.toolPerms.Show(nsName, serverTools, m.cfg.ServerEntries(), m.cfg.ToolPermissions, ns.DenyByDefault, ns.ServerDefaults)
 		return true, m, nil
 	}
 
@@ -1821,6 +1821,7 @@ func (m *Model) finishPermissionDiscovery() {
 		m.cfg.ServerEntries(),
 		m.cfg.ToolPermissions,
 		ns.DenyByDefault,
+		ns.ServerDefaults,
 	)
 	m.permDiscoveryServers = nil
 	m.permDiscoveryExpected = 0
