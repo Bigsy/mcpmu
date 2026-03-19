@@ -131,7 +131,7 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 - **Stdio process management** — Spawn and supervise local MCP servers (npx, binaries, scripts)
 - **Streamable HTTP/SSE** — Connect to remote MCP endpoints with full SSE support
 - **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`
-- **OAuth support** — Full OAuth 2.1 with PKCE, dynamic client registration, and token management
+- **OAuth support** — Full OAuth 2.1 with PKCE, dynamic client registration, token management, and automatic scope discovery
 - **Hot-reload** — Serve mode watches the config file and automatically applies changes without restart
 - **Lazy or eager startup** — Start servers on-demand or pre-start everything with `--eager`
 - **Registry browser** — Search the official MCP server registry from the TUI and install with pre-populated config (`a` → Official Registry)
@@ -155,6 +155,7 @@ mcpmu add auto-server --autostart -- ./server  # start on app launch
 # Add HTTP server (Streamable HTTP / SSE)
 mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
 mcpmu add my-api https://example.com/mcp --bearer-env API_TOKEN
+mcpmu add slack https://mcp.slack.com/mcp --oauth-client-id 1601185624273.8899143856786 --oauth-callback-port 3118  # scopes auto-discovered
 
 # List, remove, rename
 mcpmu list
@@ -167,7 +168,8 @@ mcpmu rename <old-name> <new-name>
 
 ```bash
 mcpmu mcp login <server>              # start OAuth flow in browser
-mcpmu mcp login atlassian --scopes read,write
+mcpmu mcp login atlassian --scopes read,write  # explicit scopes
+mcpmu mcp login slack                 # scopes auto-discovered from server metadata
 mcpmu mcp logout <server>             # remove stored credentials
 ```
 
@@ -252,13 +254,30 @@ With optional fields:
   "servers": {
     "atlassian": {
       "url": "https://mcp.atlassian.com/mcp",
-      "scopes": ["read", "write"]
+      "oauth": {
+        "scopes": ["read", "write"]
+      }
     }
   }
 }
 ```
 
-With optional fields:
+With pre-registered OAuth client (e.g. Slack — scopes auto-discovered from server):
+```json
+{
+  "servers": {
+    "slack": {
+      "url": "https://mcp.slack.com/mcp",
+      "oauth": {
+        "client_id": "1601185624273.8899143856786",
+        "callback_port": 3118
+      }
+    }
+  }
+}
+```
+
+With bearer token auth:
 ```json
 {
   "servers": {
@@ -270,8 +289,7 @@ With optional fields:
       },
       "env_http_headers": {
         "X-Api-Key": "MY_API_KEY_ENV"
-      },
-      "scopes": ["read", "write"]
+      }
     }
   }
 }
@@ -282,11 +300,13 @@ With optional fields:
 | Field | Description |
 |-------|-------------|
 | `url` | Server endpoint URL |
-| `bearer_token_env_var` | Env var containing bearer token (takes precedence over OAuth) |
+| `bearer_token_env_var` | Env var containing bearer token (mutually exclusive with `oauth`) |
 | `http_headers` | Static headers to include in all requests |
 | `env_http_headers` | Headers sourced from env vars (header name → env var name) |
-| `scopes` | OAuth scopes to request |
-| `oauth_client_id` | Override the OAuth client ID (skips dynamic registration) |
+| `oauth.client_id` | Pre-registered OAuth client ID (skips dynamic registration) |
+| `oauth.client_secret` | OAuth client secret (for confidential clients) |
+| `oauth.callback_port` | Per-server OAuth callback port (overrides global) |
+| `oauth.scopes` | OAuth scopes to request (auto-discovered from server if omitted) |
 | `startup_timeout_sec` | Connection timeout (default: 10) |
 | `tool_timeout_sec` | Tool call timeout (default: 60) |
 

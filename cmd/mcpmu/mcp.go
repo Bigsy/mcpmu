@@ -98,20 +98,28 @@ func runMCPLogin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create credential store: %w", err)
 	}
 
-	// Merge scopes from config and CLI
-	scopes := srv.Scopes
-	if len(mcpScopes) > 0 {
-		scopes = mcpScopes
-	}
-
-	// Run OAuth flow
+	// Build OAuth flow config
 	flowConfig := oauth.FlowConfig{
 		ServerURL:    srv.URL,
 		ServerName:   serverName,
-		Scopes:       scopes,
 		CallbackPort: cfg.MCPOAuthCallbackPort,
 		Store:        store,
-		ClientID:     srv.OAuthClientID, // Pre-registered client ID (if configured)
+	}
+
+	// Apply per-server OAuth config
+	if oc := srv.OAuth; oc != nil {
+		flowConfig.ClientID = oc.ClientID
+		flowConfig.ClientSecret = oc.ClientSecret
+		flowConfig.Scopes = oc.Scopes
+		// Per-server callback port overrides global
+		if oc.CallbackPort != nil {
+			flowConfig.CallbackPort = oc.CallbackPort
+		}
+	}
+
+	// CLI --scopes overrides config
+	if len(mcpScopes) > 0 {
+		flowConfig.Scopes = mcpScopes
 	}
 
 	fmt.Printf("Starting OAuth login for %s...\n", serverName)

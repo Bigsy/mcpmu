@@ -36,7 +36,7 @@ func TestCallbackServer_SpecificPort(t *testing.T) {
 		t.Errorf("Port: got %d, want %d", server.Port(), port)
 	}
 
-	expectedURI := "http://127.0.0.1:18080/callback"
+	expectedURI := "http://localhost:18080/callback"
 	if server.RedirectURI() != expectedURI {
 		t.Errorf("RedirectURI: got %q, want %q", server.RedirectURI(), expectedURI)
 	}

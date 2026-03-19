@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -970,8 +971,8 @@ func TestServerConfig_Validate_HTTPFieldsOnStdio(t *testing.T) {
 			srv:  ServerConfig{Command: "echo", EnvHTTPHeaders: map[string]string{"X-Custom": "ENV_VAR"}},
 		},
 		{
-			name: "scopes",
-			srv:  ServerConfig{Command: "echo", Scopes: []string{"read", "write"}},
+			name: "oauth",
+			srv:  ServerConfig{Command: "echo", OAuth: &OAuthConfig{Scopes: []string{"read", "write"}}},
 		},
 	}
 
@@ -1247,5 +1248,250 @@ func TestConfig_UnassignServer_CleansUpServerDefault(t *testing.T) {
 	}
 	if _, ok := ns.ServerDefaults["srv2"]; !ok {
 		t.Error("expected srv2 server default to be preserved")
+	}
+}
+
+// ============================================================================
+// OAuth Config Tests
+// ============================================================================
+
+func TestServerConfig_Validate_OAuthOnStdio(t *testing.T) {
+	srv := ServerConfig{
+		Command: "echo",
+		OAuth:   &OAuthConfig{ClientID: "test"},
+	}
+	err := srv.Validate()
+	if err == nil {
+		t.Error("expected error for oauth on stdio server")
+	}
+	if !strings.Contains(err.Error(), "oauth is only valid for http") {
+		t.Errorf("expected error about oauth, got: %v", err)
+	}
+}
+
+func TestServerConfig_Validate_BearerAndOAuthMutuallyExclusive(t *testing.T) {
+	srv := ServerConfig{
+		URL:               "https://example.com/mcp",
+		BearerTokenEnvVar: "TOKEN",
+		OAuth:             &OAuthConfig{ClientID: "test"},
+	}
+	err := srv.Validate()
+	if err == nil {
+		t.Error("expected error for bearer + oauth")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected error about mutually exclusive, got: %v", err)
+	}
+}
+
+func TestServerConfig_Validate_OAuthCallbackPortRange(t *testing.T) {
+	invalidPort := 0
+	srv := ServerConfig{
+		URL:   "https://example.com/mcp",
+		OAuth: &OAuthConfig{CallbackPort: &invalidPort},
+	}
+	err := srv.Validate()
+	if err == nil {
+		t.Error("expected error for invalid callback port")
+	}
+	if !strings.Contains(err.Error(), "callback_port must be 1-65535") {
+		t.Errorf("expected port range error, got: %v", err)
+	}
+
+	highPort := 70000
+	srv.OAuth.CallbackPort = &highPort
+	err = srv.Validate()
+	if err == nil {
+		t.Error("expected error for port > 65535")
+	}
+
+	validPort := 3118
+	srv.OAuth.CallbackPort = &validPort
+	err = srv.Validate()
+	if err != nil {
+		t.Errorf("expected valid config, got error: %v", err)
+	}
+}
+
+func TestServerConfig_Validate_OAuthValidHTTP(t *testing.T) {
+	port := 3118
+	srv := ServerConfig{
+		URL: "https://example.com/mcp",
+		OAuth: &OAuthConfig{
+			ClientID:     "my-client-id",
+			CallbackPort: &port,
+			Scopes:       []string{"read", "write"},
+		},
+	}
+	if err := srv.Validate(); err != nil {
+		t.Errorf("expected valid oauth config, got: %v", err)
+	}
+}
+
+func TestServerConfig_UnmarshalJSON_MigrateFlatFields(t *testing.T) {
+	// Old config with flat scopes and oauth_client_id
+	jsonData := `{
+		"url": "https://example.com/mcp",
+		"scopes": ["read", "write"],
+		"oauth_client_id": "old-client-id"
+	}`
+
+	var srv ServerConfig
+	if err := json.Unmarshal([]byte(jsonData), &srv); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if srv.OAuth == nil {
+		t.Fatal("expected OAuth to be populated from flat fields")
+	}
+	if srv.OAuth.ClientID != "old-client-id" {
+		t.Errorf("expected ClientID 'old-client-id', got %q", srv.OAuth.ClientID)
+	}
+	if len(srv.OAuth.Scopes) != 2 || srv.OAuth.Scopes[0] != "read" {
+		t.Errorf("expected Scopes [read write], got %v", srv.OAuth.Scopes)
+	}
+}
+
+func TestServerConfig_UnmarshalJSON_NestedTakesPrecedence(t *testing.T) {
+	// Both flat and nested present - nested should win
+	jsonData := `{
+		"url": "https://example.com/mcp",
+		"scopes": ["old-scope"],
+		"oauth_client_id": "old-id",
+		"oauth": {
+			"client_id": "new-id",
+			"scopes": ["new-scope"]
+		}
+	}`
+
+	var srv ServerConfig
+	if err := json.Unmarshal([]byte(jsonData), &srv); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if srv.OAuth == nil {
+		t.Fatal("expected OAuth to be populated")
+	}
+	if srv.OAuth.ClientID != "new-id" {
+		t.Errorf("expected nested ClientID to take precedence, got %q", srv.OAuth.ClientID)
+	}
+	if len(srv.OAuth.Scopes) != 1 || srv.OAuth.Scopes[0] != "new-scope" {
+		t.Errorf("expected nested Scopes to take precedence, got %v", srv.OAuth.Scopes)
+	}
+}
+
+func TestServerConfig_UnmarshalJSON_NestedOnly(t *testing.T) {
+	jsonData := `{
+		"url": "https://example.com/mcp",
+		"oauth": {
+			"client_id": "my-id",
+			"client_secret": "my-secret",
+			"callback_port": 3118,
+			"scopes": ["channels:read"]
+		}
+	}`
+
+	var srv ServerConfig
+	if err := json.Unmarshal([]byte(jsonData), &srv); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if srv.OAuth == nil {
+		t.Fatal("expected OAuth to be populated")
+	}
+	if srv.OAuth.ClientID != "my-id" {
+		t.Errorf("expected ClientID 'my-id', got %q", srv.OAuth.ClientID)
+	}
+	if srv.OAuth.ClientSecret != "my-secret" {
+		t.Errorf("expected ClientSecret 'my-secret', got %q", srv.OAuth.ClientSecret)
+	}
+	if srv.OAuth.CallbackPort == nil || *srv.OAuth.CallbackPort != 3118 {
+		t.Errorf("expected CallbackPort 3118, got %v", srv.OAuth.CallbackPort)
+	}
+	if len(srv.OAuth.Scopes) != 1 || srv.OAuth.Scopes[0] != "channels:read" {
+		t.Errorf("expected Scopes [channels:read], got %v", srv.OAuth.Scopes)
+	}
+}
+
+func TestConfig_OAuthRoundTrip(t *testing.T) {
+	testutil.SetupTestHome(t)
+
+	port := 3118
+	cfg := NewConfig()
+	cfg.Servers["slack"] = ServerConfig{
+		URL: "https://mcp.slack.com/mcp",
+		OAuth: &OAuthConfig{
+			ClientID:     "1601185624273.8899143856786",
+			CallbackPort: &port,
+			Scopes:       []string{"channels:read"},
+		},
+	}
+
+	// Save and reload
+	err := Save(cfg)
+	if err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	srv, ok := loaded.GetServer("slack")
+	if !ok {
+		t.Fatal("expected server 'slack' to exist")
+	}
+	if srv.OAuth == nil {
+		t.Fatal("expected OAuth config to survive round-trip")
+	}
+	if srv.OAuth.ClientID != "1601185624273.8899143856786" {
+		t.Errorf("ClientID: got %q", srv.OAuth.ClientID)
+	}
+	if srv.OAuth.CallbackPort == nil || *srv.OAuth.CallbackPort != 3118 {
+		t.Errorf("CallbackPort: got %v", srv.OAuth.CallbackPort)
+	}
+	if len(srv.OAuth.Scopes) != 1 || srv.OAuth.Scopes[0] != "channels:read" {
+		t.Errorf("Scopes: got %v", srv.OAuth.Scopes)
+	}
+}
+
+func TestConfig_BackwardCompatMigrationRoundTrip(t *testing.T) {
+	home := testutil.SetupTestHome(t)
+
+	// Write config in old format with flat fields
+	configJSON := `{
+		"schemaVersion": 1,
+		"servers": {
+			"atlassian": {
+				"url": "https://mcp.atlassian.com/mcp",
+				"scopes": ["read", "write"],
+				"oauth_client_id": "old-client"
+			}
+		}
+	}`
+
+	configPath := filepath.Join(home, ".config", "mcpmu", "config.json")
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	srv, ok := cfg.GetServer("atlassian")
+	if !ok {
+		t.Fatal("expected server 'atlassian' to exist")
+	}
+	if srv.OAuth == nil {
+		t.Fatal("expected flat fields to be migrated into OAuth")
+	}
+	if srv.OAuth.ClientID != "old-client" {
+		t.Errorf("expected migrated ClientID 'old-client', got %q", srv.OAuth.ClientID)
+	}
+	if len(srv.OAuth.Scopes) != 2 {
+		t.Errorf("expected migrated Scopes [read write], got %v", srv.OAuth.Scopes)
 	}
 }

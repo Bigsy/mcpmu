@@ -9,13 +9,15 @@ import (
 )
 
 var (
-	addEnvFlags   []string
-	addCwd        string
-	addAutostart  bool
-	addConfigPath string
-	addURL        string
-	addBearerEnv  string
-	addScopes     []string
+	addEnvFlags          []string
+	addCwd               string
+	addAutostart         bool
+	addConfigPath        string
+	addURL               string
+	addBearerEnv         string
+	addScopes            []string
+	addOAuthClientID     string
+	addOAuthCallbackPort int
 )
 
 var addCmd = &cobra.Command{
@@ -36,7 +38,10 @@ Examples:
   mcpmu add figma https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
 
   # HTTP server with OAuth (login separately)
-  mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write`,
+  mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
+
+  # HTTP server with pre-registered OAuth client
+  mcpmu add slack https://mcp.slack.com/mcp --oauth-client-id 1601185624273.8899143856786 --oauth-callback-port 3118`,
 	RunE: runAdd,
 }
 
@@ -48,6 +53,8 @@ func init() {
 	addCmd.Flags().StringVar(&addURL, "url", "", "Server URL for HTTP transport (streamable HTTP)")
 	addCmd.Flags().StringVar(&addBearerEnv, "bearer-env", "", "Environment variable containing bearer token")
 	addCmd.Flags().StringSliceVar(&addScopes, "scopes", nil, "OAuth scopes to request (comma-separated)")
+	addCmd.Flags().StringVar(&addOAuthClientID, "oauth-client-id", "", "Pre-registered OAuth client ID")
+	addCmd.Flags().IntVar(&addOAuthCallbackPort, "oauth-callback-port", 0, "OAuth callback port (1-65535)")
 
 	rootCmd.AddCommand(addCmd)
 }
@@ -76,6 +83,14 @@ func isURL(s string) bool {
 }
 
 func runAddStdio(cmd *cobra.Command, args []string) error {
+	// Reject HTTP-only flags on stdio servers
+	if addBearerEnv != "" {
+		return fmt.Errorf("--bearer-env is only valid for HTTP servers")
+	}
+	if addOAuthClientID != "" || addOAuthCallbackPort > 0 || len(addScopes) > 0 {
+		return fmt.Errorf("--oauth-client-id, --oauth-callback-port, and --scopes are only valid for HTTP servers")
+	}
+
 	// Find the -- separator
 	dashIdx := cmd.ArgsLenAtDash()
 	if dashIdx == -1 {
@@ -147,6 +162,12 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 	}
 	name := args[0]
 
+	// Reject mutually exclusive auth modes
+	hasOAuthFlags := addOAuthClientID != "" || len(addScopes) > 0 || addOAuthCallbackPort > 0
+	if addBearerEnv != "" && hasOAuthFlags {
+		return fmt.Errorf("--bearer-env and OAuth flags (--oauth-client-id, --scopes, --oauth-callback-port) are mutually exclusive")
+	}
+
 	// Parse environment variables
 	env, err := parseEnvFlags(addEnvFlags)
 	if err != nil {
@@ -168,9 +189,20 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 	srv := config.ServerConfig{
 		URL:               addURL,
 		BearerTokenEnvVar: addBearerEnv,
-		Scopes:            addScopes,
 		Env:               env,
 		Autostart:         addAutostart,
+	}
+
+	// Build OAuth config if any OAuth-related flags are provided
+	if len(addScopes) > 0 || addOAuthClientID != "" || addOAuthCallbackPort > 0 {
+		srv.OAuth = &config.OAuthConfig{
+			ClientID: addOAuthClientID,
+			Scopes:   addScopes,
+		}
+		if addOAuthCallbackPort > 0 {
+			port := addOAuthCallbackPort
+			srv.OAuth.CallbackPort = &port
+		}
 	}
 
 	// Add server (this enforces name uniqueness)

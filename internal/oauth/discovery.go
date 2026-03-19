@@ -18,7 +18,7 @@ const (
 	DiscoveryTimeout = 5 * time.Second
 
 	// MCPProtocolVersion is the MCP protocol version header value.
-	MCPProtocolVersion = "2024-11-05"
+	MCPProtocolVersion = "2025-11-25"
 )
 
 // AuthorizationServerMetadata holds OAuth server metadata from RFC 8414.

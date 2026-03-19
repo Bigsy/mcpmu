@@ -36,13 +36,14 @@ const (
 
 // Supervisor manages MCP server process lifecycles.
 type Supervisor struct {
-	bus          *events.Bus
-	handles      map[string]*Handle
-	pidTracker   *PIDTracker
-	credStore    oauth.CredentialStore
-	tokenManager *oauth.TokenManager
-	toolCache    *config.ToolCache
-	mu           sync.RWMutex
+	bus                     *events.Bus
+	handles                 map[string]*Handle
+	pidTracker              *PIDTracker
+	credStore               oauth.CredentialStore
+	tokenManager            *oauth.TokenManager
+	toolCache               *config.ToolCache
+	globalOAuthCallbackPort *int
+	mu                      sync.RWMutex
 }
 
 // SetToolCache sets the tool cache for token counting.
@@ -59,6 +60,10 @@ type SupervisorOptions struct {
 	// PIDTrackerDir overrides the directory used for the PID tracking file.
 	// If empty, the default ~/.config/mcpmu/ directory is used.
 	PIDTrackerDir string
+
+	// GlobalOAuthCallbackPort is the global fallback OAuth callback port.
+	// Per-server oauth.callback_port takes precedence over this.
+	GlobalOAuthCallbackPort *int
 }
 
 // NewSupervisor creates a new process supervisor.
@@ -107,11 +112,12 @@ func NewSupervisorWithOptions(bus *events.Bus, opts SupervisorOptions) *Supervis
 	}
 
 	return &Supervisor{
-		bus:          bus,
-		handles:      make(map[string]*Handle),
-		pidTracker:   pidTracker,
-		credStore:    credStore,
-		tokenManager: tokenManager,
+		bus:                     bus,
+		handles:                 make(map[string]*Handle),
+		pidTracker:              pidTracker,
+		credStore:               credStore,
+		tokenManager:            tokenManager,
+		globalOAuthCallbackPort: opts.GlobalOAuthCallbackPort,
 	}
 }
 
@@ -467,6 +473,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 				// Server supports OAuth - put handle in "needs login" state
 				handle.authStatus = mcp.AuthStatusOAuthNeeds
 				handle.oauthMeta = oauthMeta
+				handle.authChallenge = unauthErr.Challenge
 				handle.client = nil // No client until authenticated
 				_ = httpTransport.Close()
 				handle.httpTransport = nil
@@ -693,6 +700,7 @@ type Handle struct {
 	serverURL     string
 	serverConfig  config.ServerConfig                // Cached for retry after OAuth
 	oauthMeta     *oauth.AuthorizationServerMetadata // Cached OAuth metadata for login
+	authChallenge *oauth.BearerChallenge             // Cached WWW-Authenticate challenge
 
 	// Common fields
 	ctx          context.Context    // cancelled when server stops
@@ -993,20 +1001,12 @@ func (s *Supervisor) LoginOAuth(ctx context.Context, name string) error {
 		return fmt.Errorf("no credential store available")
 	}
 
-	// Build OAuth flow config
-	flowConfig := oauth.FlowConfig{
-		ServerURL:  handle.serverURL,
-		ServerName: name,
-		Store:      s.credStore,
-		ClientID:   handle.serverConfig.OAuthClientID, // Pre-registered client ID (if configured)
-	}
-
-	// Add scopes from config or metadata
-	if len(handle.serverConfig.Scopes) > 0 {
-		flowConfig.Scopes = handle.serverConfig.Scopes
-	} else if handle.oauthMeta != nil && len(handle.oauthMeta.ScopesSupported) > 0 {
-		flowConfig.Scopes = handle.oauthMeta.ScopesSupported
-	}
+	// Build and resolve OAuth flow config
+	flowConfig := resolveOAuthFlowConfig(
+		handle.serverURL, name, s.credStore,
+		handle.serverConfig.OAuth, s.globalOAuthCallbackPort,
+		handle.authChallenge, handle.oauthMeta,
+	)
 
 	// Run OAuth flow
 	flow := oauth.NewFlow(flowConfig)
@@ -1016,6 +1016,50 @@ func (s *Supervisor) LoginOAuth(ctx context.Context, name string) error {
 
 	// Retry connection with new tokens
 	return s.retryHTTPConnection(ctx, name)
+}
+
+// resolveOAuthFlowConfig builds an OAuth FlowConfig with the correct resolution
+// priority for callback port and scopes:
+//   - Callback port: per-server oauth.callback_port → global → nil
+//   - Scopes: per-server config → WWW-Authenticate challenge → metadata
+func resolveOAuthFlowConfig(
+	serverURL, serverName string,
+	store oauth.CredentialStore,
+	oauthCfg *config.OAuthConfig,
+	globalCallbackPort *int,
+	challenge *oauth.BearerChallenge,
+	meta *oauth.AuthorizationServerMetadata,
+) oauth.FlowConfig {
+	fc := oauth.FlowConfig{
+		ServerURL:  serverURL,
+		ServerName: serverName,
+		Store:      store,
+	}
+
+	// Apply per-server OAuth config if present
+	if oauthCfg != nil {
+		fc.ClientID = oauthCfg.ClientID
+		fc.ClientSecret = oauthCfg.ClientSecret
+		if len(oauthCfg.Scopes) > 0 {
+			fc.Scopes = oauthCfg.Scopes
+		}
+		fc.CallbackPort = oauthCfg.CallbackPort
+	}
+
+	// Callback port fallback: per-server → global → nil
+	if fc.CallbackPort == nil {
+		fc.CallbackPort = globalCallbackPort
+	}
+
+	// Scope fallback: config → challenge → metadata
+	if len(fc.Scopes) == 0 && challenge != nil && challenge.Scope != "" {
+		fc.Scopes = strings.Split(challenge.Scope, " ")
+	}
+	if len(fc.Scopes) == 0 && meta != nil && len(meta.ScopesSupported) > 0 {
+		fc.Scopes = meta.ScopesSupported
+	}
+
+	return fc
 }
 
 // retryHTTPConnection attempts to reconnect an HTTP server after OAuth completes.

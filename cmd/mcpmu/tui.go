@@ -91,7 +91,8 @@ func runTUI(cmd *cobra.Command, args []string) error {
 
 	// Create process supervisor with config-specified credential store
 	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
-		CredentialStoreMode: cfg.MCPOAuthCredentialStore,
+		CredentialStoreMode:     cfg.MCPOAuthCredentialStore,
+		GlobalOAuthCallbackPort: cfg.MCPOAuthCallbackPort,
 	})
 	supervisor.SetToolCache(toolCache)
 

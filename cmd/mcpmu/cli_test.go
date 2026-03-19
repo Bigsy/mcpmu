@@ -389,6 +389,80 @@ func TestCLI_Add_HTTP_PositionalURL_WithBearerEnv(t *testing.T) {
 	}
 }
 
+func TestCLI_Add_HTTP_WithOAuthFlags(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "add", "slack",
+		"https://mcp.slack.com/mcp",
+		"--oauth-client-id", "12345.67890",
+		"--oauth-callback-port", "3118",
+		"--scopes", "channels:read",
+	)
+	if err != nil {
+		t.Fatalf("add failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, `Added HTTP server "slack"`) {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
+	// Verify OAuth config in saved JSON
+	data, _ := os.ReadFile(configPath)
+	var cfg map[string]any
+	_ = json.Unmarshal(data, &cfg)
+
+	servers := cfg["servers"].(map[string]any)
+	srv := servers["slack"].(map[string]any)
+
+	oauthBlock, ok := srv["oauth"].(map[string]any)
+	if !ok {
+		t.Fatal("expected oauth block in config")
+	}
+	if oauthBlock["client_id"] != "12345.67890" {
+		t.Errorf("expected client_id '12345.67890', got %v", oauthBlock["client_id"])
+	}
+	if oauthBlock["callback_port"] != float64(3118) {
+		t.Errorf("expected callback_port 3118, got %v", oauthBlock["callback_port"])
+	}
+	scopes, _ := oauthBlock["scopes"].([]any)
+	if len(scopes) != 1 || scopes[0] != "channels:read" {
+		t.Errorf("expected scopes [channels:read], got %v", oauthBlock["scopes"])
+	}
+
+	// bearer_token_env_var should not be set
+	if _, exists := srv["bearer_token_env_var"]; exists {
+		t.Error("expected no bearer_token_env_var when OAuth is configured")
+	}
+}
+
+func TestCLI_Add_HTTP_BearerAndOAuth_MutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, err := runCLI(testBinary, configPath, "add", "conflict",
+		"https://example.com/mcp",
+		"--bearer-env", "TOKEN",
+		"--oauth-client-id", "my-id",
+	)
+	if err == nil {
+		t.Fatal("expected error for mutually exclusive bearer + oauth flags")
+	}
+}
+
+func TestCLI_Add_Stdio_RejectsOAuthFlags(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, err := runCLI(testBinary, configPath, "add", "bad-stdio",
+		"--oauth-client-id", "my-id",
+		"--", "echo", "hello",
+	)
+	if err == nil {
+		t.Fatal("expected error for OAuth flags on stdio server")
+	}
+}
+
 func TestCLI_List(t *testing.T) {
 	t.Parallel()
 	configPath := setupTestConfig(t)

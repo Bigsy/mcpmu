@@ -36,6 +36,10 @@ type FlowConfig struct {
 	// ClientID is a pre-registered OAuth client ID (for servers without dynamic registration).
 	// If empty, dynamic registration will be attempted, falling back to "mcpmu".
 	ClientID string
+
+	// ClientSecret is a pre-registered OAuth client secret.
+	// When set (along with ClientID), dynamic registration is skipped.
+	ClientSecret string
 }
 
 // Flow orchestrates an OAuth 2.1 authorization flow.
@@ -86,6 +90,12 @@ func (f *Flow) Run(ctx context.Context) error {
 	}
 	f.metadata = result.Metadata
 
+	// Use discovered scopes as fallback when none configured
+	if len(f.config.Scopes) == 0 && len(f.metadata.ScopesSupported) > 0 {
+		f.config.Scopes = f.metadata.ScopesSupported
+		log.Printf("Using discovered scopes: %v", f.config.Scopes)
+	}
+
 	// Step 2: Start callback server
 	f.callback, err = NewCallbackServer(f.config.CallbackPort)
 	if err != nil {
@@ -103,6 +113,7 @@ func (f *Flow) Run(ctx context.Context) error {
 	if f.config.ClientID != "" {
 		// Use pre-configured client ID (for servers without dynamic registration)
 		f.clientID = f.config.ClientID
+		f.clientSecret = f.config.ClientSecret
 		log.Printf("Using configured OAuth client ID: %s", f.clientID)
 	} else if f.metadata.RegistrationEndpoint != "" {
 		// Try dynamic registration
@@ -201,7 +212,7 @@ func (f *Flow) discoverViaChallenge(ctx context.Context) (*DiscoverResult, error
 	client := &http.Client{Timeout: DiscoveryTimeout}
 
 	// Send a proper MCP initialize request shape to ensure servers return the expected 401
-	req, err := http.NewRequestWithContext(ctx, "POST", f.config.ServerURL, strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"mcpmu","version":"1.0.0"},"capabilities":{}}}`))
+	req, err := http.NewRequestWithContext(ctx, "POST", f.config.ServerURL, strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"`+MCPProtocolVersion+`","clientInfo":{"name":"mcpmu","version":"1.0.0"},"capabilities":{}}}`))
 	if err != nil {
 		return nil, fmt.Errorf("create challenge request: %w", err)
 	}
@@ -247,6 +258,11 @@ func (f *Flow) buildAuthorizationURL(redirectURI string) string {
 
 	if len(f.config.Scopes) > 0 {
 		params.Set("scope", joinScopes(f.config.Scopes))
+	}
+
+	// MCP spec requires the resource parameter (the MCP server URL)
+	if f.config.ServerURL != "" {
+		params.Set("resource", f.config.ServerURL)
 	}
 
 	return f.metadata.AuthorizationEndpoint + "?" + params.Encode()
@@ -369,6 +385,11 @@ func (f *Flow) exchangeCode(ctx context.Context, code, redirectURI string) (*Tok
 		"code":          {code},
 		"redirect_uri":  {redirectURI},
 		"code_verifier": {f.pkce.Verifier},
+	}
+
+	// MCP spec requires the resource parameter
+	if f.config.ServerURL != "" {
+		params.Set("resource", f.config.ServerURL)
 	}
 
 	authMethod := determineAuthMethod(f.metadata, f.clientSecret)

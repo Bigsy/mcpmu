@@ -100,12 +100,23 @@ Examples:
 ```bash
 mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
 mcpmu add figma https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
+mcpmu add slack https://mcp.slack.com/mcp --oauth-client-id 1601185624273.8899143856786 --oauth-callback-port 3118  # scopes auto-discovered
 ```
+
+Flags for HTTP servers:
+- `--scopes` — OAuth scopes (comma-separated; auto-discovered from server if omitted)
+- `--bearer-env` — env var containing bearer token
+- `--oauth-client-id` — pre-registered OAuth client ID (skips dynamic registration)
+- `--oauth-callback-port` — OAuth callback port (1-65535)
+
+Note: `--bearer-env` and OAuth flags (`--oauth-client-id`, `--scopes`, `--oauth-callback-port`) are mutually exclusive.
+Note: Most OAuth servers advertise supported scopes via metadata — `--scopes` is only needed when the server doesn't or you want to restrict the requested set.
 
 ### OAuth login (for HTTP servers that need it)
 ```bash
 mcpmu mcp login <server>
 mcpmu mcp login atlassian --scopes read,write
+mcpmu mcp login slack  # uses pre-registered client ID from config
 mcpmu mcp logout <server>
 ```
 

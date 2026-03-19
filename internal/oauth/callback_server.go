@@ -70,8 +70,10 @@ func (s *CallbackServer) Port() int {
 }
 
 // RedirectURI returns the redirect URI to use for OAuth.
+// Uses "localhost" (not "127.0.0.1") because OAuth providers like Slack
+// register redirect URIs with "localhost" and require an exact match.
 func (s *CallbackServer) RedirectURI() string {
-	return fmt.Sprintf("http://127.0.0.1:%d/callback", s.port)
+	return fmt.Sprintf("http://localhost:%d/callback", s.port)
 }
 
 // Start begins serving HTTP requests.

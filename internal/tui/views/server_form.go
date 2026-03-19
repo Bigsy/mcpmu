@@ -1,6 +1,8 @@
 package views
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -42,6 +44,8 @@ type ServerFormModel struct {
 	cwd               string
 	env               string
 	bearerTokenEnvVar string // Only used for HTTP
+	oauthClientID     string // Only used for HTTP
+	oauthCallbackPort string // Only used for HTTP (string for form input)
 
 	// Initial values for dirty checking
 	initialName              string
@@ -50,6 +54,8 @@ type ServerFormModel struct {
 	initialCwd               string
 	initialEnv               string
 	initialBearerTokenEnvVar string
+	initialOAuthClientID     string
+	initialOAuthCallbackPort string
 
 	// Confirm discard state
 	showConfirmDiscard bool
@@ -83,6 +89,8 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.cwd = ""
 	m.env = ""
 	m.bearerTokenEnvVar = ""
+	m.oauthClientID = ""
+	m.oauthCallbackPort = ""
 	// Save initial values for dirty checking
 	m.initialName = ""
 	m.initialCommandOrURL = ""
@@ -90,6 +98,8 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.initialCwd = ""
 	m.initialEnv = ""
 	m.initialBearerTokenEnvVar = ""
+	m.initialOAuthClientID = ""
+	m.initialOAuthCallbackPort = ""
 	m.buildForm()
 	return m.form.Init()
 }
@@ -97,7 +107,7 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 // ShowAddWithDefaults displays the form for adding a new server with pre-populated values.
 // Used by the registry browser to pre-fill the form with install spec data.
 // Returns a tea.Cmd to initialize the form.
-func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bearerTokenEnvVar string) tea.Cmd {
+func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bearerTokenEnvVar, oauthClientID, oauthCallbackPort string) tea.Cmd {
 	m.visible = true
 	m.isEdit = false
 	m.showConfirmDiscard = false
@@ -109,6 +119,8 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.cwd = ""
 	m.env = env
 	m.bearerTokenEnvVar = bearerTokenEnvVar
+	m.oauthClientID = oauthClientID
+	m.oauthCallbackPort = oauthCallbackPort
 	// Save initial values for dirty checking (so form isn't dirty on open)
 	m.initialName = name
 	m.initialCommandOrURL = commandOrURL
@@ -116,6 +128,8 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.initialCwd = ""
 	m.initialEnv = env
 	m.initialBearerTokenEnvVar = bearerTokenEnvVar
+	m.initialOAuthClientID = oauthClientID
+	m.initialOAuthCallbackPort = oauthCallbackPort
 	m.buildForm()
 	return m.form.Init()
 }
@@ -135,10 +149,23 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 		m.commandOrURL = srv.URL
 		m.args = ""
 		m.bearerTokenEnvVar = srv.BearerTokenEnvVar
+		if srv.OAuth != nil {
+			m.oauthClientID = srv.OAuth.ClientID
+			if srv.OAuth.CallbackPort != nil {
+				m.oauthCallbackPort = fmt.Sprintf("%d", *srv.OAuth.CallbackPort)
+			} else {
+				m.oauthCallbackPort = ""
+			}
+		} else {
+			m.oauthClientID = ""
+			m.oauthCallbackPort = ""
+		}
 	} else {
 		m.commandOrURL = srv.Command
 		m.args = formatArgs(srv.Args) // Properly quote args with spaces
 		m.bearerTokenEnvVar = ""
+		m.oauthClientID = ""
+		m.oauthCallbackPort = ""
 	}
 	m.cwd = srv.Cwd
 	m.env = formatEnvVars(srv.Env)
@@ -150,6 +177,8 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	m.initialCwd = m.cwd
 	m.initialEnv = m.env
 	m.initialBearerTokenEnvVar = m.bearerTokenEnvVar
+	m.initialOAuthClientID = m.oauthClientID
+	m.initialOAuthCallbackPort = m.oauthCallbackPort
 	m.buildForm()
 	return m.form.Init()
 }
@@ -210,6 +239,16 @@ func (m *ServerFormModel) buildForm() {
 				Title("Bearer Token Env Var").
 				Description("Env var name for bearer auth (HTTP only, optional)").
 				Value(&m.bearerTokenEnvVar),
+
+			huh.NewInput().
+				Title("OAuth Client ID").
+				Description("Pre-registered OAuth client ID (HTTP only, optional)").
+				Value(&m.oauthClientID),
+
+			huh.NewInput().
+				Title("OAuth Callback Port").
+				Description("OAuth callback port, e.g. 3118 (HTTP only, optional)").
+				Value(&m.oauthCallbackPort),
 		),
 	).WithTheme(formTheme).
 		WithWidth(60).
@@ -225,7 +264,9 @@ func (m *ServerFormModel) isDirty() bool {
 		m.args != m.initialArgs ||
 		m.cwd != m.initialCwd ||
 		m.env != m.initialEnv ||
-		m.bearerTokenEnvVar != m.initialBearerTokenEnvVar
+		m.bearerTokenEnvVar != m.initialBearerTokenEnvVar ||
+		m.oauthClientID != m.initialOAuthClientID ||
+		m.oauthCallbackPort != m.initialOAuthCallbackPort
 }
 
 // Hide hides the form.
@@ -368,12 +409,42 @@ func (m ServerFormModel) buildServerConfig() config.ServerConfig {
 		srv.Args = nil
 		srv.BearerTokenEnvVar = strings.TrimSpace(m.bearerTokenEnvVar)
 		srv.Kind = config.ServerKindStreamableHTTP
+
+		// Build OAuth config from form fields.
+		// Bearer token and OAuth are mutually exclusive — if bearer is set, clear OAuth.
+		if srv.BearerTokenEnvVar != "" {
+			srv.OAuth = nil
+		} else {
+			clientID := strings.TrimSpace(m.oauthClientID)
+			portStr := strings.TrimSpace(m.oauthCallbackPort)
+			// Preserve existing OAuth scopes/secret from original if editing
+			var existingOAuth *config.OAuthConfig
+			if m.isEdit && m.originalServer != nil {
+				existingOAuth = m.originalServer.OAuth
+			}
+			if clientID != "" || portStr != "" || existingOAuth != nil {
+				srv.OAuth = &config.OAuthConfig{}
+				if existingOAuth != nil {
+					srv.OAuth.Scopes = existingOAuth.Scopes
+					srv.OAuth.ClientSecret = existingOAuth.ClientSecret
+				}
+				if clientID != "" {
+					srv.OAuth.ClientID = clientID
+				}
+				if portStr != "" {
+					if port, err := strconv.Atoi(portStr); err == nil && port > 0 {
+						srv.OAuth.CallbackPort = &port
+					}
+				}
+			}
+		}
 	} else {
 		// Stdio server
 		srv.Command = commandOrURL
 		srv.Args = parseArgs(m.args)
 		srv.URL = ""
 		srv.BearerTokenEnvVar = ""
+		srv.OAuth = nil
 		srv.Kind = config.ServerKindStdio
 	}
 

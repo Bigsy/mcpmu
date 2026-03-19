@@ -21,6 +21,14 @@ const (
 	ServerKindStreamableHTTP ServerKind = "streamable_http"
 )
 
+// OAuthConfig holds per-server OAuth configuration.
+type OAuthConfig struct {
+	ClientID     string   `json:"client_id,omitempty"`
+	ClientSecret string   `json:"client_secret,omitempty"`
+	CallbackPort *int     `json:"callback_port,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+}
+
 // ServerConfig represents an MCP server configuration.
 // Field names are compatible with mcpServers format (Claude Desktop, Cursor, etc).
 // The server name/identifier is the map key, not stored in this struct.
@@ -38,12 +46,46 @@ type ServerConfig struct {
 	BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty"` // Env var containing bearer token
 	HTTPHeaders       map[string]string `json:"http_headers,omitempty"`         // Static HTTP headers
 	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`     // HTTP headers from env vars (key=header name, value=env var name)
-	Scopes            []string          `json:"scopes,omitempty"`               // OAuth scopes to request
-	OAuthClientID     string            `json:"oauth_client_id,omitempty"`      // Pre-registered OAuth client ID (for servers without dynamic registration)
+	OAuth             *OAuthConfig      `json:"oauth,omitempty"`                // OAuth configuration (HTTP only)
 
 	// Timeouts (seconds)
 	StartupTimeoutSec int `json:"startup_timeout_sec,omitempty"` // Default 10
 	ToolTimeoutSec    int `json:"tool_timeout_sec,omitempty"`    // Default 60
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for backward compatibility.
+// Migrates old flat fields (scopes, oauth_client_id) into the nested oauth block.
+func (s *ServerConfig) UnmarshalJSON(data []byte) error {
+	// Alias to avoid recursion
+	type Alias ServerConfig
+
+	// Extended type with legacy flat fields
+	aux := &struct {
+		*Alias
+		LegacyScopes        []string `json:"scopes,omitempty"`
+		LegacyOAuthClientID string   `json:"oauth_client_id,omitempty"`
+	}{
+		Alias: (*Alias)(s),
+	}
+
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	// Migrate legacy flat fields into OAuth block (nested block takes precedence)
+	if aux.LegacyOAuthClientID != "" || len(aux.LegacyScopes) > 0 {
+		if s.OAuth == nil {
+			s.OAuth = &OAuthConfig{}
+		}
+		if s.OAuth.ClientID == "" && aux.LegacyOAuthClientID != "" {
+			s.OAuth.ClientID = aux.LegacyOAuthClientID
+		}
+		if len(s.OAuth.Scopes) == 0 && len(aux.LegacyScopes) > 0 {
+			s.OAuth.Scopes = aux.LegacyScopes
+		}
+	}
+
+	return nil
 }
 
 // ServerEntry pairs a server name with its configuration.
@@ -184,8 +226,8 @@ func (s ServerConfig) Validate() error {
 		if len(s.EnvHTTPHeaders) > 0 {
 			return errors.New("env_http_headers is only valid for http servers")
 		}
-		if len(s.Scopes) > 0 {
-			return errors.New("scopes is only valid for http servers")
+		if s.OAuth != nil {
+			return errors.New("oauth is only valid for http servers")
 		}
 	}
 
@@ -194,6 +236,19 @@ func (s ServerConfig) Validate() error {
 		// Command-related fields shouldn't be set
 		if len(s.Args) > 0 {
 			return errors.New("args is only valid for stdio servers")
+		}
+
+		// bearer_token_env_var and oauth are mutually exclusive
+		if s.BearerTokenEnvVar != "" && s.OAuth != nil {
+			return errors.New("bearer_token_env_var and oauth are mutually exclusive")
+		}
+
+		// Validate OAuth callback port if set
+		if s.OAuth != nil && s.OAuth.CallbackPort != nil {
+			port := *s.OAuth.CallbackPort
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("oauth callback_port must be 1-65535, got %d", port)
+			}
 		}
 	}
 

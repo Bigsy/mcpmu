@@ -86,8 +86,8 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			fakeCfg:        mcptest.SlowInitConfig(5 * time.Second),
 			ctxTimeout:     200 * time.Millisecond,
 			expectTools:    -1,
-			expectError:    true,            // WaitForTools returns context.DeadlineExceeded
-			skipFinalCheck: true,            // async init continues on handle.ctx; final state is non-deterministic
+			expectError:    true, // WaitForTools returns context.DeadlineExceeded
+			skipFinalCheck: true, // async init continues on handle.ctx; final state is non-deterministic
 		},
 		// NOTE: tools_list_timeout test removed - the supervisor has a hardcoded 30s timeout
 		// for tools/list, making it impractical to test without waiting 30 seconds or
@@ -98,9 +98,9 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			fakeCfg:        mcptest.CrashOnInitConfig(1),
 			expectTools:    -1,
 			expectError:    true,
-			mustObserve:    events.StateError,  // error must appear, but final state may be crashed or stopped
-			skipFinalCheck: true,               // watchProcess may emit crashed after error; order is non-deterministic
-			waitTimeout:    10 * time.Second,   // needs time for retry attempts after crash
+			mustObserve:    events.StateError, // error must appear, but final state may be crashed or stopped
+			skipFinalCheck: true,              // watchProcess may emit crashed after error; order is non-deterministic
+			waitTimeout:    10 * time.Second,  // needs time for retry attempts after crash
 		},
 		{
 			name:           "malformed_response",

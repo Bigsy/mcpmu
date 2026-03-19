@@ -95,8 +95,9 @@ func New(opts Options) (*Server, error) {
 
 	// Create process supervisor with config-specified credential store
 	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
-		CredentialStoreMode: opts.Config.MCPOAuthCredentialStore,
-		PIDTrackerDir:       pidTrackerDir,
+		CredentialStoreMode:     opts.Config.MCPOAuthCredentialStore,
+		PIDTrackerDir:           pidTrackerDir,
+		GlobalOAuthCallbackPort: opts.Config.MCPOAuthCallbackPort,
 	})
 
 	s := &Server{
