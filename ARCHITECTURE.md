@@ -158,6 +158,10 @@ The TUI includes a registry browser for discovering and installing servers from 
 
 The registry client (`internal/registry/`) handles API calls, type mapping, and install spec generation (package selection, runtime hints, env var placeholders).
 
+## Embedded Agent Skill
+
+mcpmu embeds a `SKILL.md` file in the binary (`cmd/mcpmu/skill_data/SKILL.md` via `//go:embed`). The `mcpmu skill install` command writes this to agent-specific skill directories (`~/.claude/skills/mcpmu/`, `~/.codex/skills/mcpmu/`, `~/.agents/skills/mcpmu/`). A checked-in mirror at `.claude/skills/mcpmu/SKILL.md` is kept in sync by a test assertion.
+
 ## Key Design Principles
 
 1. **Non-blocking initialize**: Return immediately; optionally start `eager` servers in background (otherwise start on-demand)
