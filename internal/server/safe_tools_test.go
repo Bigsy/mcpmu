@@ -1,6 +1,7 @@
 package server
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -47,8 +48,18 @@ func TestClassifyTool(t *testing.T) {
 		{"is_valid", ToolSafe},
 		{"has_permission", ToolSafe},
 		{"can_access", ToolSafe},
-		// Note: validate_input is classified as unsafe because "input" contains "put"
-		// This is acceptable - explicit permissions can override
+
+		// Word-boundary matching: these were false-positive unsafe with substring matching
+		{"validate_input", ToolSafe},    // "input" no longer matches "put"
+		{"offset_query", ToolSafe},      // "offset" no longer matches "set"
+		{"compute", ToolUnknown},        // "compute" no longer matches "put"
+		{"output_results", ToolUnknown}, // "output" no longer matches "put"
+
+		// camelCase tool names
+		{"readFile", ToolSafe},
+		{"deleteUser", ToolUnsafe},
+		{"validateInput", ToolSafe},
+		{"getHTTPStatus", ToolSafe},
 
 		// Unsafe patterns
 		{"write_file", ToolUnsafe},
@@ -166,6 +177,32 @@ func TestStripServerPrefix(t *testing.T) {
 			result := stripServerPrefix(tt.input)
 			if result != tt.expected {
 				t.Errorf("stripServerPrefix(%q) = %q, expected %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestTokenize(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		input    string
+		expected []string
+	}{
+		{"validate_input", []string{"validate", "input"}},
+		{"getUser", []string{"get", "user"}},
+		{"getHTTPStatus", []string{"get", "http", "status"}},
+		{"read-file", []string{"read", "file"}},
+		{"compute", []string{"compute"}},
+		{"READ_FILE", []string{"read", "file"}},
+		{"is_valid", []string{"is", "valid"}},
+		{"", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := tokenize(tt.input)
+			if !slices.Equal(result, tt.expected) {
+				t.Errorf("tokenize(%q) = %v, expected %v", tt.input, result, tt.expected)
 			}
 		})
 	}

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"slices"
 	"strings"
+	"unicode"
 )
 
 // ToolClassification represents the safety classification of a tool.
@@ -32,7 +34,7 @@ func (c ToolClassification) String() string {
 var safePatterns = []string{
 	"read", "get", "list", "search", "view", "show", "describe",
 	"fetch", "query", "find", "lookup", "check", "info", "status",
-	"count", "exists", "is_", "has_", "can_", "validate",
+	"count", "exists", "is", "has", "can", "validate",
 }
 
 // Unsafe patterns indicate mutating operations.
@@ -55,24 +57,70 @@ func ClassifyTool(toolName string) ToolClassification {
 	// Strip server prefix if present
 	name := stripServerPrefix(toolName)
 
-	// Convert to lowercase for case-insensitive matching
-	lower := strings.ToLower(name)
+	// Tokenize on word boundaries (_, -, camelCase)
+	tokens := tokenize(name)
 
 	// Check unsafe patterns first (more restrictive)
 	for _, pattern := range unsafePatterns {
-		if strings.Contains(lower, pattern) {
+		if slices.Contains(tokens, pattern) {
 			return ToolUnsafe
 		}
 	}
 
 	// Check safe patterns
 	for _, pattern := range safePatterns {
-		if strings.Contains(lower, pattern) {
+		if slices.Contains(tokens, pattern) {
 			return ToolSafe
 		}
 	}
 
 	return ToolUnknown
+}
+
+// tokenize splits a tool name into lowercase word tokens.
+// It splits on underscores, hyphens, and camelCase boundaries.
+func tokenize(name string) []string {
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '_' || r == '-'
+	})
+
+	var tokens []string
+	for _, part := range parts {
+		tokens = append(tokens, splitCamelCase(part)...)
+	}
+	return tokens
+}
+
+// splitCamelCase splits a string on camelCase boundaries and lowercases each token.
+//
+//	"getUser"       → ["get", "user"]
+//	"getHTTPStatus" → ["get", "http", "status"]
+//	"compute"       → ["compute"]
+func splitCamelCase(s string) []string {
+	if s == "" {
+		return nil
+	}
+
+	runes := []rune(s)
+	var tokens []string
+	start := 0
+
+	for i := 1; i < len(runes); i++ {
+		if unicode.IsUpper(runes[i]) {
+			if unicode.IsLower(runes[i-1]) {
+				// lowercase→uppercase: "getUser" at 'U'
+				tokens = append(tokens, strings.ToLower(string(runes[start:i])))
+				start = i
+			} else if i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
+				// end of uppercase run: "HTTPStatus" at 'S'
+				tokens = append(tokens, strings.ToLower(string(runes[start:i])))
+				start = i
+			}
+		}
+	}
+
+	tokens = append(tokens, strings.ToLower(string(runes[start:])))
+	return tokens
 }
 
 // stripServerPrefix removes the server prefix from a qualified tool name.
