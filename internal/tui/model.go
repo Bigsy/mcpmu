@@ -1597,12 +1597,7 @@ func (m *Model) handleNamespaceListKey(msg tea.KeyMsg) (handled bool, model tea.
 	case key.Matches(msg, m.keys.Duplicate):
 		if item := m.namespaceList.SelectedItem(); item != nil {
 			newName := m.uniqueNamespaceCopyName(item.Name)
-			newConfig := config.NamespaceConfig{
-				Description:   item.Config.Description,
-				ServerIDs:     append([]string{}, item.Config.ServerIDs...),
-				DenyByDefault: item.Config.DenyByDefault,
-			}
-			if err := m.cfg.AddNamespace(newName, newConfig); err != nil {
+			if err := m.cfg.DuplicateNamespace(item.Name, newName); err != nil {
 				log.Printf("Failed to duplicate namespace: %v", err)
 				return true, m, m.toast.ShowError(fmt.Sprintf("Failed to duplicate: %v", err))
 			}

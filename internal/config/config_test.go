@@ -636,6 +636,106 @@ func TestConfig_RenameNamespace_Errors(t *testing.T) {
 	}
 }
 
+func TestConfig_DuplicateNamespace(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
+	cfg.Servers["srv2"] = ServerConfig{Command: "cat"}
+	cfg.Namespaces["source"] = NamespaceConfig{
+		Description:   "Source NS",
+		ServerIDs:     []string{"srv1", "srv2"},
+		DenyByDefault: true,
+		ServerDefaults: map[string]bool{
+			"srv1": true,
+			"srv2": false,
+		},
+	}
+	cfg.ToolPermissions = []ToolPermission{
+		{Namespace: "source", Server: "srv1", ToolName: "tool-a", Enabled: true},
+		{Namespace: "source", Server: "srv2", ToolName: "tool-b", Enabled: false},
+		{Namespace: "other", Server: "srv1", ToolName: "tool-c", Enabled: true},
+	}
+
+	err := cfg.DuplicateNamespace("source", "copy")
+	if err != nil {
+		t.Fatalf("DuplicateNamespace failed: %v", err)
+	}
+
+	// Source still exists unchanged
+	src := cfg.Namespaces["source"]
+	if src.Description != "Source NS" || len(src.ServerIDs) != 2 || !src.DenyByDefault {
+		t.Error("source namespace was mutated")
+	}
+
+	// Copy has correct fields
+	cp := cfg.Namespaces["copy"]
+	if cp.Description != "Source NS" {
+		t.Errorf("expected description %q, got %q", "Source NS", cp.Description)
+	}
+	if !cp.DenyByDefault {
+		t.Error("expected DenyByDefault to be true")
+	}
+	if len(cp.ServerIDs) != 2 || cp.ServerIDs[0] != "srv1" || cp.ServerIDs[1] != "srv2" {
+		t.Errorf("unexpected ServerIDs: %v", cp.ServerIDs)
+	}
+
+	// ServerDefaults copied
+	if len(cp.ServerDefaults) != 2 {
+		t.Fatalf("expected 2 server defaults, got %d", len(cp.ServerDefaults))
+	}
+	if !cp.ServerDefaults["srv1"] {
+		t.Error("expected srv1 server default to be true")
+	}
+	if cp.ServerDefaults["srv2"] {
+		t.Error("expected srv2 server default to be false")
+	}
+
+	// ToolPermissions copied (2 from source + 1 unrelated = 3 original + 2 new = 5)
+	if len(cfg.ToolPermissions) != 5 {
+		t.Fatalf("expected 5 tool permissions, got %d", len(cfg.ToolPermissions))
+	}
+	copyPerms := cfg.GetToolPermissionsForNamespace("copy")
+	if len(copyPerms) != 2 {
+		t.Fatalf("expected 2 permissions for copy, got %d", len(copyPerms))
+	}
+
+	// "other" namespace permissions untouched
+	otherPerms := cfg.GetToolPermissionsForNamespace("other")
+	if len(otherPerms) != 1 {
+		t.Errorf("expected 1 permission for other, got %d", len(otherPerms))
+	}
+
+	// Deep copy: mutating copy doesn't affect source
+	cp.ServerIDs = append(cp.ServerIDs, "srv3")
+	cp.ServerDefaults["srv3"] = true
+	if len(src.ServerIDs) != 2 {
+		t.Error("mutating copy ServerIDs affected source")
+	}
+	if len(src.ServerDefaults) != 2 {
+		t.Error("mutating copy ServerDefaults affected source")
+	}
+}
+
+func TestConfig_DuplicateNamespace_Errors(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Namespaces["existing"] = NamespaceConfig{}
+	cfg.Namespaces["other"] = NamespaceConfig{}
+
+	// Source not found
+	if err := cfg.DuplicateNamespace("nonexistent", "new"); err == nil {
+		t.Error("expected error for non-existent source")
+	}
+
+	// Destination already exists
+	if err := cfg.DuplicateNamespace("existing", "other"); err == nil {
+		t.Error("expected error for duplicate destination")
+	}
+
+	// Invalid name
+	if err := cfg.DuplicateNamespace("existing", ""); err == nil {
+		t.Error("expected error for empty name")
+	}
+}
+
 func TestConfig_AssignServerToNamespace(t *testing.T) {
 	cfg := NewConfig()
 	cfg.Namespaces["dev"] = NamespaceConfig{ServerIDs: []string{}}

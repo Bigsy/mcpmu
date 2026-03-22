@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -344,6 +345,46 @@ func (c *Config) RenameNamespace(oldName, newName string) error {
 	for i, tp := range c.ToolPermissions {
 		if tp.Namespace == oldName {
 			c.ToolPermissions[i].Namespace = newName
+		}
+	}
+
+	return nil
+}
+
+// DuplicateNamespace deep-copies a namespace and its tool permissions under a new name.
+func (c *Config) DuplicateNamespace(oldName, newName string) error {
+	ns, exists := c.Namespaces[oldName]
+	if !exists {
+		return fmt.Errorf("namespace %q not found", oldName)
+	}
+	if err := ValidateName(newName); err != nil {
+		return fmt.Errorf("invalid name: %w", err)
+	}
+	if _, exists := c.Namespaces[newName]; exists {
+		return fmt.Errorf("namespace %q already exists", newName)
+	}
+
+	// Deep copy the namespace config
+	newNS := NamespaceConfig{
+		Description:   ns.Description,
+		ServerIDs:     append([]string{}, ns.ServerIDs...),
+		DenyByDefault: ns.DenyByDefault,
+	}
+	if len(ns.ServerDefaults) > 0 {
+		newNS.ServerDefaults = make(map[string]bool, len(ns.ServerDefaults))
+		maps.Copy(newNS.ServerDefaults, ns.ServerDefaults)
+	}
+	c.Namespaces[newName] = newNS
+
+	// Copy tool permissions
+	for _, tp := range c.ToolPermissions {
+		if tp.Namespace == oldName {
+			c.ToolPermissions = append(c.ToolPermissions, ToolPermission{
+				Namespace: newName,
+				Server:    tp.Server,
+				ToolName:  tp.ToolName,
+				Enabled:   tp.Enabled,
+			})
 		}
 	}
 
