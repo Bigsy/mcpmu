@@ -280,3 +280,85 @@ func TestView_StatusBar_BearerTokenServerNoLoginLogout(t *testing.T) {
 		t.Error("expected status bar NOT to show 'O:logout' for bearer token server")
 	}
 }
+
+func TestView_HTTPServerDetailShowsURL(t *testing.T) {
+	m := newTestModelWithSize(t, 120, 40)
+
+	m.cfg.Servers["http-bearer"] = config.ServerConfig{
+		Kind:              config.ServerKindStreamableHTTP,
+		URL:               "https://mcp.figma.com/mcp",
+		BearerTokenEnvVar: "FIGMA_TOKEN",
+	}
+	m.refreshServerList()
+
+	// Navigate to detail view
+	m.currentView = ViewDetail
+	m.detailServerID = "http-bearer"
+	m.refreshDetailViewIfShowing("http-bearer")
+
+	view := testutil.StripANSI(m.View())
+
+	if !strings.Contains(view, "https://mcp.figma.com/mcp") {
+		t.Error("expected detail view to contain server URL")
+	}
+	if !strings.Contains(view, "Bearer") {
+		t.Error("expected detail view to show Bearer auth")
+	}
+	if strings.Contains(view, "Command:") {
+		t.Error("expected detail view NOT to show 'Command:' for HTTP server")
+	}
+}
+
+func TestView_HTTPServerDetailShowsOAuth(t *testing.T) {
+	m := newTestModelWithSize(t, 120, 40)
+
+	m.cfg.Servers["oauth-detail"] = config.ServerConfig{
+		Kind: config.ServerKindStreamableHTTP,
+		URL:  "https://mcp.atlassian.com/mcp",
+		OAuth: &config.OAuthConfig{
+			ClientID: "my-client",
+			Scopes:   []string{"read", "write"},
+		},
+	}
+	m.refreshServerList()
+
+	m.currentView = ViewDetail
+	m.detailServerID = "oauth-detail"
+	m.refreshDetailViewIfShowing("oauth-detail")
+
+	view := testutil.StripANSI(m.View())
+
+	if !strings.Contains(view, "OAuth") {
+		t.Error("expected detail view to show OAuth auth")
+	}
+	if !strings.Contains(view, "read, write") {
+		t.Error("expected detail view to show OAuth scopes")
+	}
+}
+
+func TestView_StdioServerDetailShowsCommand(t *testing.T) {
+	m := newTestModelWithSize(t, 120, 40)
+
+	m.cfg.Servers["stdio-detail"] = config.ServerConfig{
+		Kind:    config.ServerKindStdio,
+		Command: "npx",
+		Args:    []string{"-y", "@upstash/context7-mcp"},
+	}
+	m.refreshServerList()
+
+	m.currentView = ViewDetail
+	m.detailServerID = "stdio-detail"
+	m.refreshDetailViewIfShowing("stdio-detail")
+
+	view := testutil.StripANSI(m.View())
+
+	if !strings.Contains(view, "Command:") {
+		t.Error("expected detail view to show 'Command:' for stdio server")
+	}
+	if !strings.Contains(view, "npx -y @upstash/context7-mcp") {
+		t.Error("expected detail view to show full command with args")
+	}
+	if strings.Contains(view, "URL:") {
+		t.Error("expected detail view NOT to show 'URL:' for stdio server")
+	}
+}

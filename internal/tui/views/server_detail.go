@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -110,14 +111,12 @@ func (m *ServerDetailModel) updateContent() {
 	}
 	content.WriteString("\n\n")
 
-	// Command
-	content.WriteString(labelStyle.Render("Command: "))
-	cmd := m.server.Command
-	if len(m.server.Args) > 0 {
-		cmd += " " + strings.Join(m.server.Args, " ")
+	// Server type-specific fields
+	if m.server.IsHTTP() {
+		m.renderHTTPInfo(&content, labelStyle, infoStyle)
+	} else {
+		m.renderStdioInfo(&content, labelStyle, infoStyle)
 	}
-	content.WriteString(infoStyle.Render(cmd))
-	content.WriteString("\n")
 
 	// Working directory
 	if m.server.Cwd != "" {
@@ -224,6 +223,86 @@ func (m ServerDetailModel) View() string {
 		content = strings.Repeat("\n", m.topPad) + content
 	}
 	return m.theme.RenderPane(title, content, m.width, m.focused)
+}
+
+func (m *ServerDetailModel) renderStdioInfo(content *strings.Builder, labelStyle, infoStyle lipgloss.Style) {
+	content.WriteString(labelStyle.Render("Command: "))
+	cmd := m.server.Command
+	if len(m.server.Args) > 0 {
+		cmd += " " + strings.Join(m.server.Args, " ")
+	}
+	content.WriteString(infoStyle.Render(cmd))
+	content.WriteString("\n")
+}
+
+func (m *ServerDetailModel) renderHTTPInfo(content *strings.Builder, labelStyle, infoStyle lipgloss.Style) {
+	// URL
+	content.WriteString(labelStyle.Render("URL: "))
+	content.WriteString(infoStyle.Render(m.server.URL))
+	content.WriteString("\n")
+
+	// Auth mode
+	content.WriteString(labelStyle.Render("Auth: "))
+	if m.server.BearerTokenEnvVar != "" {
+		content.WriteString(infoStyle.Render("Bearer ($" + m.server.BearerTokenEnvVar + ")"))
+		content.WriteString("\n")
+	} else if m.server.OAuth != nil {
+		content.WriteString(infoStyle.Render("OAuth"))
+		content.WriteString("\n")
+		if m.server.OAuth.ClientID != "" {
+			content.WriteString("  ")
+			content.WriteString(infoStyle.Render("Client: " + m.server.OAuth.ClientID))
+		} else {
+			content.WriteString("  ")
+			content.WriteString(infoStyle.Render("Client: dynamic"))
+		}
+		content.WriteString("\n")
+		if len(m.server.OAuth.Scopes) > 0 {
+			content.WriteString("  ")
+			content.WriteString(infoStyle.Render("Scopes: " + strings.Join(m.server.OAuth.Scopes, ", ")))
+			content.WriteString("\n")
+		}
+		if m.server.OAuth.CallbackPort != nil {
+			content.WriteString("  ")
+			content.WriteString(infoStyle.Render(fmt.Sprintf("Port: %d", *m.server.OAuth.CallbackPort)))
+			content.WriteString("\n")
+		}
+	} else {
+		content.WriteString(m.theme.Faint.Render("none"))
+		content.WriteString("\n")
+	}
+
+	// Static HTTP headers (show keys only, values could be sensitive)
+	if len(m.server.HTTPHeaders) > 0 {
+		content.WriteString(labelStyle.Render("Headers:"))
+		content.WriteString("\n")
+		keys := make([]string, 0, len(m.server.HTTPHeaders))
+		for k := range m.server.HTTPHeaders {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			content.WriteString("  ")
+			content.WriteString(infoStyle.Render(k))
+			content.WriteString("\n")
+		}
+	}
+
+	// Env-backed HTTP headers
+	if len(m.server.EnvHTTPHeaders) > 0 {
+		content.WriteString(labelStyle.Render("Env Headers:"))
+		content.WriteString("\n")
+		keys := make([]string, 0, len(m.server.EnvHTTPHeaders))
+		for k := range m.server.EnvHTTPHeaders {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			content.WriteString("  ")
+			content.WriteString(infoStyle.Render(k + " <- $" + m.server.EnvHTTPHeaders[k]))
+			content.WriteString("\n")
+		}
+	}
 }
 
 func formatDuration(d time.Duration) string {
