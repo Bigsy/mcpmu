@@ -220,18 +220,12 @@ func TestUninstallSkillPreservesUserFiles(t *testing.T) {
 	}
 }
 
-func TestSkillDataInSync(t *testing.T) {
-	canonical, err := os.ReadFile("skill_data/SKILL.md")
+func TestSkillDataSymlink(t *testing.T) {
+	target, err := os.Readlink("../../.claude/skills/mcpmu/SKILL.md")
 	if err != nil {
-		t.Fatalf("cannot read canonical skill_data/SKILL.md: %v", err)
+		t.Fatalf(".claude/skills/mcpmu/SKILL.md should be a symlink: %v", err)
 	}
-
-	mirror, err := os.ReadFile("../../.claude/skills/mcpmu/SKILL.md")
-	if err != nil {
-		t.Fatalf("cannot read mirror .claude/skills/mcpmu/SKILL.md: %v", err)
-	}
-
-	if string(canonical) != string(mirror) {
-		t.Fatal("skill_data/SKILL.md and .claude/skills/mcpmu/SKILL.md are out of sync — update one to match the other")
+	if target != "../../../cmd/mcpmu/skill_data/SKILL.md" {
+		t.Errorf("symlink target: got %q, want %q", target, "../../../cmd/mcpmu/skill_data/SKILL.md")
 	}
 }

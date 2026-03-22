@@ -18,6 +18,8 @@ var (
 	addScopes            []string
 	addOAuthClientID     string
 	addOAuthCallbackPort int
+	addStartupTimeout    int
+	addToolTimeout       int
 )
 
 var addCmd = &cobra.Command{
@@ -55,6 +57,8 @@ func init() {
 	addCmd.Flags().StringSliceVar(&addScopes, "scopes", nil, "OAuth scopes to request (comma-separated)")
 	addCmd.Flags().StringVar(&addOAuthClientID, "oauth-client-id", "", "Pre-registered OAuth client ID")
 	addCmd.Flags().IntVar(&addOAuthCallbackPort, "oauth-callback-port", 0, "OAuth callback port (1-65535)")
+	addCmd.Flags().IntVar(&addStartupTimeout, "startup-timeout", 0, "Startup timeout in seconds (default: 10)")
+	addCmd.Flags().IntVar(&addToolTimeout, "tool-timeout", 0, "Tool call timeout in seconds (default: 60)")
 
 	rootCmd.AddCommand(addCmd)
 }
@@ -82,7 +86,20 @@ func isURL(s string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
+func validateTimeoutFlags() error {
+	if addStartupTimeout < 0 {
+		return fmt.Errorf("--startup-timeout must be a positive number")
+	}
+	if addToolTimeout < 0 {
+		return fmt.Errorf("--tool-timeout must be a positive number")
+	}
+	return nil
+}
+
 func runAddStdio(cmd *cobra.Command, args []string) error {
+	if err := validateTimeoutFlags(); err != nil {
+		return err
+	}
 	// Reject HTTP-only flags on stdio servers
 	if addBearerEnv != "" {
 		return fmt.Errorf("--bearer-env is only valid for HTTP servers")
@@ -128,11 +145,13 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 
 	// Build server config
 	srv := config.ServerConfig{
-		Command:   cmdArgs[0],
-		Args:      cmdArgs[1:],
-		Cwd:       addCwd,
-		Env:       env,
-		Autostart: addAutostart,
+		Command:           cmdArgs[0],
+		Args:              cmdArgs[1:],
+		Cwd:               addCwd,
+		Env:               env,
+		Autostart:         addAutostart,
+		StartupTimeoutSec: addStartupTimeout,
+		ToolTimeoutSec:    addToolTimeout,
 	}
 
 	// Add server (this enforces name uniqueness)
@@ -156,6 +175,9 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 }
 
 func runAddHTTP(cmd *cobra.Command, args []string) error {
+	if err := validateTimeoutFlags(); err != nil {
+		return err
+	}
 	// Need at least the name
 	if len(args) < 1 {
 		return fmt.Errorf("missing server name\n\nUsage: mcpmu add <name> <url>")
@@ -191,6 +213,8 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 		BearerTokenEnvVar: addBearerEnv,
 		Env:               env,
 		Autostart:         addAutostart,
+		StartupTimeoutSec: addStartupTimeout,
+		ToolTimeoutSec:    addToolTimeout,
 	}
 
 	// Build OAuth config if any OAuth-related flags are provided

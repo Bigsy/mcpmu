@@ -20,6 +20,7 @@ func TestShowAddWithDefaults_PrePopulatesFields(t *testing.T) {
 		"",
 		"",
 		"",
+		"",
 	)
 
 	if !form.IsVisible() {
@@ -62,6 +63,7 @@ func TestShowAddWithDefaults_PrePopulatesHTTPServer(t *testing.T) {
 		"SMITHERY_API_KEY",
 		"",
 		"",
+		"",
 	)
 
 	if !form.IsVisible() {
@@ -88,6 +90,7 @@ func TestShowAddWithDefaults_SubmitProducesCorrectResult(t *testing.T) {
 		"npx",
 		"-y @brave/brave-search-mcp-server",
 		"BRAVE_API_KEY=<your-BRAVE_API_KEY>",
+		"",
 		"",
 		"",
 		"",
@@ -126,6 +129,7 @@ func TestShowAddWithDefaults_SubmitHTTPProducesCorrectResult(t *testing.T) {
 		"SMITHERY_API_KEY",
 		"",
 		"",
+		"",
 	)
 
 	srv := form.buildServerConfig()
@@ -149,6 +153,7 @@ func TestShowAddWithDefaults_NotDirtyOnOpen(t *testing.T) {
 		"npx",
 		"-y @brave/brave-search-mcp-server",
 		"BRAVE_API_KEY=<your-key>",
+		"",
 		"",
 		"",
 		"",
@@ -193,6 +198,7 @@ func TestShowAddWithDefaults_PrePopulatesOAuthFields(t *testing.T) {
 		"",
 		"12345.67890",
 		"3118",
+		"",
 	)
 
 	if cmd == nil {
@@ -249,5 +255,113 @@ func TestBuildServerConfig_BearerClearsOAuth(t *testing.T) {
 	}
 	if srv.BearerTokenEnvVar != "SLACK_TOKEN" {
 		t.Errorf("expected BearerTokenEnvVar 'SLACK_TOKEN', got %q", srv.BearerTokenEnvVar)
+	}
+}
+
+func TestShowEdit_AutostartPrePopulated(t *testing.T) {
+	th := theme.New()
+	form := NewServerForm(th)
+	_ = form.ShowEdit("my-server", config.ServerConfig{
+		Command:   "echo",
+		Autostart: true,
+	})
+	if !form.autostart {
+		t.Error("expected autostart to be true in edit mode")
+	}
+	srv := form.buildServerConfig()
+	if !srv.Autostart {
+		t.Error("expected built config to have Autostart=true")
+	}
+}
+
+func TestShowEdit_TimeoutsPrePopulated(t *testing.T) {
+	th := theme.New()
+	form := NewServerForm(th)
+	_ = form.ShowEdit("my-server", config.ServerConfig{
+		Command:           "echo",
+		StartupTimeoutSec: 30,
+		ToolTimeoutSec:    120,
+	})
+	if form.startupTimeout != "30" {
+		t.Errorf("startupTimeout: got %q, want %q", form.startupTimeout, "30")
+	}
+	if form.toolTimeout != "120" {
+		t.Errorf("toolTimeout: got %q, want %q", form.toolTimeout, "120")
+	}
+	srv := form.buildServerConfig()
+	if srv.StartupTimeoutSec != 30 {
+		t.Errorf("StartupTimeoutSec: got %d, want 30", srv.StartupTimeoutSec)
+	}
+	if srv.ToolTimeoutSec != 120 {
+		t.Errorf("ToolTimeoutSec: got %d, want 120", srv.ToolTimeoutSec)
+	}
+}
+
+func TestBuildServerConfig_EmptyTimeoutsAreZero(t *testing.T) {
+	th := theme.New()
+	form := NewServerForm(th)
+	_ = form.ShowAdd()
+	form.commandOrURL = "echo"
+	form.startupTimeout = ""
+	form.toolTimeout = ""
+	srv := form.buildServerConfig()
+	if srv.StartupTimeoutSec != 0 {
+		t.Errorf("expected StartupTimeoutSec 0, got %d", srv.StartupTimeoutSec)
+	}
+	if srv.ToolTimeoutSec != 0 {
+		t.Errorf("expected ToolTimeoutSec 0, got %d", srv.ToolTimeoutSec)
+	}
+}
+
+func TestShowEdit_OAuthScopesRoundTrip(t *testing.T) {
+	th := theme.New()
+	form := NewServerForm(th)
+	_ = form.ShowEdit("slack", config.ServerConfig{
+		URL: "https://mcp.slack.com/mcp",
+		OAuth: &config.OAuthConfig{
+			Scopes: []string{"channels:read", "channels:write"},
+		},
+	})
+	if form.oauthScopes != "channels:read, channels:write" {
+		t.Errorf("oauthScopes: got %q", form.oauthScopes)
+	}
+	srv := form.buildServerConfig()
+	if srv.OAuth == nil {
+		t.Fatal("expected OAuth config")
+	}
+	if len(srv.OAuth.Scopes) != 2 || srv.OAuth.Scopes[0] != "channels:read" || srv.OAuth.Scopes[1] != "channels:write" {
+		t.Errorf("OAuth.Scopes: got %v", srv.OAuth.Scopes)
+	}
+}
+
+func TestIsDirty_NewFields(t *testing.T) {
+	th := theme.New()
+	form := NewServerForm(th)
+	_ = form.ShowAdd()
+	if form.isDirty() {
+		t.Error("should not be dirty on open")
+	}
+
+	form.autostart = true
+	if !form.isDirty() {
+		t.Error("should be dirty after changing autostart")
+	}
+	form.autostart = false
+
+	form.startupTimeout = "20"
+	if !form.isDirty() {
+		t.Error("should be dirty after changing startupTimeout")
+	}
+	form.startupTimeout = ""
+
+	form.toolTimeout = "30"
+	if !form.isDirty() {
+		t.Error("should be dirty after changing toolTimeout")
+	}
+	form.toolTimeout = ""
+
+	form.oauthScopes = "read"
+	if !form.isDirty() {
+		t.Error("should be dirty after changing oauthScopes")
 	}
 }

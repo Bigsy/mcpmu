@@ -46,6 +46,10 @@ type ServerFormModel struct {
 	bearerTokenEnvVar string // Only used for HTTP
 	oauthClientID     string // Only used for HTTP
 	oauthCallbackPort string // Only used for HTTP (string for form input)
+	autostart         bool
+	oauthScopes       string // comma-separated, HTTP only
+	startupTimeout    string // parsed to int
+	toolTimeout       string // parsed to int
 
 	// Initial values for dirty checking
 	initialName              string
@@ -56,6 +60,10 @@ type ServerFormModel struct {
 	initialBearerTokenEnvVar string
 	initialOAuthClientID     string
 	initialOAuthCallbackPort string
+	initialAutostart         bool
+	initialOAuthScopes       string
+	initialStartupTimeout    string
+	initialToolTimeout       string
 
 	// Confirm discard state
 	showConfirmDiscard bool
@@ -91,6 +99,10 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.bearerTokenEnvVar = ""
 	m.oauthClientID = ""
 	m.oauthCallbackPort = ""
+	m.autostart = false
+	m.oauthScopes = ""
+	m.startupTimeout = ""
+	m.toolTimeout = ""
 	// Save initial values for dirty checking
 	m.initialName = ""
 	m.initialCommandOrURL = ""
@@ -100,6 +112,10 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.initialBearerTokenEnvVar = ""
 	m.initialOAuthClientID = ""
 	m.initialOAuthCallbackPort = ""
+	m.initialAutostart = false
+	m.initialOAuthScopes = ""
+	m.initialStartupTimeout = ""
+	m.initialToolTimeout = ""
 	m.buildForm()
 	return m.form.Init()
 }
@@ -107,7 +123,7 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 // ShowAddWithDefaults displays the form for adding a new server with pre-populated values.
 // Used by the registry browser to pre-fill the form with install spec data.
 // Returns a tea.Cmd to initialize the form.
-func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bearerTokenEnvVar, oauthClientID, oauthCallbackPort string) tea.Cmd {
+func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bearerTokenEnvVar, oauthClientID, oauthCallbackPort, oauthScopes string) tea.Cmd {
 	m.visible = true
 	m.isEdit = false
 	m.showConfirmDiscard = false
@@ -121,6 +137,10 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.bearerTokenEnvVar = bearerTokenEnvVar
 	m.oauthClientID = oauthClientID
 	m.oauthCallbackPort = oauthCallbackPort
+	m.autostart = false
+	m.oauthScopes = oauthScopes
+	m.startupTimeout = ""
+	m.toolTimeout = ""
 	// Save initial values for dirty checking (so form isn't dirty on open)
 	m.initialName = name
 	m.initialCommandOrURL = commandOrURL
@@ -130,6 +150,10 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.initialBearerTokenEnvVar = bearerTokenEnvVar
 	m.initialOAuthClientID = oauthClientID
 	m.initialOAuthCallbackPort = oauthCallbackPort
+	m.initialAutostart = false
+	m.initialOAuthScopes = oauthScopes
+	m.initialStartupTimeout = ""
+	m.initialToolTimeout = ""
 	m.buildForm()
 	return m.form.Init()
 }
@@ -156,9 +180,11 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 			} else {
 				m.oauthCallbackPort = ""
 			}
+			m.oauthScopes = strings.Join(srv.OAuth.Scopes, ", ")
 		} else {
 			m.oauthClientID = ""
 			m.oauthCallbackPort = ""
+			m.oauthScopes = ""
 		}
 	} else {
 		m.commandOrURL = srv.Command
@@ -166,9 +192,21 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 		m.bearerTokenEnvVar = ""
 		m.oauthClientID = ""
 		m.oauthCallbackPort = ""
+		m.oauthScopes = ""
 	}
 	m.cwd = srv.Cwd
 	m.env = formatEnvVars(srv.Env)
+	m.autostart = srv.Autostart
+	if srv.StartupTimeoutSec > 0 {
+		m.startupTimeout = strconv.Itoa(srv.StartupTimeoutSec)
+	} else {
+		m.startupTimeout = ""
+	}
+	if srv.ToolTimeoutSec > 0 {
+		m.toolTimeout = strconv.Itoa(srv.ToolTimeoutSec)
+	} else {
+		m.toolTimeout = ""
+	}
 
 	// Save initial values for dirty checking
 	m.initialName = m.name
@@ -179,6 +217,10 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	m.initialBearerTokenEnvVar = m.bearerTokenEnvVar
 	m.initialOAuthClientID = m.oauthClientID
 	m.initialOAuthCallbackPort = m.oauthCallbackPort
+	m.initialAutostart = m.autostart
+	m.initialOAuthScopes = m.oauthScopes
+	m.initialStartupTimeout = m.startupTimeout
+	m.initialToolTimeout = m.toolTimeout
 	m.buildForm()
 	return m.form.Init()
 }
@@ -235,6 +277,10 @@ func (m *ServerFormModel) buildForm() {
 				CharLimit(1000).
 				Lines(2),
 
+			huh.NewNote().
+				Description("↓ / Tab for advanced options (auth, timeouts)"),
+		),
+		huh.NewGroup(
 			huh.NewInput().
 				Title("Bearer Token Env Var").
 				Description("Env var name for bearer auth (HTTP only, optional)").
@@ -249,7 +295,57 @@ func (m *ServerFormModel) buildForm() {
 				Title("OAuth Callback Port").
 				Description("OAuth callback port, e.g. 3118 (HTTP only, optional)").
 				Value(&m.oauthCallbackPort),
-		),
+
+			huh.NewInput().
+				Title("OAuth Scopes").
+				Description("Comma-separated, e.g. read,write (HTTP only, optional)").
+				Value(&m.oauthScopes),
+
+			huh.NewConfirm().
+				Title("Autostart").
+				Description("Start server automatically on app launch").
+				Value(&m.autostart),
+
+			huh.NewInput().
+				Title("Startup Timeout (sec)").
+				Description("Time to wait for server startup").
+				Placeholder("10").
+				Value(&m.startupTimeout).
+				Validate(func(s string) error {
+					s = strings.TrimSpace(s)
+					if s == "" {
+						return nil
+					}
+					n, err := strconv.Atoi(s)
+					if err != nil {
+						return fmt.Errorf("must be a number")
+					}
+					if n < 1 {
+						return fmt.Errorf("must be at least 1")
+					}
+					return nil
+				}),
+
+			huh.NewInput().
+				Title("Tool Timeout (sec)").
+				Description("Time to wait for tool call responses").
+				Placeholder("60").
+				Value(&m.toolTimeout).
+				Validate(func(s string) error {
+					s = strings.TrimSpace(s)
+					if s == "" {
+						return nil
+					}
+					n, err := strconv.Atoi(s)
+					if err != nil {
+						return fmt.Errorf("must be a number")
+					}
+					if n < 1 {
+						return fmt.Errorf("must be at least 1")
+					}
+					return nil
+				}),
+		).Title("Advanced"),
 	).WithTheme(formTheme).
 		WithWidth(60).
 		WithShowHelp(true).
@@ -266,7 +362,11 @@ func (m *ServerFormModel) isDirty() bool {
 		m.env != m.initialEnv ||
 		m.bearerTokenEnvVar != m.initialBearerTokenEnvVar ||
 		m.oauthClientID != m.initialOAuthClientID ||
-		m.oauthCallbackPort != m.initialOAuthCallbackPort
+		m.oauthCallbackPort != m.initialOAuthCallbackPort ||
+		m.autostart != m.initialAutostart ||
+		m.oauthScopes != m.initialOAuthScopes ||
+		m.startupTimeout != m.initialStartupTimeout ||
+		m.toolTimeout != m.initialToolTimeout
 }
 
 // Hide hides the form.
@@ -422,10 +522,10 @@ func (m ServerFormModel) buildServerConfig() config.ServerConfig {
 			if m.isEdit && m.originalServer != nil {
 				existingOAuth = m.originalServer.OAuth
 			}
-			if clientID != "" || portStr != "" || existingOAuth != nil {
+			scopeStr := strings.TrimSpace(m.oauthScopes)
+			if clientID != "" || portStr != "" || scopeStr != "" || existingOAuth != nil {
 				srv.OAuth = &config.OAuthConfig{}
 				if existingOAuth != nil {
-					srv.OAuth.Scopes = existingOAuth.Scopes
 					srv.OAuth.ClientSecret = existingOAuth.ClientSecret
 				}
 				if clientID != "" {
@@ -434,6 +534,14 @@ func (m ServerFormModel) buildServerConfig() config.ServerConfig {
 				if portStr != "" {
 					if port, err := strconv.Atoi(portStr); err == nil && port > 0 {
 						srv.OAuth.CallbackPort = &port
+					}
+				}
+				if scopeStr != "" {
+					for s := range strings.SplitSeq(scopeStr, ",") {
+						s = strings.TrimSpace(s)
+						if s != "" {
+							srv.OAuth.Scopes = append(srv.OAuth.Scopes, s)
+						}
 					}
 				}
 			}
@@ -450,7 +558,20 @@ func (m ServerFormModel) buildServerConfig() config.ServerConfig {
 
 	srv.Cwd = strings.TrimSpace(m.cwd)
 	srv.Env = parseEnvVars(m.env)
-	// Autostart preserved from original in edit mode, defaults to false for new servers
+	srv.Autostart = m.autostart
+
+	srv.StartupTimeoutSec = 0
+	if s := strings.TrimSpace(m.startupTimeout); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			srv.StartupTimeoutSec = n
+		}
+	}
+	srv.ToolTimeoutSec = 0
+	if s := strings.TrimSpace(m.toolTimeout); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			srv.ToolTimeoutSec = n
+		}
+	}
 
 	return srv
 }

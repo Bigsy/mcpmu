@@ -197,6 +197,35 @@ func TestServerDetail_HTTPWithCwdAndEnv(t *testing.T) {
 	assertNotContains(t, content, "Command:")
 }
 
+func TestServerDetail_AutostartAndTimeouts(t *testing.T) {
+	detail := newTestDetailModel(t)
+	srv := &config.ServerConfig{
+		Command:           "echo",
+		Autostart:         true,
+		StartupTimeoutSec: 30,
+		ToolTimeoutSec:    120,
+	}
+	detail.SetServer("my-server", srv, nil, nil, nil, false)
+	content := detailContent(t, detail)
+	assertContains(t, content, "Autostart:")
+	assertContains(t, content, "Yes")
+	assertContains(t, content, "30s")
+	assertContains(t, content, "120s")
+}
+
+func TestServerDetail_DefaultTimeouts(t *testing.T) {
+	detail := newTestDetailModel(t)
+	srv := &config.ServerConfig{
+		Command: "echo",
+	}
+	detail.SetServer("my-server", srv, nil, nil, nil, false)
+	content := detailContent(t, detail)
+	assertContains(t, content, "Autostart:")
+	assertContains(t, content, "No")
+	assertContains(t, content, "10s")
+	assertContains(t, content, "60s")
+}
+
 func TestServerDetail_HTTPHeadersSorted(t *testing.T) {
 	detail := newTestDetailModel(t)
 	srv := &config.ServerConfig{

@@ -463,6 +463,81 @@ func TestCLI_Add_Stdio_RejectsOAuthFlags(t *testing.T) {
 	}
 }
 
+func TestCLI_Add_Stdio_WithTimeouts(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "add", "timed-server",
+		"--startup-timeout", "30",
+		"--tool-timeout", "120",
+		"--", "echo", "hello",
+	)
+	if err != nil {
+		t.Fatalf("add failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	data, _ := os.ReadFile(configPath)
+	var cfg map[string]any
+	_ = json.Unmarshal(data, &cfg)
+	servers := cfg["servers"].(map[string]any)
+	srv := servers["timed-server"].(map[string]any)
+
+	if srv["startup_timeout_sec"] != float64(30) {
+		t.Errorf("expected startup_timeout_sec 30, got %v", srv["startup_timeout_sec"])
+	}
+	if srv["tool_timeout_sec"] != float64(120) {
+		t.Errorf("expected tool_timeout_sec 120, got %v", srv["tool_timeout_sec"])
+	}
+}
+
+func TestCLI_Add_HTTP_WithTimeouts(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "add", "timed-http",
+		"https://example.com/mcp",
+		"--startup-timeout", "15",
+		"--tool-timeout", "90",
+	)
+	if err != nil {
+		t.Fatalf("add failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	data, _ := os.ReadFile(configPath)
+	var cfg map[string]any
+	_ = json.Unmarshal(data, &cfg)
+	servers := cfg["servers"].(map[string]any)
+	srv := servers["timed-http"].(map[string]any)
+
+	if srv["startup_timeout_sec"] != float64(15) {
+		t.Errorf("expected startup_timeout_sec 15, got %v", srv["startup_timeout_sec"])
+	}
+	if srv["tool_timeout_sec"] != float64(90) {
+		t.Errorf("expected tool_timeout_sec 90, got %v", srv["tool_timeout_sec"])
+	}
+}
+
+func TestCLI_Add_NegativeTimeout_Rejected(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, err := runCLI(testBinary, configPath, "add", "bad-timeout",
+		"--startup-timeout", "-5",
+		"--", "echo", "hello",
+	)
+	if err == nil {
+		t.Fatal("expected error for negative --startup-timeout")
+	}
+
+	_, _, err = runCLI(testBinary, configPath, "add", "bad-timeout",
+		"--tool-timeout", "-1",
+		"--", "echo", "hello",
+	)
+	if err == nil {
+		t.Fatal("expected error for negative --tool-timeout")
+	}
+}
+
 func TestCLI_List(t *testing.T) {
 	t.Parallel()
 	configPath := setupTestConfig(t)

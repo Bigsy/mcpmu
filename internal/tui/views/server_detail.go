@@ -118,6 +118,23 @@ func (m *ServerDetailModel) updateContent() {
 		m.renderStdioInfo(&content, labelStyle, infoStyle)
 	}
 
+	// Configuration
+	content.WriteString(labelStyle.Render("Autostart: "))
+	if m.server.Autostart {
+		content.WriteString(infoStyle.Render("Yes"))
+	} else {
+		content.WriteString(m.theme.Faint.Render("No"))
+	}
+	content.WriteString("\n")
+
+	content.WriteString(labelStyle.Render("Startup Timeout: "))
+	content.WriteString(infoStyle.Render(fmt.Sprintf("%ds", m.server.StartupTimeout())))
+	content.WriteString("\n")
+
+	content.WriteString(labelStyle.Render("Tool Timeout: "))
+	content.WriteString(infoStyle.Render(fmt.Sprintf("%ds", m.server.ToolTimeout())))
+	content.WriteString("\n")
+
 	// Working directory
 	if m.server.Cwd != "" {
 		content.WriteString(labelStyle.Render("Working Dir: "))

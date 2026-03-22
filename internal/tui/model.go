@@ -295,7 +295,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if spec.CommandOrURL == "" {
 			return m, m.toast.ShowError("Server has no installable packages")
 		}
-		cmd := m.serverForm.ShowAddWithDefaults(spec.Name, spec.CommandOrURL, spec.Args, formatEnvMap(spec.Env), spec.BearerTokenEnvVar, "", "")
+		cmd := m.serverForm.ShowAddWithDefaults(spec.Name, spec.CommandOrURL, spec.Args, formatEnvMap(spec.Env), spec.BearerTokenEnvVar, "", "", "")
 		return m, cmd
 	}
 

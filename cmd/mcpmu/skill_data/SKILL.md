@@ -130,6 +130,11 @@ Flags for HTTP servers:
 - `--oauth-client-id` — pre-registered OAuth client ID (skips dynamic registration)
 - `--oauth-callback-port` — OAuth callback port (1-65535)
 
+General flags (stdio and HTTP):
+- `--autostart` — start server automatically on app launch
+- `--startup-timeout` — startup timeout in seconds (default: 10)
+- `--tool-timeout` — tool call timeout in seconds (default: 60)
+
 Note: `--bearer-env` and OAuth flags (`--oauth-client-id`, `--scopes`, `--oauth-callback-port`) are mutually exclusive.
 Note: Most OAuth servers advertise supported scopes via metadata — `--scopes` is only needed when the server doesn't or you want to restrict the requested set.
 
