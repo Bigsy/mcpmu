@@ -135,6 +135,13 @@ func (m *ServerDetailModel) updateContent() {
 	content.WriteString(infoStyle.Render(fmt.Sprintf("%ds", m.server.ToolTimeout())))
 	content.WriteString("\n")
 
+	// Denied tools
+	if len(m.server.DeniedTools) > 0 {
+		content.WriteString(labelStyle.Render("Denied Tools: "))
+		content.WriteString(m.theme.Danger.Render(strings.Join(m.server.DeniedTools, ", ")))
+		content.WriteString("\n")
+	}
+
 	// Working directory
 	if m.server.Cwd != "" {
 		content.WriteString(labelStyle.Render("Working Dir: "))
@@ -178,7 +185,13 @@ func (m *ServerDetailModel) updateContent() {
 			if i > 0 {
 				toolsContent.WriteString("\n")
 			}
-			toolsContent.WriteString(m.theme.Primary.Render(tool.Name))
+			if m.server.IsToolDenied(tool.Name) {
+				toolsContent.WriteString(m.theme.Faint.Render(tool.Name))
+				toolsContent.WriteString("  ")
+				toolsContent.WriteString(m.theme.Danger.Render("(denied)"))
+			} else {
+				toolsContent.WriteString(m.theme.Primary.Render(tool.Name))
+			}
 			if tokens, ok := m.toolTokens[tool.Name]; ok {
 				toolsContent.WriteString("  ")
 				toolsContent.WriteString(m.theme.Faint.Render(fmt.Sprintf("~%d tokens", tokens)))

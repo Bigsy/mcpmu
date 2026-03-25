@@ -327,24 +327,24 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 		go s.discoverAndNotify(stillPending)
 	}
 
-	// Filter tools based on permissions (if namespace is active)
-	if activeNamespaceName != "" {
-		filtered := make([]AggregatedTool, 0, len(tools))
-		for _, tool := range tools {
-			serverName, toolName, isManager := ParseToolName(tool.Name)
-			// Manager tools are always shown
-			if isManager {
-				filtered = append(filtered, tool)
-				continue
-			}
-			// Check permission for regular tools
-			allowed, _ := IsToolAllowed(s.cfg, activeNamespaceName, serverName, toolName)
-			if allowed {
-				filtered = append(filtered, tool)
-			}
+	// Filter tools based on permissions (always runs — IsToolAllowed handles
+	// global deny even without a namespace, and returns true for everything
+	// else when namespace is empty)
+	filtered := make([]AggregatedTool, 0, len(tools))
+	for _, tool := range tools {
+		serverName, toolName, isManager := ParseToolName(tool.Name)
+		// Manager tools are always shown
+		if isManager {
+			filtered = append(filtered, tool)
+			continue
 		}
-		tools = filtered
+		// Check permission for regular tools
+		allowed, _ := IsToolAllowed(s.cfg, activeNamespaceName, serverName, toolName)
+		if allowed {
+			filtered = append(filtered, tool)
+		}
 	}
+	tools = filtered
 
 	return toolsListResult{Tools: tools}, nil
 }

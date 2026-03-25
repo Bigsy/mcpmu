@@ -1241,3 +1241,188 @@ func TestCLI_Permission_List_WithServerDefaults_AndToolPermissions(t *testing.T)
 		t.Errorf("expected tool permission in output, got: %s", stdout)
 	}
 }
+
+// ============================================================================
+// Server Deny Tool CLI Tests
+// ============================================================================
+
+func TestCLI_Server_DenyTool(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	// Add a server first
+	_, _, err := runCLI(testBinary, configPath, "add", "my-server", "--", "echo", "hello")
+	if err != nil {
+		t.Fatalf("add failed: %v", err)
+	}
+
+	// Deny a tool
+	stdout, stderr, err := runCLI(testBinary, configPath, "server", "deny-tool", "my-server", "delete_file")
+	if err != nil {
+		t.Fatalf("server deny-tool failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Verify config
+	cfg, err := config.LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	srv, _ := cfg.GetServer("my-server")
+	if !srv.IsToolDenied("delete_file") {
+		t.Error("expected delete_file to be denied")
+	}
+
+	// Deny same tool again (idempotent)
+	_, _, err = runCLI(testBinary, configPath, "server", "deny-tool", "my-server", "delete_file")
+	if err != nil {
+		t.Fatalf("idempotent deny-tool failed: %v", err)
+	}
+	cfg, _ = config.LoadFrom(configPath)
+	srv, _ = cfg.GetServer("my-server")
+	if len(srv.DeniedTools) != 1 {
+		t.Errorf("expected 1 denied tool (idempotent), got %d", len(srv.DeniedTools))
+	}
+}
+
+func TestCLI_Server_DenyTool_Multiple(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "my-server", "--", "echo", "hello")
+
+	// Deny multiple tools in one call
+	stdout, stderr, err := runCLI(testBinary, configPath, "server", "deny-tool", "my-server", "delete_file", "move_file")
+	if err != nil {
+		t.Fatalf("server deny-tool multiple failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	cfg, _ := config.LoadFrom(configPath)
+	srv, _ := cfg.GetServer("my-server")
+	if len(srv.DeniedTools) != 2 {
+		t.Errorf("expected 2 denied tools, got %d: %v", len(srv.DeniedTools), srv.DeniedTools)
+	}
+}
+
+func TestCLI_Server_AllowTool(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "my-server", "--", "echo", "hello")
+	_, _, _ = runCLI(testBinary, configPath, "server", "deny-tool", "my-server", "delete_file")
+
+	// Allow the tool
+	stdout, stderr, err := runCLI(testBinary, configPath, "server", "allow-tool", "my-server", "delete_file")
+	if err != nil {
+		t.Fatalf("server allow-tool failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	cfg, _ := config.LoadFrom(configPath)
+	srv, _ := cfg.GetServer("my-server")
+	if srv.IsToolDenied("delete_file") {
+		t.Error("expected delete_file to no longer be denied")
+	}
+}
+
+func TestCLI_Server_AllowTool_NotDenied(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "my-server", "--", "echo", "hello")
+
+	// Allow a tool that isn't denied (no-op, no error)
+	_, _, err := runCLI(testBinary, configPath, "server", "allow-tool", "my-server", "read_file")
+	if err != nil {
+		t.Fatalf("allow-tool on non-denied tool should not error: %v", err)
+	}
+}
+
+func TestCLI_Server_DeniedTools(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "my-server", "--", "echo", "hello")
+	_, _, _ = runCLI(testBinary, configPath, "server", "deny-tool", "my-server", "delete_file", "move_file")
+
+	// List denied tools
+	stdout, stderr, err := runCLI(testBinary, configPath, "server", "denied-tools", "my-server")
+	if err != nil {
+		t.Fatalf("server denied-tools failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "delete_file") {
+		t.Errorf("expected delete_file in output, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "move_file") {
+		t.Errorf("expected move_file in output, got: %s", stdout)
+	}
+}
+
+func TestCLI_Server_DeniedTools_JSON(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "my-server", "--", "echo", "hello")
+	_, _, _ = runCLI(testBinary, configPath, "server", "deny-tool", "my-server", "delete_file")
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "server", "denied-tools", "my-server", "--json")
+	if err != nil {
+		t.Fatalf("server denied-tools --json failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	var tools []string
+	if err := json.Unmarshal([]byte(stdout), &tools); err != nil {
+		t.Fatalf("invalid JSON output: %v\nraw: %s", err, stdout)
+	}
+	if len(tools) != 1 || tools[0] != "delete_file" {
+		t.Errorf("expected [\"delete_file\"], got %v", tools)
+	}
+}
+
+func TestCLI_Server_DeniedTools_Empty(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "my-server", "--", "echo", "hello")
+
+	stdout, _, err := runCLI(testBinary, configPath, "server", "denied-tools", "my-server")
+	if err != nil {
+		t.Fatalf("server denied-tools (empty) failed: %v", err)
+	}
+
+	if !strings.Contains(stdout, "No denied tools") {
+		t.Errorf("expected 'No denied tools' message, got: %s", stdout)
+	}
+}
+
+func TestCLI_Server_DenyTool_NormalizesQualifiedName(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "add", "filesystem", "--", "echo", "hello")
+
+	// Deny using qualified name (as copied from tools/list)
+	_, _, err := runCLI(testBinary, configPath, "server", "deny-tool", "filesystem", "filesystem.delete_file")
+	if err != nil {
+		t.Fatalf("deny-tool with qualified name failed: %v", err)
+	}
+
+	cfg, _ := config.LoadFrom(configPath)
+	srv, _ := cfg.GetServer("filesystem")
+	// Should be stored as unqualified "delete_file", not "filesystem.delete_file"
+	if srv.IsToolDenied("filesystem.delete_file") {
+		t.Error("should not store qualified name verbatim")
+	}
+	if !srv.IsToolDenied("delete_file") {
+		t.Error("expected unqualified 'delete_file' to be denied after normalization")
+	}
+}
+
+func TestCLI_Server_DenyTool_ServerNotFound(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, err := runCLI(testBinary, configPath, "server", "deny-tool", "nonexistent", "tool")
+	if err == nil {
+		t.Fatal("expected error for non-existent server")
+	}
+}

@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -65,6 +66,9 @@ type ToolPermissionsModel struct {
 	denyByDefault  bool
 	serverDefaults map[string]bool // per-server deny-default overrides
 
+	// Server-level global deny (serverName -> denied tool names)
+	globalDenied map[string][]string
+
 	// Auto-start tracking
 	autoStartedServers []string // Servers we started for this session
 	discovering        bool     // True while waiting for tools
@@ -78,6 +82,14 @@ type ToolPermissionsModel struct {
 	denyAllKey    key.Binding
 }
 
+// isGloballyDenied returns whether a tool is in the server's global deny list.
+func (m *ToolPermissionsModel) isGloballyDenied(serverID, toolName string) bool {
+	if m.globalDenied == nil {
+		return false
+	}
+	return slices.Contains(m.globalDenied[serverID], toolName)
+}
+
 // defaultAllowed returns whether tools from the given server are allowed by default.
 func (m *ToolPermissionsModel) defaultAllowed(serverID string) bool {
 	if sd, ok := m.serverDefaults[serverID]; ok {
@@ -88,7 +100,7 @@ func (m *ToolPermissionsModel) defaultAllowed(serverID string) bool {
 
 // NewToolPermissions creates a new tool permissions editor.
 func NewToolPermissions(th theme.Theme) ToolPermissionsModel {
-	delegate := newToolPermDelegate(th, make(map[string]bool), false, nil)
+	delegate := newToolPermDelegate(th, make(map[string]bool), false, nil, nil)
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = "Tool Permissions"
 	l.SetShowStatusBar(false)
@@ -129,6 +141,7 @@ func NewToolPermissions(th theme.Theme) ToolPermissionsModel {
 // Show displays the editor with tools from running servers.
 // serverTools maps serverName -> list of tools
 // permissions are the current explicit permissions
+// globalDenied maps serverName -> list of globally denied tool names
 func (m *ToolPermissionsModel) Show(
 	namespaceName string,
 	serverTools map[string][]events.McpTool,
@@ -136,11 +149,13 @@ func (m *ToolPermissionsModel) Show(
 	permissions []config.ToolPermission,
 	denyByDefault bool,
 	serverDefaults map[string]bool,
+	globalDenied map[string][]string,
 ) {
 	m.visible = true
 	m.namespaceID = namespaceName
 	m.denyByDefault = denyByDefault
 	m.serverDefaults = serverDefaults
+	m.globalDenied = globalDenied
 	m.originalPerms = make(map[string]bool)
 	m.currentPerms = make(map[string]bool)
 
@@ -187,7 +202,7 @@ func (m *ToolPermissionsModel) Show(
 	}
 
 	m.list.SetItems(items)
-	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults))
+	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
 }
 
 // Hide hides the editor.
@@ -242,11 +257,13 @@ func (m *ToolPermissionsModel) FinishDiscovery(
 	permissions []config.ToolPermission,
 	denyByDefault bool,
 	serverDefaults map[string]bool,
+	globalDenied map[string][]string,
 ) {
 	m.discovering = false
 	m.discoveryTimeout = false
 	m.denyByDefault = denyByDefault
 	m.serverDefaults = serverDefaults
+	m.globalDenied = globalDenied
 
 	// Build permission lookup
 	for _, perm := range permissions {
@@ -291,7 +308,7 @@ func (m *ToolPermissionsModel) FinishDiscovery(
 	}
 
 	m.list.SetItems(items)
-	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults))
+	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
 }
 
 // SetSize sets the available size.
@@ -390,10 +407,10 @@ func (m *ToolPermissionsModel) Update(msg tea.Msg) tea.Cmd {
 				}
 			}
 		case key.Matches(msg, m.spaceKey):
-			// Toggle permission
+			// Toggle permission (no-op for globally denied tools)
 			if item := m.list.SelectedItem(); item != nil {
 				ti := item.(toolPermItem)
-				if !ti.isHeader {
+				if !ti.isHeader && !m.isGloballyDenied(ti.serverID, ti.toolName) {
 					key := ti.serverID + ":" + ti.toolName
 					current, has := m.currentPerms[key]
 					if !has {
@@ -408,19 +425,19 @@ func (m *ToolPermissionsModel) Update(msg tea.Msg) tea.Cmd {
 						m.currentPerms[key] = newValue
 					}
 					// Update delegate
-					m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults))
+					m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
 				}
 			}
 			return nil
 		case key.Matches(msg, m.enableSafeKey):
 			// Enable all safe tools (those classified as ToolSafe)
 			m.applyBulkEnableSafe()
-			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults))
+			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
 			return nil
 		case key.Matches(msg, m.denyAllKey):
 			// Deny all tools
 			m.applyBulkDenyAll()
-			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults))
+			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
 			return nil
 		}
 	}
@@ -432,10 +449,16 @@ func (m *ToolPermissionsModel) Update(msg tea.Msg) tea.Cmd {
 
 // applyBulkEnableSafe enables all tools classified as safe (read-only).
 // Unknown tools are left unchanged. Unsafe tools are not modified.
+// Globally denied tools are skipped.
 func (m *ToolPermissionsModel) applyBulkEnableSafe() {
 	for _, item := range m.list.Items() {
 		ti, ok := item.(toolPermItem)
 		if !ok || ti.isHeader {
+			continue
+		}
+
+		// Skip globally denied tools
+		if m.isGloballyDenied(ti.serverID, ti.toolName) {
 			continue
 		}
 
@@ -457,11 +480,16 @@ func (m *ToolPermissionsModel) applyBulkEnableSafe() {
 	}
 }
 
-// applyBulkDenyAll denies all tools.
+// applyBulkDenyAll denies all tools. Globally denied tools are skipped.
 func (m *ToolPermissionsModel) applyBulkDenyAll() {
 	for _, item := range m.list.Items() {
 		ti, ok := item.(toolPermItem)
 		if !ok || ti.isHeader {
+			continue
+		}
+
+		// Skip globally denied tools
+		if m.isGloballyDenied(ti.serverID, ti.toolName) {
 			continue
 		}
 
@@ -518,20 +546,25 @@ func (m ToolPermissionsModel) RenderOverlay(base string, width, height int) stri
 		// Normal editing state
 		var footer strings.Builder
 
-		// Show selected tool description
+		// Show selected tool description or global deny hint
 		if item := m.list.SelectedItem(); item != nil {
 			if ti, ok := item.(toolPermItem); ok && !ti.isHeader {
-				desc := ti.description
-				if desc == "" {
-					desc = "(no description)"
+				if m.isGloballyDenied(ti.serverID, ti.toolName) {
+					footer.WriteString(m.theme.Danger.Render("This tool is globally denied on the server — edit via server deny-tool"))
+					footer.WriteString("\n")
+				} else {
+					desc := ti.description
+					if desc == "" {
+						desc = "(no description)"
+					}
+					// Wrap long descriptions
+					maxDescWidth := editorWidth - 8
+					if len(desc) > maxDescWidth {
+						desc = desc[:maxDescWidth-3] + "..."
+					}
+					footer.WriteString(m.theme.Muted.Render(desc))
+					footer.WriteString("\n")
 				}
-				// Wrap long descriptions
-				maxDescWidth := editorWidth - 8
-				if len(desc) > maxDescWidth {
-					desc = desc[:maxDescWidth-3] + "..."
-				}
-				footer.WriteString(m.theme.Muted.Render(desc))
-				footer.WriteString("\n")
 			}
 		}
 
@@ -584,6 +617,15 @@ type toolPermDelegate struct {
 	perms          map[string]bool
 	denyByDefault  bool
 	serverDefaults map[string]bool
+	globalDenied   map[string][]string // serverName -> denied tools
+}
+
+// isGloballyDenied returns whether a tool is in the server's global deny list.
+func (d toolPermDelegate) isGloballyDenied(serverID, toolName string) bool {
+	if d.globalDenied == nil {
+		return false
+	}
+	return slices.Contains(d.globalDenied[serverID], toolName)
 }
 
 // defaultAllowed returns whether tools from the given server are allowed by default.
@@ -594,8 +636,8 @@ func (d toolPermDelegate) defaultAllowed(serverID string) bool {
 	return !d.denyByDefault
 }
 
-func newToolPermDelegate(th theme.Theme, perms map[string]bool, denyByDefault bool, serverDefaults map[string]bool) toolPermDelegate {
-	return toolPermDelegate{theme: th, perms: perms, denyByDefault: denyByDefault, serverDefaults: serverDefaults}
+func newToolPermDelegate(th theme.Theme, perms map[string]bool, denyByDefault bool, serverDefaults map[string]bool, globalDenied map[string][]string) toolPermDelegate {
+	return toolPermDelegate{theme: th, perms: perms, denyByDefault: denyByDefault, serverDefaults: serverDefaults, globalDenied: globalDenied}
 }
 
 func (d toolPermDelegate) Height() int  { return 1 }
@@ -622,6 +664,15 @@ func (d toolPermDelegate) Render(w io.Writer, m list.Model, index int, item list
 	cursor := "  "
 	if selected {
 		cursor = "> "
+	}
+
+	// Check if globally denied (locked)
+	if d.isGloballyDenied(ti.serverID, ti.toolName) {
+		checkbox := d.theme.Danger.Render("[X]")
+		name := d.theme.Faint.Render(ti.toolName)
+		suffix := d.theme.Danger.Render(" (server denied)")
+		_, _ = fmt.Fprintf(w, "%s%s %s%s", cursor, checkbox, name, suffix)
+		return
 	}
 
 	// Determine current state

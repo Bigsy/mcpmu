@@ -30,7 +30,7 @@ func TestToolPermissions_Show(t *testing.T) {
 		{Namespace: "ns1", Server: "Server 1", ToolName: "read_file", Enabled: true},
 	}
 
-	perms.Show("ns1", serverTools, servers, permissions, false, nil)
+	perms.Show("ns1", serverTools, servers, permissions, false, nil, nil)
 
 	if !perms.IsVisible() {
 		t.Error("should be visible after Show")
@@ -61,7 +61,7 @@ func TestToolPermissions_Show_WithDenyByDefault(t *testing.T) {
 		{Name: "Server 1", Config: config.ServerConfig{Command: "cmd"}},
 	}
 
-	perms.Show("ns1", serverTools, servers, nil, true, nil)
+	perms.Show("ns1", serverTools, servers, nil, true, nil, nil)
 
 	if !perms.denyByDefault {
 		t.Error("denyByDefault should be true")
@@ -75,7 +75,7 @@ func TestToolPermissions_Hide(t *testing.T) {
 	serverTools := map[string][]events.McpTool{
 		"Server 1": {{Name: "tool1"}},
 	}
-	perms.Show("ns1", serverTools, nil, nil, false, nil)
+	perms.Show("ns1", serverTools, nil, nil, false, nil, nil)
 
 	if !perms.IsVisible() {
 		t.Fatal("should be visible")
@@ -168,7 +168,7 @@ func TestToolPermissions_FinishDiscovery(t *testing.T) {
 		{Name: "Server 1", Config: config.ServerConfig{Command: "cmd"}},
 	}
 
-	perms.FinishDiscovery(serverTools, servers, nil, false, nil)
+	perms.FinishDiscovery(serverTools, servers, nil, false, nil, nil)
 
 	if perms.IsDiscovering() {
 		t.Error("should not be in discovering mode after FinishDiscovery")
@@ -202,7 +202,7 @@ func TestToolPermissions_BulkEnableSafe(t *testing.T) {
 	}
 
 	// Test with denyByDefault=true (need to explicitly allow safe tools)
-	perms.Show("ns1", serverTools, servers, nil, true, nil)
+	perms.Show("ns1", serverTools, servers, nil, true, nil, nil)
 	perms.applyBulkEnableSafe()
 
 	// Safe tools should be explicitly allowed
@@ -238,7 +238,7 @@ func TestToolPermissions_BulkDenyAll(t *testing.T) {
 	}
 
 	// Test with denyByDefault=false (need to explicitly deny all)
-	perms.Show("ns1", serverTools, servers, nil, false, nil)
+	perms.Show("ns1", serverTools, servers, nil, false, nil, nil)
 	perms.applyBulkDenyAll()
 
 	// All tools should be explicitly denied
@@ -276,7 +276,7 @@ func TestToolPermissions_AutoStartedServersInResult(t *testing.T) {
 
 	// Start with auto-started servers tracked
 	perms.ShowDiscovering("ns1", []string{"Server 1", "Server 2"})
-	perms.FinishDiscovery(serverTools, servers, nil, false, nil)
+	perms.FinishDiscovery(serverTools, servers, nil, false, nil, nil)
 
 	// Verify auto-started servers are still tracked
 	got := perms.GetAutoStartedServers()
@@ -310,7 +310,7 @@ func TestToolPermissions_Show_WithServerDefaults(t *testing.T) {
 
 	// Namespace allows by default, but srv1 denies by default
 	serverDefaults := map[string]bool{"srv1": true}
-	perms.Show("ns1", serverTools, servers, nil, false, serverDefaults)
+	perms.Show("ns1", serverTools, servers, nil, false, serverDefaults, nil)
 
 	// srv1 tools should default to denied (server default deny)
 	// No explicit permissions, so they should not be in currentPerms
@@ -357,7 +357,7 @@ func TestToolPermissions_Toggle_WithServerDefault(t *testing.T) {
 
 	// srv1 denies by default
 	serverDefaults := map[string]bool{"srv1": true}
-	perms.Show("ns1", serverTools, servers, nil, false, serverDefaults)
+	perms.Show("ns1", serverTools, servers, nil, false, serverDefaults, nil)
 
 	// Initially no explicit perm; default is deny
 	if _, exists := perms.currentPerms["srv1:read_file"]; exists {
@@ -405,7 +405,7 @@ func TestToolPermissions_BulkEnableSafe_WithServerDefaults(t *testing.T) {
 
 	// srv1 denies by default, namespace allows by default
 	serverDefaults := map[string]bool{"srv1": true}
-	perms.Show("ns1", serverTools, servers, nil, false, serverDefaults)
+	perms.Show("ns1", serverTools, servers, nil, false, serverDefaults, nil)
 	perms.applyBulkEnableSafe()
 
 	// srv1:read_file should be explicitly allowed (server default is deny)
@@ -416,6 +416,124 @@ func TestToolPermissions_BulkEnableSafe_WithServerDefaults(t *testing.T) {
 	// srv2:get_info should NOT have explicit perm (namespace default is allow, so safe tool already allowed)
 	if _, exists := perms.currentPerms["srv2:get_info"]; exists {
 		t.Error("srv2:get_info should not have explicit perm (already allowed by namespace default)")
+	}
+}
+
+// ============================================================================
+// Global Deny TUI Tests
+// ============================================================================
+
+func TestToolPermissions_Show_WithGlobalDeny(t *testing.T) {
+	th := theme.New()
+	perms := NewToolPermissions(th)
+	perms.SetSize(100, 50)
+
+	serverTools := map[string][]events.McpTool{
+		"srv1": {
+			{Name: "read_file", Description: "Read"},
+			{Name: "delete_file", Description: "Delete"},
+		},
+	}
+	servers := []config.ServerEntry{
+		{Name: "srv1", Config: config.ServerConfig{Command: "cmd"}},
+	}
+	globalDenied := map[string][]string{"srv1": {"delete_file"}}
+
+	perms.Show("ns1", serverTools, servers, nil, false, nil, globalDenied)
+
+	// Both tools should appear in the list (globally denied ones are visible but locked)
+	items := perms.list.Items()
+	if len(items) != 3 { // 1 header + 2 tools
+		t.Errorf("expected 3 items (1 header + 2 tools), got %d", len(items))
+	}
+}
+
+func TestToolPermissions_Toggle_GlobalDenyIsNoOp(t *testing.T) {
+	th := theme.New()
+	perms := NewToolPermissions(th)
+	perms.SetSize(100, 50)
+
+	serverTools := map[string][]events.McpTool{
+		"srv1": {
+			{Name: "delete_file", Description: "Delete"},
+		},
+	}
+	servers := []config.ServerEntry{
+		{Name: "srv1", Config: config.ServerConfig{Command: "cmd"}},
+	}
+	globalDenied := map[string][]string{"srv1": {"delete_file"}}
+
+	perms.Show("ns1", serverTools, servers, nil, false, nil, globalDenied)
+
+	// Move cursor to the tool (skip past header at index 0)
+	perms.list.Select(1)
+
+	// Toggle should be a no-op
+	spaceMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
+	perms.Update(spaceMsg)
+
+	if _, exists := perms.currentPerms["srv1:delete_file"]; exists {
+		t.Error("toggle on globally denied tool should be a no-op")
+	}
+}
+
+func TestToolPermissions_BulkEnableSafe_SkipsGlobalDeny(t *testing.T) {
+	th := theme.New()
+	perms := NewToolPermissions(th)
+	perms.SetSize(100, 50)
+
+	serverTools := map[string][]events.McpTool{
+		"srv1": {
+			{Name: "read_file", Description: "Read"},    // safe
+			{Name: "get_info", Description: "Get info"}, // safe but globally denied
+		},
+	}
+	servers := []config.ServerEntry{
+		{Name: "srv1", Config: config.ServerConfig{Command: "cmd"}},
+	}
+	globalDenied := map[string][]string{"srv1": {"get_info"}}
+
+	perms.Show("ns1", serverTools, servers, nil, true, nil, globalDenied)
+	perms.applyBulkEnableSafe()
+
+	// read_file should be explicitly allowed (safe, not globally denied)
+	if !perms.currentPerms["srv1:read_file"] {
+		t.Error("read_file should be enabled (safe tool, not globally denied)")
+	}
+
+	// get_info should NOT be in currentPerms (globally denied, skipped)
+	if _, exists := perms.currentPerms["srv1:get_info"]; exists {
+		t.Error("get_info should not be in currentPerms (globally denied)")
+	}
+}
+
+func TestToolPermissions_BulkDenyAll_SkipsGlobalDeny(t *testing.T) {
+	th := theme.New()
+	perms := NewToolPermissions(th)
+	perms.SetSize(100, 50)
+
+	serverTools := map[string][]events.McpTool{
+		"srv1": {
+			{Name: "read_file", Description: "Read"},
+			{Name: "delete_file", Description: "Delete"}, // globally denied
+		},
+	}
+	servers := []config.ServerEntry{
+		{Name: "srv1", Config: config.ServerConfig{Command: "cmd"}},
+	}
+	globalDenied := map[string][]string{"srv1": {"delete_file"}}
+
+	perms.Show("ns1", serverTools, servers, nil, false, nil, globalDenied)
+	perms.applyBulkDenyAll()
+
+	// read_file should be explicitly denied
+	if enabled, exists := perms.currentPerms["srv1:read_file"]; !exists || enabled {
+		t.Error("read_file should be explicitly denied")
+	}
+
+	// delete_file should NOT be in currentPerms (globally denied, skipped)
+	if _, exists := perms.currentPerms["srv1:delete_file"]; exists {
+		t.Error("delete_file should not be in currentPerms (globally denied)")
 	}
 }
 
@@ -439,7 +557,7 @@ func TestToolPermissions_BulkDenyAll_WithServerDefaults(t *testing.T) {
 
 	// srv1 denies by default, namespace allows by default
 	serverDefaults := map[string]bool{"srv1": true}
-	perms.Show("ns1", serverTools, servers, nil, false, serverDefaults)
+	perms.Show("ns1", serverTools, servers, nil, false, serverDefaults, nil)
 	perms.applyBulkDenyAll()
 
 	// srv1:read_file - server default is deny, so bulk deny should remove explicit (revert to default deny)

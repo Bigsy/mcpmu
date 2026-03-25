@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -51,6 +52,9 @@ type ServerConfig struct {
 	// Timeouts (seconds)
 	StartupTimeoutSec int `json:"startup_timeout_sec,omitempty"` // Default 10
 	ToolTimeoutSec    int `json:"tool_timeout_sec,omitempty"`    // Default 60
+
+	// Global deny list — tools listed here are denied regardless of namespace permissions
+	DeniedTools []string `json:"deniedTools,omitempty"`
 }
 
 // UnmarshalJSON implements custom JSON unmarshaling for backward compatibility.
@@ -179,6 +183,11 @@ func (s ServerConfig) ToolTimeout() int {
 		return 60
 	}
 	return s.ToolTimeoutSec
+}
+
+// IsToolDenied returns whether the tool is in the server's global deny list.
+func (s ServerConfig) IsToolDenied(toolName string) bool {
+	return slices.Contains(s.DeniedTools, toolName)
 }
 
 // SetEnabled sets the enabled state.

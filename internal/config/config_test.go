@@ -1595,3 +1595,239 @@ func TestConfig_BackwardCompatMigrationRoundTrip(t *testing.T) {
 		t.Errorf("expected migrated Scopes [read write], got %v", srv.OAuth.Scopes)
 	}
 }
+
+// ============================================================================
+// DeniedTools / Global Deny Tests
+// ============================================================================
+
+func TestServerConfig_IsToolDenied(t *testing.T) {
+	srv := ServerConfig{Command: "echo", DeniedTools: []string{"delete_file", "move_file"}}
+	if !srv.IsToolDenied("delete_file") {
+		t.Error("expected delete_file to be denied")
+	}
+	if !srv.IsToolDenied("move_file") {
+		t.Error("expected move_file to be denied")
+	}
+	if srv.IsToolDenied("read_file") {
+		t.Error("expected read_file to NOT be denied")
+	}
+
+	// Empty deny list
+	empty := ServerConfig{Command: "echo"}
+	if empty.IsToolDenied("anything") {
+		t.Error("expected no tools denied on empty list")
+	}
+}
+
+func TestConfig_DenyTool(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
+
+	// Deny a tool
+	if err := cfg.DenyTool("srv1", "delete_file"); err != nil {
+		t.Fatalf("DenyTool failed: %v", err)
+	}
+	srv := cfg.Servers["srv1"]
+	if len(srv.DeniedTools) != 1 || srv.DeniedTools[0] != "delete_file" {
+		t.Errorf("expected [delete_file], got %v", srv.DeniedTools)
+	}
+
+	// Idempotent: deny same tool again
+	if err := cfg.DenyTool("srv1", "delete_file"); err != nil {
+		t.Fatalf("DenyTool (idempotent) failed: %v", err)
+	}
+	srv = cfg.Servers["srv1"]
+	if len(srv.DeniedTools) != 1 {
+		t.Errorf("expected idempotent deny, got %v", srv.DeniedTools)
+	}
+
+	// Deny another tool — result should be sorted
+	if err := cfg.DenyTool("srv1", "a_tool"); err != nil {
+		t.Fatalf("DenyTool failed: %v", err)
+	}
+	srv = cfg.Servers["srv1"]
+	if len(srv.DeniedTools) != 2 || srv.DeniedTools[0] != "a_tool" || srv.DeniedTools[1] != "delete_file" {
+		t.Errorf("expected sorted [a_tool, delete_file], got %v", srv.DeniedTools)
+	}
+}
+
+func TestConfig_DenyTool_ServerNotFound(t *testing.T) {
+	cfg := NewConfig()
+	err := cfg.DenyTool("nonexistent", "tool")
+	if err == nil {
+		t.Fatal("expected error for non-existent server")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' in error, got: %v", err)
+	}
+}
+
+func TestConfig_AllowTool(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo", DeniedTools: []string{"delete_file", "move_file"}}
+
+	// Remove a denied tool
+	if err := cfg.AllowTool("srv1", "delete_file"); err != nil {
+		t.Fatalf("AllowTool failed: %v", err)
+	}
+	srv := cfg.Servers["srv1"]
+	if len(srv.DeniedTools) != 1 || srv.DeniedTools[0] != "move_file" {
+		t.Errorf("expected [move_file], got %v", srv.DeniedTools)
+	}
+
+	// Remove non-denied tool (no-op)
+	if err := cfg.AllowTool("srv1", "read_file"); err != nil {
+		t.Fatalf("AllowTool (no-op) failed: %v", err)
+	}
+	srv = cfg.Servers["srv1"]
+	if len(srv.DeniedTools) != 1 {
+		t.Errorf("expected no-op, got %v", srv.DeniedTools)
+	}
+
+	// Remove last tool — DeniedTools becomes nil
+	if err := cfg.AllowTool("srv1", "move_file"); err != nil {
+		t.Fatalf("AllowTool failed: %v", err)
+	}
+	srv = cfg.Servers["srv1"]
+	if srv.DeniedTools != nil {
+		t.Errorf("expected nil DeniedTools, got %v", srv.DeniedTools)
+	}
+}
+
+func TestConfig_GetDeniedTools(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo", DeniedTools: []string{"z_tool", "a_tool"}}
+
+	tools, err := cfg.GetDeniedTools("srv1")
+	if err != nil {
+		t.Fatalf("GetDeniedTools failed: %v", err)
+	}
+	if len(tools) != 2 || tools[0] != "a_tool" || tools[1] != "z_tool" {
+		t.Errorf("expected sorted [a_tool, z_tool], got %v", tools)
+	}
+
+	// Returns copy — modifying shouldn't affect config
+	tools[0] = "modified"
+	srv := cfg.Servers["srv1"]
+	if srv.DeniedTools[0] == "modified" {
+		t.Error("GetDeniedTools should return a copy")
+	}
+}
+
+func TestConfig_GetDeniedTools_ServerNotFound(t *testing.T) {
+	cfg := NewConfig()
+	_, err := cfg.GetDeniedTools("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for non-existent server")
+	}
+}
+
+func TestConfig_RenameServer_PreservesDeniedTools(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["old"] = ServerConfig{Command: "echo", DeniedTools: []string{"delete_file"}}
+
+	if err := cfg.RenameServer("old", "new"); err != nil {
+		t.Fatalf("RenameServer failed: %v", err)
+	}
+
+	srv, ok := cfg.Servers["new"]
+	if !ok {
+		t.Fatal("expected new server to exist")
+	}
+	if len(srv.DeniedTools) != 1 || srv.DeniedTools[0] != "delete_file" {
+		t.Errorf("expected DeniedTools to travel with server, got %v", srv.DeniedTools)
+	}
+}
+
+func TestConfig_DeleteServer_CleansDeniedTools(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo", DeniedTools: []string{"delete_file"}}
+
+	if err := cfg.DeleteServer("srv1"); err != nil {
+		t.Fatalf("DeleteServer failed: %v", err)
+	}
+
+	if _, ok := cfg.Servers["srv1"]; ok {
+		t.Error("expected server to be deleted")
+	}
+}
+
+func TestLoad_ServerWithDeniedTools(t *testing.T) {
+	home := testutil.SetupTestHome(t)
+
+	configJSON := `{
+		"schemaVersion": 1,
+		"servers": {
+			"filesystem": {
+				"command": "echo",
+				"deniedTools": ["delete_file", "move_file"]
+			}
+		}
+	}`
+
+	configPath := filepath.Join(home, ".config", "mcpmu", "config.json")
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	srv, ok := cfg.GetServer("filesystem")
+	if !ok {
+		t.Fatal("expected server 'filesystem' to exist")
+	}
+	if len(srv.DeniedTools) != 2 {
+		t.Errorf("expected 2 denied tools, got %d", len(srv.DeniedTools))
+	}
+	if !srv.IsToolDenied("delete_file") {
+		t.Error("expected delete_file to be denied")
+	}
+	if !srv.IsToolDenied("move_file") {
+		t.Error("expected move_file to be denied")
+	}
+}
+
+func TestSave_ServerWithDeniedTools(t *testing.T) {
+	testutil.SetupTestHome(t)
+
+	cfg := NewConfig()
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo", DeniedTools: []string{"delete_file"}}
+
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load after Save failed: %v", err)
+	}
+
+	srv := loaded.Servers["srv1"]
+	if len(srv.DeniedTools) != 1 || srv.DeniedTools[0] != "delete_file" {
+		t.Errorf("expected [delete_file] after round-trip, got %v", srv.DeniedTools)
+	}
+}
+
+func TestSave_ServerWithDeniedTools_OmittedWhenEmpty(t *testing.T) {
+	testutil.SetupTestHome(t)
+
+	cfg := NewConfig()
+	cfg.Servers["srv1"] = ServerConfig{Command: "echo"}
+
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	// Read raw JSON and verify no deniedTools key
+	path, _ := ConfigPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if strings.Contains(string(data), "deniedTools") {
+		t.Error("expected omitempty to suppress deniedTools key in JSON")
+	}
+}

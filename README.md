@@ -122,7 +122,17 @@ mcpmu permission set-server-default work grafana deny
 mcpmu permission set work grafana query_loki_logs allow
 ```
 
-Permission resolution order: **explicit tool permission > server default > namespace default > allow**.
+### Server-level global deny
+
+For defense-in-depth, you can deny tools at the server level. Globally denied tools are blocked regardless of namespace permissions — even a namespace explicit allow cannot override a server global deny:
+
+```bash
+mcpmu server deny-tool filesystem delete_file move_file
+mcpmu server allow-tool filesystem move_file   # re-enable
+mcpmu server denied-tools filesystem           # list denied tools
+```
+
+Permission resolution order: **server global deny > explicit tool permission > server default > namespace default > allow**.
 
 A common pattern: keep a lean namespace with only your most-used tools for everyday work, and an "extra" namespace with the full suite that you add as a second MCP server when needed.
 
@@ -186,6 +196,14 @@ mcpmu namespace set-deny-default <namespace> <true|false>
 mcpmu namespace rename <old-name> <new-name>
 ```
 
+### Server commands
+
+```bash
+mcpmu server deny-tool <server> <tool> [<tool>...]
+mcpmu server allow-tool <server> <tool> [<tool>...]
+mcpmu server denied-tools <server> [--json]
+```
+
 ### Permission commands
 
 ```bash
@@ -242,7 +260,8 @@ With optional fields:
       "cwd": "/path/to/dir",
       "env": {"FOO": "bar"},
       "autostart": true,
-      "enabled": false
+      "enabled": false,
+      "deniedTools": ["delete_file", "move_file"]
     }
   }
 }

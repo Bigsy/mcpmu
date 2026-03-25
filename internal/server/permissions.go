@@ -58,7 +58,12 @@ func CheckPermission(cfg *config.Config, namespaceName, serverName, toolName str
 // 4. No server default → check namespace DenyByDefault
 // 5. If deny → deny; otherwise → allow
 func IsToolAllowed(cfg *config.Config, namespaceName, serverName, toolName string) (bool, string) {
-	// No namespace means no permission enforcement
+	// Check server-level global deny first (applies even without a namespace)
+	if srv, ok := cfg.GetServer(serverName); ok && srv.IsToolDenied(toolName) {
+		return false, "tool is globally denied on this server"
+	}
+
+	// No namespace means no further permission enforcement
 	if namespaceName == "" {
 		return true, ""
 	}

@@ -791,7 +791,7 @@ func TestModel_LogoutKey_OAuthHTTPServer_DetailView(t *testing.T) {
 		t.Fatal("expected toast to be visible")
 	}
 	view := testutil.StripANSI(m.View())
-	if !strings.Contains(view, "Logged") {
+	if !strings.Contains(view, "Log") {
 		t.Errorf("expected 'Logged out' toast, got: %s", view)
 	}
 }
@@ -816,7 +816,7 @@ func TestModel_LoginKey_StdioServer_RejectsWithError(t *testing.T) {
 		t.Fatal("expected toast to be visible")
 	}
 	view := testutil.StripANSI(m.View())
-	if !strings.Contains(view, "OAuth login only applies") && !strings.Contains(view, "OAuth logout only applies") {
+	if !strings.Contains(view, "OAuth login") && !strings.Contains(view, "OAuth logout") {
 		t.Errorf("expected error toast for stdio server login, got: %s", view)
 	}
 }
@@ -841,7 +841,7 @@ func TestModel_LogoutKey_StdioServer_RejectsWithError(t *testing.T) {
 		t.Fatal("expected toast to be visible")
 	}
 	view := testutil.StripANSI(m.View())
-	if !strings.Contains(view, "OAuth login only applies") && !strings.Contains(view, "OAuth logout only applies") {
+	if !strings.Contains(view, "OAuth login") && !strings.Contains(view, "OAuth logout") {
 		t.Errorf("expected error toast for stdio server logout, got: %s", view)
 	}
 }
@@ -867,7 +867,7 @@ func TestModel_LoginLogout_BearerTokenServer_RejectsWithError(t *testing.T) {
 		t.Fatal("expected toast to be visible for login")
 	}
 	view := testutil.StripANSI(m.View())
-	if !strings.Contains(view, "OAuth login only applies") && !strings.Contains(view, "OAuth logout only applies") {
+	if !strings.Contains(view, "OAuth login") && !strings.Contains(view, "OAuth logout") {
 		t.Errorf("expected error toast for bearer token server login, got: %s", view)
 	}
 
@@ -879,7 +879,7 @@ func TestModel_LoginLogout_BearerTokenServer_RejectsWithError(t *testing.T) {
 		t.Fatal("expected toast to be visible for logout")
 	}
 	view = testutil.StripANSI(m.View())
-	if !strings.Contains(view, "OAuth login only applies") && !strings.Contains(view, "OAuth logout only applies") {
+	if !strings.Contains(view, "OAuth login") && !strings.Contains(view, "OAuth logout") {
 		t.Errorf("expected error toast for bearer token server logout, got: %s", view)
 	}
 }

@@ -123,14 +123,17 @@ This keeps `tools/list` responsive for clients with tight request timeouts while
 
 ## Permission Resolution
 
-Tool access within a namespace follows a three-tier resolution:
+Tool access follows a four-tier resolution. The server-level global deny applies even without a namespace:
 
-1. **Explicit tool permission** (`permission set`) — highest priority
-2. **Per-server default** (`permission set-server-default`) — overrides namespace default for one server
-3. **Namespace default** (`namespace set-deny-default`) — fallback for all servers
-4. **Allow** — if nothing else applies
+1. **Server global deny** (`server deny-tool`) — hard block, no override. Applies even without a namespace.
+2. **Explicit tool permission** (`permission set`) — highest namespace-level priority
+3. **Per-server default** (`permission set-server-default`) — overrides namespace default for one server
+4. **Namespace default** (`namespace set-deny-default`) — fallback for all servers
+5. **Allow** — if nothing else applies
 
-This enables fine-grained control: deny a tool-heavy server by default and allowlist only the tools you need, without affecting other servers in the same namespace.
+A namespace-level explicit allow **cannot** override a server global deny. To re-enable a globally denied tool, remove it from `deniedTools` via `server allow-tool`.
+
+This enables defense-in-depth: globally deny dangerous tools at the server level, then use namespace permissions for fine-grained control over the rest.
 
 ## Tool Namespacing
 

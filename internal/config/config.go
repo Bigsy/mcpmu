@@ -537,6 +537,46 @@ func (c *Config) UnsetServerDefault(namespaceName, serverName string) error {
 	return nil
 }
 
+// DenyTool adds a tool to a server's global deny list (idempotent).
+func (c *Config) DenyTool(serverName, toolName string) error {
+	srv, exists := c.Servers[serverName]
+	if !exists {
+		return fmt.Errorf("server %q not found", serverName)
+	}
+	if srv.IsToolDenied(toolName) {
+		return nil // Already denied, no-op
+	}
+	srv.DeniedTools = append(srv.DeniedTools, toolName)
+	slices.Sort(srv.DeniedTools)
+	c.Servers[serverName] = srv
+	return nil
+}
+
+// AllowTool removes a tool from a server's global deny list (no-op if not denied).
+func (c *Config) AllowTool(serverName, toolName string) error {
+	srv, exists := c.Servers[serverName]
+	if !exists {
+		return fmt.Errorf("server %q not found", serverName)
+	}
+	srv.DeniedTools = removeString(srv.DeniedTools, toolName)
+	if len(srv.DeniedTools) == 0 {
+		srv.DeniedTools = nil
+	}
+	c.Servers[serverName] = srv
+	return nil
+}
+
+// GetDeniedTools returns a sorted copy of a server's global deny list.
+func (c *Config) GetDeniedTools(serverName string) ([]string, error) {
+	srv, exists := c.Servers[serverName]
+	if !exists {
+		return nil, fmt.Errorf("server %q not found", serverName)
+	}
+	result := append([]string{}, srv.DeniedTools...)
+	slices.Sort(result)
+	return result, nil
+}
+
 // GetToolPermissionsForNamespace returns all tool permissions for a namespace.
 func (c *Config) GetToolPermissionsForNamespace(namespaceName string) []ToolPermission {
 	result := []ToolPermission{}

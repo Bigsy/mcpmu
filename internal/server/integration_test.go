@@ -1923,3 +1923,340 @@ func TestServer_ReloadSendsToolsListChanged(t *testing.T) {
 
 	t.Log("Reload notification test passed!")
 }
+
+// ============================================================================
+// Global Deny Integration Tests
+// ============================================================================
+
+func TestServer_ToolsCall_GlobalDenyNoNamespace(t *testing.T) {
+	t.Parallel()
+	// No namespaces configured (selection=all), but server has deniedTools.
+	// The globally denied tool should still be blocked.
+	enabled := true
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {
+				Kind:        config.ServerKindStdio,
+				Enabled:     &enabled,
+				Command:     "echo",
+				DeniedTools: []string{"dangerous_tool"},
+			},
+		},
+		// No namespaces
+	}
+
+	var stdout bytes.Buffer
+	stdin := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"srv1.dangerous_tool","arguments":{}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"srv1.safe_tool","arguments":{}}}` + "\n",
+	)
+
+	srv, err := New(Options{
+		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
+		Stdin:           stdin,
+		Stdout:          &stdout,
+		ServerName:      "mcpmu-test",
+		ServerVersion:   "1.0.0",
+		ProtocolVersion: "2024-11-05",
+		LogLevel:        "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_ = srv.Run(ctx)
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("Expected 3 responses, got %d", len(lines))
+	}
+
+	// Response 2: globally denied tool should be blocked
+	var resp2 struct {
+		ID    int       `json:"id"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &resp2); err != nil {
+		t.Fatalf("Unmarshal response 2: %v", err)
+	}
+	if resp2.Error == nil || resp2.Error.Code != ErrCodeToolDenied {
+		t.Errorf("Expected ErrCodeToolDenied for globally denied tool, got: %+v", resp2.Error)
+	}
+
+	// Response 3: non-denied tool should NOT be tool-denied
+	var resp3 struct {
+		ID    int       `json:"id"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[2]), &resp3); err != nil {
+		t.Fatalf("Unmarshal response 3: %v", err)
+	}
+	if resp3.Error != nil && resp3.Error.Code == ErrCodeToolDenied {
+		t.Error("Non-denied tool should NOT be blocked by global deny")
+	}
+}
+
+func TestServer_ToolsCall_GlobalDenyWithNamespaceAllow(t *testing.T) {
+	t.Parallel()
+	// Namespace explicitly allows the tool, but it's in server deniedTools.
+	// Global deny should win.
+	enabled := true
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {
+				Kind:        config.ServerKindStdio,
+				Enabled:     &enabled,
+				Command:     "echo",
+				DeniedTools: []string{"dangerous_tool"},
+			},
+		},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns1": {ServerIDs: []string{"srv1"}},
+		},
+		ToolPermissions: []config.ToolPermission{
+			{Namespace: "ns1", Server: "srv1", ToolName: "dangerous_tool", Enabled: true},
+		},
+	}
+
+	var stdout bytes.Buffer
+	stdin := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"srv1.dangerous_tool","arguments":{}}}` + "\n",
+	)
+
+	srv, err := New(Options{
+		Config:          cfg,
+		PIDTrackerDir:   t.TempDir(),
+		Namespace:       "ns1",
+		Stdin:           stdin,
+		Stdout:          &stdout,
+		ServerName:      "mcpmu-test",
+		ServerVersion:   "1.0.0",
+		ProtocolVersion: "2024-11-05",
+		LogLevel:        "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_ = srv.Run(ctx)
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("Expected 2 responses, got %d", len(lines))
+	}
+
+	var resp struct {
+		ID    int       `json:"id"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &resp); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != ErrCodeToolDenied {
+		t.Errorf("Expected ErrCodeToolDenied even with namespace allow, got: %+v", resp.Error)
+	}
+}
+
+func TestServer_ToolsList_GlobalDenyFiltering(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping end-to-end test in short mode")
+	}
+
+	// Use a real fake server with tools including a globally denied one
+	enabled := true
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"read_file","description":"Read"},{"name":"delete_file","description":"Delete"}],"echoToolCalls":true}`,
+				},
+				DeniedTools: []string{"delete_file"},
+			},
+		},
+		Namespaces: map[string]config.NamespaceConfig{
+			"ns1": {ServerIDs: []string{"srv1"}},
+		},
+	}
+
+	var stdout bytes.Buffer
+	stdin := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n",
+	)
+
+	srv, err := New(Options{
+		Config:             cfg,
+		PIDTrackerDir:      t.TempDir(),
+		Namespace:          "ns1",
+		EagerStart:         true,
+		ExposeManagerTools: true,
+		Stdin:              stdin,
+		Stdout:             &stdout,
+		ServerName:         "mcpmu-test",
+		ServerVersion:      "1.0.0",
+		ProtocolVersion:    "2024-11-05",
+		LogLevel:           "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	_ = srv.Run(ctx)
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("Expected 2 responses, got %d", len(lines))
+	}
+
+	var toolsResp struct {
+		ID     int `json:"id"`
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &toolsResp); err != nil {
+		t.Fatalf("Unmarshal tools/list: %v", err)
+	}
+	if toolsResp.Error != nil {
+		t.Fatalf("tools/list error: %v", toolsResp.Error)
+	}
+
+	toolNames := make(map[string]bool)
+	for _, tool := range toolsResp.Result.Tools {
+		toolNames[tool.Name] = true
+	}
+
+	// read_file should be present
+	if !toolNames["srv1.read_file"] {
+		t.Error("Expected srv1.read_file in tools/list")
+	}
+
+	// delete_file should be filtered (globally denied)
+	if toolNames["srv1.delete_file"] {
+		t.Error("Expected srv1.delete_file to be filtered from tools/list (globally denied)")
+	}
+
+	// Manager tools should still be present
+	if !toolNames["mcpmu.servers_list"] {
+		t.Error("Expected mcpmu.servers_list in tools/list (manager tools should survive filtering)")
+	}
+}
+
+func TestServer_ToolsList_GlobalDenyNoNamespace(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping end-to-end test in short mode")
+	}
+
+	// No namespace (selection=all), but with global deny
+	enabled := true
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"srv1": {
+				Kind:    config.ServerKindStdio,
+				Enabled: &enabled,
+				Command: os.Args[0],
+				Args:    []string{"-test.run=TestHelperProcess", "--"},
+				Env: map[string]string{
+					"GO_WANT_HELPER_PROCESS": "1",
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"read_file","description":"Read"},{"name":"delete_file","description":"Delete"}],"echoToolCalls":true}`,
+				},
+				DeniedTools: []string{"delete_file"},
+			},
+		},
+		// No namespaces
+	}
+
+	var stdout bytes.Buffer
+	stdin := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n",
+	)
+
+	srv, err := New(Options{
+		Config:             cfg,
+		PIDTrackerDir:      t.TempDir(),
+		EagerStart:         true,
+		ExposeManagerTools: true,
+		Stdin:              stdin,
+		Stdout:             &stdout,
+		ServerName:         "mcpmu-test",
+		ServerVersion:      "1.0.0",
+		ProtocolVersion:    "2024-11-05",
+		LogLevel:           "error",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	_ = srv.Run(ctx)
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("Expected 2 responses, got %d", len(lines))
+	}
+
+	var toolsResp struct {
+		ID     int `json:"id"`
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *RPCError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &toolsResp); err != nil {
+		t.Fatalf("Unmarshal tools/list: %v", err)
+	}
+	if toolsResp.Error != nil {
+		t.Fatalf("tools/list error: %v", toolsResp.Error)
+	}
+
+	toolNames := make(map[string]bool)
+	for _, tool := range toolsResp.Result.Tools {
+		toolNames[tool.Name] = true
+	}
+
+	// read_file should be present
+	if !toolNames["srv1.read_file"] {
+		t.Error("Expected srv1.read_file in tools/list")
+	}
+
+	// delete_file should be filtered (globally denied) even without namespace
+	if toolNames["srv1.delete_file"] {
+		t.Error("Expected srv1.delete_file to be filtered (globally denied, no namespace)")
+	}
+
+	// Manager tools should survive unconditional filtering
+	if !toolNames["mcpmu.servers_list"] {
+		t.Error("Expected mcpmu.servers_list in tools/list after unconditional filtering")
+	}
+}

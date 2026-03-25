@@ -193,6 +193,92 @@ func TestIsToolAllowed(t *testing.T) {
 	}
 }
 
+func TestIsToolAllowed_GlobalDeny(t *testing.T) {
+	t.Parallel()
+	cfg := config.NewConfig()
+	cfg.Servers["srv1"] = config.ServerConfig{
+		Command:     "echo",
+		DeniedTools: []string{"dangerous_tool"},
+	}
+	cfg.Namespaces = map[string]config.NamespaceConfig{
+		"ns1": {ServerIDs: []string{"srv1"}},
+	}
+	// Explicit allow for the globally denied tool
+	cfg.ToolPermissions = []config.ToolPermission{
+		{Namespace: "ns1", Server: "srv1", ToolName: "dangerous_tool", Enabled: true},
+	}
+
+	// Global deny blocks even with explicit namespace allow
+	allowed, reason := IsToolAllowed(cfg, "ns1", "srv1", "dangerous_tool")
+	if allowed {
+		t.Error("expected globally denied tool to be blocked even with namespace allow")
+	}
+	if reason == "" {
+		t.Error("expected a reason for denial")
+	}
+}
+
+func TestIsToolAllowed_GlobalDenyNoNamespace(t *testing.T) {
+	t.Parallel()
+	cfg := config.NewConfig()
+	cfg.Servers["srv1"] = config.ServerConfig{
+		Command:     "echo",
+		DeniedTools: []string{"dangerous_tool"},
+	}
+
+	// No namespace (selection=all) — global deny still blocks
+	allowed, reason := IsToolAllowed(cfg, "", "srv1", "dangerous_tool")
+	if allowed {
+		t.Error("expected globally denied tool to be blocked even without a namespace")
+	}
+	if reason == "" {
+		t.Error("expected a reason for denial")
+	}
+}
+
+func TestIsToolAllowed_GlobalDenyDoesNotAffectOtherTools(t *testing.T) {
+	t.Parallel()
+	cfg := config.NewConfig()
+	cfg.Servers["srv1"] = config.ServerConfig{
+		Command:     "echo",
+		DeniedTools: []string{"dangerous_tool"},
+	}
+	cfg.Namespaces = map[string]config.NamespaceConfig{
+		"ns1": {ServerIDs: []string{"srv1"}},
+	}
+
+	// Non-denied tool on the same server is still allowed
+	allowed, reason := IsToolAllowed(cfg, "ns1", "srv1", "safe_tool")
+	if !allowed {
+		t.Errorf("expected non-denied tool to be allowed, got denied: %s", reason)
+	}
+}
+
+func TestIsToolAllowed_GlobalDenyPrecedence(t *testing.T) {
+	t.Parallel()
+	cfg := config.NewConfig()
+	cfg.Servers["srv1"] = config.ServerConfig{
+		Command:     "echo",
+		DeniedTools: []string{"dangerous_tool"},
+	}
+	cfg.Namespaces = map[string]config.NamespaceConfig{
+		"ns1": {
+			ServerIDs:      []string{"srv1"},
+			ServerDefaults: map[string]bool{"srv1": false}, // server default = allow
+		},
+	}
+	// Explicit allow for the globally denied tool
+	cfg.ToolPermissions = []config.ToolPermission{
+		{Namespace: "ns1", Server: "srv1", ToolName: "dangerous_tool", Enabled: true},
+	}
+
+	// Global deny wins over: explicit allow + server default allow + namespace default allow
+	allowed, _ := IsToolAllowed(cfg, "ns1", "srv1", "dangerous_tool")
+	if allowed {
+		t.Error("expected global deny to win over all lower-level allows")
+	}
+}
+
 func TestIsToolAllowed_ServerDefault(t *testing.T) {
 	t.Parallel()
 	cfg := config.NewConfig()

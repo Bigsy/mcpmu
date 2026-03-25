@@ -69,6 +69,7 @@ type Model struct {
 	namespaceForm   *views.NamespaceFormModel
 	serverPicker    views.ServerPickerModel
 	toolPerms       views.ToolPermissionsModel
+	toolDenyEditor  views.ToolDenyEditorModel
 	registryBrowser views.RegistryBrowserModel
 
 	// Shared Components
@@ -145,6 +146,7 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 		namespaceForm:   newNamespaceFormPtr(th),
 		serverPicker:    views.NewServerPicker(th),
 		toolPerms:       views.NewToolPermissions(th),
+		toolDenyEditor:  views.NewToolDenyEditor(th),
 		registryBrowser: views.NewRegistryBrowser(th),
 		logPanel:        views.NewLogPanel(th),
 		helpOverlay:     views.NewHelpOverlay(th),
@@ -278,6 +280,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateWithToolPerms(msg)
 	}
 
+	// Tool deny editor modal
+	if m.toolDenyEditor.IsVisible() {
+		return m.updateWithToolDenyEditor(msg)
+	}
+
 	// Add method selector modal
 	if m.addMethod.IsVisible() {
 		return m.updateWithAddMethod(msg)
@@ -360,6 +367,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case views.ToolPermissionsResult:
 		return m.handleToolPermissionsResult(msg)
+
+	case views.ToolDenyResult:
+		return m.handleToolDenyResult(msg)
 
 	case views.AddMethodResult:
 		m.addMethod.Hide()
@@ -739,6 +749,18 @@ func (m *Model) handleServerDetailKey(msg tea.KeyMsg) (handled bool, model tea.M
 			return true, m, m.toast.ShowError("OAuth logout only applies to OAuth HTTP servers")
 		}
 		return true, m, nil
+
+	case msg.String() == "p": // Edit denied tools
+		if m.detailServerID != "" {
+			tools, _, _ := m.getServerToolsForDetail(m.detailServerID)
+			if len(tools) == 0 {
+				return true, m, m.toast.ShowError("No tools discovered — start the server first")
+			}
+			srv, _ := m.cfg.GetServer(m.detailServerID)
+			m.toolDenyEditor.Show(m.detailServerID, tools, srv.DeniedTools)
+			return true, m, nil
+		}
+		return true, m, nil
 	}
 
 	return false, m, nil
@@ -1061,6 +1083,7 @@ func (m *Model) updateLayout() {
 	// Modal/overlay sizes
 	m.serverPicker.SetSize(m.width, m.height)
 	m.toolPerms.SetSize(m.width, m.height)
+	m.toolDenyEditor.SetSize(m.width, m.height)
 	m.addMethod.SetSize(m.width, m.height)
 	m.registryBrowser.SetSize(m.width, m.height)
 
@@ -1134,6 +1157,11 @@ func (m Model) View() string {
 	// Tool permissions overlay
 	if m.toolPerms.IsVisible() {
 		content = m.toolPerms.RenderOverlay(content, m.width, m.height)
+	}
+
+	// Tool deny editor overlay
+	if m.toolDenyEditor.IsVisible() {
+		content = m.toolDenyEditor.RenderOverlay(content, m.width, m.height)
 	}
 
 	// Add method selector overlay
@@ -1220,7 +1248,7 @@ func (m Model) renderStatusBar() string {
 		if m.currentView == ViewList {
 			keys = "enter:view  t:test  " + enableHint + oauthHint + "  a:add  e:edit  d:delete  l:logs  ?:help"
 		} else {
-			keys = "esc:back  t:test  " + enableHint + oauthHint + "  l:logs  ?:help"
+			keys = "esc:back  t:test  " + enableHint + oauthHint + "  p:deny-tools  l:logs  ?:help"
 		}
 	case TabNamespaces:
 		if m.currentView == ViewList {
@@ -1718,7 +1746,7 @@ func (m *Model) startToolPermissionEditor(nsName string, ns *config.NamespaceCon
 
 	// If all running servers already have tools, show editor immediately
 	if len(serversToStart) == 0 && len(serverTools) > 0 {
-		m.toolPerms.Show(nsName, serverTools, m.cfg.ServerEntries(), m.cfg.ToolPermissions, ns.DenyByDefault, ns.ServerDefaults)
+		m.toolPerms.Show(nsName, serverTools, m.cfg.ServerEntries(), m.cfg.ToolPermissions, ns.DenyByDefault, ns.ServerDefaults, buildGlobalDenied(m.cfg))
 		return true, m, nil
 	}
 
@@ -1817,9 +1845,24 @@ func (m *Model) finishPermissionDiscovery() {
 		m.cfg.ToolPermissions,
 		ns.DenyByDefault,
 		ns.ServerDefaults,
+		buildGlobalDenied(m.cfg),
 	)
 	m.permDiscoveryServers = nil
 	m.permDiscoveryExpected = 0
+}
+
+// buildGlobalDenied builds a map of serverName -> denied tool names from the config.
+func buildGlobalDenied(cfg *config.Config) map[string][]string {
+	result := make(map[string][]string)
+	for name, srv := range cfg.Servers {
+		if len(srv.DeniedTools) > 0 {
+			result[name] = srv.DeniedTools
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // ============================================================================
@@ -1958,6 +2001,65 @@ func (m Model) handleToolPermissionsResult(result views.ToolPermissionsResult) (
 	m.refreshNamespaceList()
 
 	return m, m.toast.ShowSuccess("Tool permissions updated")
+}
+
+func (m Model) updateWithToolDenyEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if key.Matches(msg, m.keys.CtrlC) {
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.updateLayout()
+		m.toolDenyEditor.SetSize(msg.Width, msg.Height)
+	case views.ToolDenyResult:
+		return m.handleToolDenyResult(msg)
+	}
+
+	if cmd := m.toolDenyEditor.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) handleToolDenyResult(result views.ToolDenyResult) (tea.Model, tea.Cmd) {
+	if !result.Submitted || result.ServerName == "" {
+		return m, nil
+	}
+
+	srv, ok := m.cfg.GetServer(result.ServerName)
+	if !ok {
+		return m, m.toast.ShowError(fmt.Sprintf("Server %q not found", result.ServerName))
+	}
+
+	// Replace the deny list
+	if len(result.DeniedTools) == 0 {
+		srv.DeniedTools = nil
+	} else {
+		srv.DeniedTools = result.DeniedTools
+		slices.Sort(srv.DeniedTools)
+	}
+	m.cfg.Servers[result.ServerName] = srv
+
+	if err := m.saveConfig(); err != nil {
+		log.Printf("Failed to save config: %v", err)
+		return m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
+	}
+
+	// Refresh server detail view
+	if m.detailServerID == result.ServerName {
+		status := m.serverStatuses[result.ServerName]
+		tools, toolTokens, fromCache := m.getServerToolsForDetail(result.ServerName)
+		m.serverDetail.SetServer(result.ServerName, &srv, &status, tools, toolTokens, fromCache)
+	}
+	m.refreshServerList()
+
+	return m, m.toast.ShowSuccess("Denied tools updated")
 }
 
 // ============================================================================

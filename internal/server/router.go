@@ -55,12 +55,13 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 		return r.handleManagerTool(ctx, qualifiedName, arguments)
 	}
 
-	// Check permission (skip if no active namespace, i.e., selection=all)
-	if r.activeNamespaceName != "" {
-		allowed, reason := IsToolAllowed(r.cfg, r.activeNamespaceName, serverName, toolName)
-		if !allowed {
-			return nil, ErrToolDenied(qualifiedName, reason)
-		}
+	// Permission check — always runs. IsToolAllowed handles:
+	// 1. Global deny (applies even without a namespace)
+	// 2. Namespace-scoped permissions (when namespace is active)
+	// 3. Returns true for everything else when namespace is empty
+	allowed, reason := IsToolAllowed(r.cfg, r.activeNamespaceName, serverName, toolName)
+	if !allowed {
+		return nil, ErrToolDenied(qualifiedName, reason)
 	}
 
 	// Validate server exists
