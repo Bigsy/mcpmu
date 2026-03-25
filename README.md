@@ -148,194 +148,17 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 - **Registry browser** — Search the official MCP server registry from the TUI and install with pre-populated config (`a` → Official Registry)
 - **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
 
----
+## Serve Mode
 
-## CLI Reference
-
-All commands support `--config` / `-c` to specify a custom config file path.
-
-### Server management
+Expose managed servers as a single MCP endpoint:
 
 ```bash
-# Add stdio server
-mcpmu add <name> -- <command> [args...]
-mcpmu add context7 -- npx -y @upstash/context7-mcp
-mcpmu add my-server --env FOO=bar --cwd /path -- ./server --flag
-mcpmu add auto-server --autostart -- ./server  # start on app launch
-
-# Add HTTP server (Streamable HTTP / SSE)
-mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
-mcpmu add my-api https://example.com/mcp --bearer-env API_TOKEN
-mcpmu add slack https://mcp.slack.com/mcp --oauth-client-id 1601185624273.8899143856786 --oauth-callback-port 3118  # scopes auto-discovered
-
-# List, remove, rename
-mcpmu list
-mcpmu list --json
-mcpmu remove <name> [--yes]
-mcpmu rename <old-name> <new-name>
+mcpmu serve --stdio                          # default namespace
+mcpmu serve --stdio --namespace work         # specific namespace
+mcpmu serve --stdio -n work --eager          # pre-start all servers
+mcpmu serve --stdio --expose-manager-tools   # include mcpmu.* management tools
+mcpmu serve --stdio --log-level debug        # verbose logging
 ```
-
-### OAuth authentication
-
-```bash
-mcpmu mcp login <server>              # start OAuth flow in browser
-mcpmu mcp login atlassian --scopes read,write  # explicit scopes
-mcpmu mcp login slack                 # scopes auto-discovered from server metadata
-mcpmu mcp logout <server>             # remove stored credentials
-```
-
-### Namespace commands (alias: `ns`)
-
-```bash
-mcpmu namespace list [--json]
-mcpmu namespace add <name> --description "desc"
-mcpmu namespace remove <name> [--yes]
-mcpmu namespace assign <namespace> <server>
-mcpmu namespace unassign <namespace> <server>
-mcpmu namespace default <name>
-mcpmu namespace set-deny-default <namespace> <true|false>
-mcpmu namespace rename <old-name> <new-name>
-```
-
-### Server commands
-
-```bash
-mcpmu server deny-tool <server> <tool> [<tool>...]
-mcpmu server allow-tool <server> <tool> [<tool>...]
-mcpmu server denied-tools <server> [--json]
-```
-
-### Permission commands
-
-```bash
-mcpmu permission list <namespace> [--json]
-mcpmu permission set <namespace> <server> <tool> <allow|deny>
-mcpmu permission unset <namespace> <server> <tool>
-mcpmu permission set-server-default <namespace> <server> <deny|allow>
-mcpmu permission unset-server-default <namespace> <server>
-```
-
-### Serve mode
-
-```bash
-mcpmu serve --stdio --namespace default
-mcpmu serve -n work --log-level debug --eager
-mcpmu serve --stdio --expose-manager-tools  # include mcpmu.* tools
-```
-
-**Flags:**
-- `-n, --namespace` — namespace to expose (default: auto-select)
-- `-l, --log-level` — debug, info, warn, error (default: info)
-- `--eager` — pre-start all servers on init (default: lazy start)
-- `--expose-manager-tools` — include mcpmu.* management tools in tools/list
-
-**`tools/list` behavior:**
-- `mcpmu` advertises `tools.listChanged: true` during `initialize`
-- On `tools/list`, `mcpmu` waits up to 8 seconds for upstream tool discovery, then returns whatever is ready
-- If some servers are still discovering, `mcpmu` continues in the background and sends `notifications/tools/list_changed` when new tools become available
-- Config reloads that may change the visible tool set also send `notifications/tools/list_changed`
-
-## Configuration
-
-Default config path: `~/.config/mcpmu/config.json`
-
-### Stdio server
-```json
-{
-  "servers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    }
-  }
-}
-```
-
-With optional fields:
-```json
-{
-  "servers": {
-    "myserver": {
-      "command": "./server",
-      "args": ["--flag"],
-      "cwd": "/path/to/dir",
-      "env": {"FOO": "bar"},
-      "autostart": true,
-      "enabled": false,
-      "deniedTools": ["delete_file", "move_file"]
-    }
-  }
-}
-```
-
-### HTTP server (Streamable HTTP)
-```json
-{
-  "servers": {
-    "atlassian": {
-      "url": "https://mcp.atlassian.com/mcp",
-      "oauth": {
-        "scopes": ["read", "write"]
-      }
-    }
-  }
-}
-```
-
-With pre-registered OAuth client (e.g. Slack — scopes auto-discovered from server):
-```json
-{
-  "servers": {
-    "slack": {
-      "url": "https://mcp.slack.com/mcp",
-      "oauth": {
-        "client_id": "1601185624273.8899143856786",
-        "callback_port": 3118
-      }
-    }
-  }
-}
-```
-
-With bearer token auth:
-```json
-{
-  "servers": {
-    "myapi": {
-      "url": "https://example.com/mcp",
-      "bearer_token_env_var": "API_TOKEN",
-      "http_headers": {
-        "X-Custom-Header": "value"
-      },
-      "env_http_headers": {
-        "X-Api-Key": "MY_API_KEY_ENV"
-      }
-    }
-  }
-}
-```
-
-### Config fields for HTTP servers
-
-| Field | Description |
-|-------|-------------|
-| `url` | Server endpoint URL |
-| `bearer_token_env_var` | Env var containing bearer token (mutually exclusive with `oauth`) |
-| `http_headers` | Static headers to include in all requests |
-| `env_http_headers` | Headers sourced from env vars (header name → env var name) |
-| `oauth.client_id` | Pre-registered OAuth client ID (skips dynamic registration) |
-| `oauth.client_secret` | OAuth client secret (for confidential clients) |
-| `oauth.callback_port` | Per-server OAuth callback port (overrides global) |
-| `oauth.scopes` | OAuth scopes to request (auto-discovered from server if omitted) |
-| `startup_timeout_sec` | Connection timeout (default: 10) |
-| `tool_timeout_sec` | Tool call timeout (default: 60) |
-
-### Global config fields
-
-| Field | Description |
-|-------|-------------|
-| `mcp_oauth_credentials_store` | Where to store OAuth tokens: `"auto"`, `"keyring"`, or `"file"` (default: auto) |
-| `mcp_oauth_callback_port` | Port for the OAuth callback server (default: auto-assigned) |
 
 ## Shell Completions
 
@@ -346,6 +169,10 @@ mcpmu completion zsh > "$(brew --prefix)/share/zsh/site-functions/_mcpmu"
 ```
 
 For bash, fish, and PowerShell setup see [docs/completions.md](docs/completions.md).
+
+## Full CLI Reference
+
+For the complete list of commands, flags, config schema, and HTTP server fields see [docs/CLI.md](docs/CLI.md).
 
 ## Agent Skill
 
