@@ -1,6 +1,6 @@
 ---
 name: mcpmu
-description: Install, set up, and manage MCP servers using the mcpmu CLI. Use when the user wants to install mcpmu, register it as an MCP server, add/remove/list MCP servers, manage namespaces, set tool permissions, or expose servers via serve mode.
+description: Install, set up, and manage MCP servers using the mcpmu CLI. Use when the user wants to install mcpmu, register it as an MCP server, add/remove/list MCP servers, manage namespaces, set tool permissions, manage server-level denied tools, or expose servers via serve mode.
 allowed-tools: Bash(mcpmu *), Bash(brew *), Bash(go install *), Bash(claude mcp *), Bash(codex mcp *), Bash(which mcpmu), Bash(command -v mcpmu)
 ---
 
@@ -204,6 +204,27 @@ Examples:
 mcpmu permission set work atlassian jira_search allow
 mcpmu permission set work atlassian confluence_delete deny
 ```
+
+### Server-level global deny list
+
+For defense-in-depth, deny tools at the server level. Globally denied tools are blocked regardless of namespace permissions — even a namespace explicit allow cannot override a server global deny:
+
+```bash
+mcpmu server deny-tool <server> <tool> [<tool>...]
+mcpmu server allow-tool <server> <tool> [<tool>...]
+mcpmu server denied-tools <server> [--json]
+```
+
+Examples:
+```bash
+mcpmu server deny-tool filesystem delete_file move_file
+mcpmu server allow-tool filesystem move_file   # re-enable
+mcpmu server denied-tools filesystem           # list denied tools
+```
+
+Permission resolution order: **server global deny > explicit tool permission > server default > namespace default > allow**.
+
+In the TUI, press `p` on the server detail pane to open an interactive deny list editor.
 
 ## Serve Mode
 

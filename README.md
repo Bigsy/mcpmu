@@ -10,7 +10,8 @@ Key differentiators:
 - **Multi-transport** — Manage both local stdio processes and remote HTTP/SSE endpoints
 - **Registry browser** — Search the official MCP registry and install servers with pre-populated config
 - **Interactive TUI** — Monitor, test, and manage servers with a terminal interface
-- **Tool permissions TUI** — Block unused tools (or maybe write tools) to avoid mishaps for wasted tokens
+- **Tool permissions** — Block unused tools per-namespace or globally deny dangerous tools at the server level
+- **Defense-in-depth** — Server-level global deny list that overrides all namespace permissions
 
 
 <table>
