@@ -105,7 +105,42 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 		if callCtx.Err() == context.DeadlineExceeded {
 			return nil, ErrToolCallTimeout(serverName, toolName)
 		}
-		return nil, ErrInternalError(fmt.Sprintf("tool call failed: %v", err))
+
+		// On 4xx errors (stale session, server reset, etc.), reinitialize and retry once.
+		// 401 is excluded — the transport returns UnauthorizedError for that, not "request failed: 4xx".
+		if isRetriableHTTPError(err) {
+			log.Printf("CallTool: 4xx error for %s.%s, reinitializing: %v", serverName, toolName, err)
+
+			_ = r.supervisor.Stop(serverName)
+
+			reinitCtx, reinitCancel := context.WithTimeout(ctx, LazyStartTimeout)
+			defer reinitCancel()
+
+			handle, startErr := r.supervisor.Start(reinitCtx, serverName, srv)
+			if startErr != nil {
+				return nil, ErrInternalError(fmt.Sprintf("tool call failed (reinit: %v) (original: %v)", startErr, err))
+			}
+			if waitErr := handle.WaitForTools(reinitCtx); waitErr != nil {
+				return nil, ErrInternalError(fmt.Sprintf("tool call failed (reinit tools: %v) (original: %v)", waitErr, err))
+			}
+
+			client = handle.Client()
+			if client == nil {
+				return nil, ErrServerNotRunning(serverName)
+			}
+
+			retryCtx, retryCancel := context.WithTimeout(ctx, timeout)
+			defer retryCancel()
+
+			result, err = client.CallTool(retryCtx, toolName, arguments)
+			if err != nil {
+				return nil, ErrInternalError(fmt.Sprintf("tool call failed after reinit: %v", err))
+			}
+
+			log.Printf("CallTool: retry succeeded for %s.%s after reinit", serverName, toolName)
+		} else {
+			return nil, ErrInternalError(fmt.Sprintf("tool call failed: %v", err))
+		}
 	}
 
 	// Pass through the content blocks directly (they're already json.RawMessage)
@@ -386,6 +421,18 @@ func textResult(text string) *ToolCallResult {
 	return &ToolCallResult{
 		Content: []json.RawMessage{block},
 	}
+}
+
+// isRetriableHTTPError checks if an error is a 4xx HTTP error that might
+// be resolved by reinitializing the server (e.g., stale session).
+// 401 Unauthorized is excluded as it returns a distinct UnauthorizedError type
+// and has its own OAuth handling flow.
+func isRetriableHTTPError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "request failed: 4")
 }
 
 // mustJSON marshals a value to JSON, panicking on error.
