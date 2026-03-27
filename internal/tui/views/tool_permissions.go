@@ -12,6 +12,7 @@ import (
 	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -69,6 +70,11 @@ type ToolPermissionsModel struct {
 	// Server-level global deny (serverName -> denied tool names)
 	globalDenied map[string][]string
 
+	// Filter
+	filterInput   textinput.Model
+	allItems      []list.Item // full unfiltered list
+	filterFocused bool
+
 	// Auto-start tracking
 	autoStartedServers []string // Servers we started for this session
 	discovering        bool     // True while waiting for tools
@@ -104,15 +110,18 @@ func NewToolPermissions(th theme.Theme) ToolPermissionsModel {
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = "Tool Permissions"
 	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(true)
+	l.SetFilteringEnabled(false)
 	l.SetShowHelp(false)
 	l.Styles.Title = th.Title
-	l.FilterInput.PromptStyle = th.Primary
-	l.FilterInput.Cursor.Style = th.Primary
+
+	ti := textinput.New()
+	ti.Placeholder = "/ to filter..."
+	ti.CharLimit = 100
 
 	return ToolPermissionsModel{
 		theme:         th,
 		list:          l,
+		filterInput:   ti,
 		originalPerms: make(map[string]bool),
 		currentPerms:  make(map[string]bool),
 		escKey: key.NewBinding(
@@ -201,6 +210,10 @@ func (m *ToolPermissionsModel) Show(
 		}
 	}
 
+	m.allItems = items
+	m.filterInput.SetValue("")
+	m.filterInput.Blur()
+	m.filterFocused = false
 	m.list.SetItems(items)
 	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
 }
@@ -307,6 +320,10 @@ func (m *ToolPermissionsModel) FinishDiscovery(
 		}
 	}
 
+	m.allItems = items
+	m.filterInput.SetValue("")
+	m.filterInput.Blur()
+	m.filterFocused = false
 	m.list.SetItems(items)
 	m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
 }
@@ -323,7 +340,93 @@ func (m *ToolPermissionsModel) SetSize(width, height int) {
 	if height < 30 {
 		editorHeight = height - 5
 	}
-	m.list.SetSize(editorWidth-6, editorHeight-6)
+	m.list.SetSize(editorWidth-6, editorHeight-8)
+}
+
+// applyFilter filters the list items based on the current filter input value.
+// Headers are included only when they have matching children.
+func (m *ToolPermissionsModel) applyFilter() {
+	query := strings.ToLower(m.filterInput.Value())
+	if query == "" {
+		m.list.SetItems(m.allItems)
+		return
+	}
+	var filtered []list.Item
+	var pendingHeader list.Item
+	for _, item := range m.allItems {
+		ti := item.(toolPermItem)
+		if ti.isHeader {
+			pendingHeader = item
+			continue
+		}
+		if strings.Contains(strings.ToLower(ti.toolName), query) {
+			if pendingHeader != nil {
+				filtered = append(filtered, pendingHeader)
+				pendingHeader = nil
+			}
+			filtered = append(filtered, item)
+		}
+	}
+	m.list.SetItems(filtered)
+	// SetItems resets cursor to 0. If that's a header, advance to the first tool.
+	if len(filtered) > 0 {
+		if ti, ok := filtered[0].(toolPermItem); ok && ti.isHeader {
+			m.list.Select(1)
+		}
+	}
+}
+
+// toggleSelected toggles the permission of the currently selected item.
+func (m *ToolPermissionsModel) toggleSelected() {
+	if item := m.list.SelectedItem(); item != nil {
+		ti := item.(toolPermItem)
+		if !ti.isHeader && !m.isGloballyDenied(ti.serverID, ti.toolName) {
+			key := ti.serverID + ":" + ti.toolName
+			current, has := m.currentPerms[key]
+			if !has {
+				current = m.defaultAllowed(ti.serverID)
+			}
+			newValue := !current
+			defaultValue := m.defaultAllowed(ti.serverID)
+			if newValue == defaultValue {
+				delete(m.currentPerms, key)
+			} else {
+				m.currentPerms[key] = newValue
+			}
+			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
+		}
+	}
+}
+
+// submitResult builds and returns the submit command.
+func (m *ToolPermissionsModel) submitResult() tea.Cmd {
+	autoStarted := m.autoStartedServers
+	m.visible = false
+	m.autoStartedServers = nil
+
+	changes := make(map[string]bool)
+	var deletions []string
+
+	for key, enabled := range m.currentPerms {
+		orig, hadOrig := m.originalPerms[key]
+		if !hadOrig || orig != enabled {
+			changes[key] = enabled
+		}
+	}
+	for key := range m.originalPerms {
+		if _, stillExists := m.currentPerms[key]; !stillExists {
+			deletions = append(deletions, key)
+		}
+	}
+
+	return func() tea.Msg {
+		return ToolPermissionsResult{
+			Changes:            changes,
+			Deletions:          deletions,
+			Submitted:          true,
+			AutoStartedServers: autoStarted,
+		}
+	}
 }
 
 // Update handles messages.
@@ -349,97 +452,70 @@ func (m *ToolPermissionsModel) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 
-	// When filtering is active, let the list handle most keys
-	// Only intercept escape when not filtering to close the modal
-	if m.list.FilterState() == list.Filtering {
+	kmsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
 		return cmd
 	}
 
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if m.filterFocused {
 		switch {
-		case key.Matches(msg, m.escKey):
-			// If filter is shown (even if not actively filtering), clear it first
-			if m.list.FilterState() == list.FilterApplied {
-				m.list.ResetFilter()
-				return nil
-			}
-			autoStarted := m.autoStartedServers
-			m.visible = false
-			m.autoStartedServers = nil
-			return func() tea.Msg {
-				return ToolPermissionsResult{
-					Submitted:          false,
-					AutoStartedServers: autoStarted,
-				}
-			}
-		case key.Matches(msg, m.enterKey):
-			autoStarted := m.autoStartedServers
-			m.visible = false
-			m.autoStartedServers = nil
-			// Calculate changes and deletions
-			changes := make(map[string]bool)
-			var deletions []string
-
-			// Check for new or changed permissions
-			for key, enabled := range m.currentPerms {
-				orig, hadOrig := m.originalPerms[key]
-				if !hadOrig || orig != enabled {
-					changes[key] = enabled
-				}
-			}
-
-			// Check for permissions that were removed (reverted to default)
-			for key := range m.originalPerms {
-				if _, stillExists := m.currentPerms[key]; !stillExists {
-					deletions = append(deletions, key)
-				}
-			}
-
-			return func() tea.Msg {
-				return ToolPermissionsResult{
-					Changes:            changes,
-					Deletions:          deletions,
-					Submitted:          true,
-					AutoStartedServers: autoStarted,
-				}
-			}
-		case key.Matches(msg, m.spaceKey):
-			// Toggle permission (no-op for globally denied tools)
-			if item := m.list.SelectedItem(); item != nil {
-				ti := item.(toolPermItem)
-				if !ti.isHeader && !m.isGloballyDenied(ti.serverID, ti.toolName) {
-					key := ti.serverID + ":" + ti.toolName
-					current, has := m.currentPerms[key]
-					if !has {
-						current = m.defaultAllowed(ti.serverID)
-					}
-					newValue := !current
-					// If new value matches default, remove explicit permission (revert to default)
-					defaultValue := m.defaultAllowed(ti.serverID)
-					if newValue == defaultValue {
-						delete(m.currentPerms, key)
-					} else {
-						m.currentPerms[key] = newValue
-					}
-					// Update delegate
-					m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
-				}
-			}
+		case key.Matches(kmsg, m.escKey):
+			m.filterFocused = false
+			m.filterInput.Blur()
 			return nil
-		case key.Matches(msg, m.enableSafeKey):
-			// Enable all safe tools (those classified as ToolSafe)
-			m.applyBulkEnableSafe()
-			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
+		case key.Matches(kmsg, m.enterKey):
+			return m.submitResult()
+		case key.Matches(kmsg, m.spaceKey):
+			m.toggleSelected()
 			return nil
-		case key.Matches(msg, m.denyAllKey):
-			// Deny all tools
-			m.applyBulkDenyAll()
-			m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
+		case kmsg.Type == tea.KeyUp || kmsg.Type == tea.KeyDown:
+			var cmd tea.Cmd
+			m.list, cmd = m.list.Update(msg)
+			return cmd
+		default:
+			var cmd tea.Cmd
+			m.filterInput, cmd = m.filterInput.Update(msg)
+			m.applyFilter()
+			return cmd
+		}
+	}
+
+	// Action mode
+	switch {
+	case kmsg.Type == tea.KeyRunes && string(kmsg.Runes) == "/":
+		m.filterFocused = true
+		m.filterInput.Focus()
+		return nil
+	case key.Matches(kmsg, m.escKey):
+		if m.filterInput.Value() != "" {
+			m.filterInput.SetValue("")
+			m.applyFilter()
 			return nil
 		}
+		autoStarted := m.autoStartedServers
+		m.visible = false
+		m.autoStartedServers = nil
+		return func() tea.Msg {
+			return ToolPermissionsResult{
+				Submitted:          false,
+				AutoStartedServers: autoStarted,
+			}
+		}
+	case key.Matches(kmsg, m.enterKey):
+		return m.submitResult()
+	case key.Matches(kmsg, m.spaceKey):
+		m.toggleSelected()
+		return nil
+	case key.Matches(kmsg, m.enableSafeKey):
+		m.applyBulkEnableSafe()
+		m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
+		return nil
+	case key.Matches(kmsg, m.denyAllKey):
+		m.applyBulkDenyAll()
+		m.list.SetDelegate(newToolPermDelegate(m.theme, m.currentPerms, m.denyByDefault, m.serverDefaults, m.globalDenied))
+		return nil
 	}
 
 	var cmd tea.Cmd
@@ -451,7 +527,7 @@ func (m *ToolPermissionsModel) Update(msg tea.Msg) tea.Cmd {
 // Unknown tools are left unchanged. Unsafe tools are not modified.
 // Globally denied tools are skipped.
 func (m *ToolPermissionsModel) applyBulkEnableSafe() {
-	for _, item := range m.list.Items() {
+	for _, item := range m.allItems {
 		ti, ok := item.(toolPermItem)
 		if !ok || ti.isHeader {
 			continue
@@ -482,7 +558,7 @@ func (m *ToolPermissionsModel) applyBulkEnableSafe() {
 
 // applyBulkDenyAll denies all tools. Globally denied tools are skipped.
 func (m *ToolPermissionsModel) applyBulkDenyAll() {
-	for _, item := range m.list.Items() {
+	for _, item := range m.allItems {
 		ti, ok := item.(toolPermItem)
 		if !ok || ti.isHeader {
 			continue
@@ -510,7 +586,22 @@ func (m ToolPermissionsModel) View() string {
 	if !m.visible {
 		return ""
 	}
-	return m.list.View()
+
+	// Don't show filter bar during discovery
+	if m.discovering {
+		return m.list.View()
+	}
+
+	filterLabel := m.theme.Faint.Render("Filter: ")
+	filterView := m.filterInput.View()
+	filterBar := filterLabel + filterView
+
+	listView := m.list.View()
+	if len(m.list.Items()) == 0 && m.filterInput.Value() != "" {
+		listView = "\n" + m.theme.Faint.Render("  No matching tools") + "\n"
+	}
+
+	return filterBar + "\n\n" + listView
 }
 
 // RenderOverlay renders the editor as a centered overlay.

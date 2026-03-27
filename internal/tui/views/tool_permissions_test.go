@@ -537,6 +537,207 @@ func TestToolPermissions_BulkDenyAll_SkipsGlobalDeny(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// Filter Tests
+// ============================================================================
+
+func newPermEditorWithTools(t *testing.T) ToolPermissionsModel {
+	t.Helper()
+	th := theme.New()
+	perms := NewToolPermissions(th)
+	perms.SetSize(100, 50)
+
+	serverTools := map[string][]events.McpTool{
+		"srv1": {
+			{Name: "read_file", Description: "Read a file"},
+			{Name: "write_file", Description: "Write a file"},
+		},
+		"srv2": {
+			{Name: "read_resource", Description: "Read a resource"},
+			{Name: "get_time", Description: "Get time"},
+		},
+	}
+	servers := []config.ServerEntry{
+		{Name: "srv1", Config: config.ServerConfig{Command: "cmd"}},
+		{Name: "srv2", Config: config.ServerConfig{Command: "cmd"}},
+	}
+	perms.Show("ns1", serverTools, servers, nil, false, nil, nil)
+	return perms
+}
+
+func sendPermRune(perms *ToolPermissionsModel, r rune) {
+	perms.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+}
+
+func enterPermFilterMode(perms *ToolPermissionsModel) {
+	sendPermRune(perms, '/')
+}
+
+func TestToolPermissions_FilterShowsMatchingHeaders(t *testing.T) {
+	perms := newPermEditorWithTools(t)
+
+	enterPermFilterMode(&perms)
+	for _, r := range "read_f" {
+		sendPermRune(&perms, r)
+	}
+
+	// Should match "read_file" from srv1 only
+	items := perms.list.Items()
+	var headers, tools int
+	for _, item := range items {
+		ti := item.(toolPermItem)
+		if ti.isHeader {
+			headers++
+			if ti.serverName != "srv1" {
+				t.Errorf("expected only srv1 header, got %q", ti.serverName)
+			}
+		} else {
+			tools++
+			if ti.toolName != "read_file" {
+				t.Errorf("expected read_file, got %q", ti.toolName)
+			}
+		}
+	}
+	if headers != 1 {
+		t.Errorf("expected 1 header, got %d", headers)
+	}
+	if tools != 1 {
+		t.Errorf("expected 1 tool, got %d", tools)
+	}
+}
+
+func TestToolPermissions_FilterClearRestoresAll(t *testing.T) {
+	perms := newPermEditorWithTools(t)
+	originalCount := len(perms.list.Items())
+
+	enterPermFilterMode(&perms)
+	for _, r := range "read" {
+		sendPermRune(&perms, r)
+	}
+
+	// Exit filter mode
+	perms.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	// Clear filter in action mode
+	perms.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if perms.filterInput.Value() != "" {
+		t.Error("filter text should be cleared")
+	}
+	if len(perms.list.Items()) != originalCount {
+		t.Errorf("expected %d items restored, got %d", originalCount, len(perms.list.Items()))
+	}
+}
+
+func TestToolPermissions_BulkOpsAffectAllItemsWhenFiltered(t *testing.T) {
+	perms := newPermEditorWithTools(t)
+
+	// Filter to show only "read" tools
+	enterPermFilterMode(&perms)
+	for _, r := range "read" {
+		sendPermRune(&perms, r)
+	}
+
+	// Exit filter mode to action mode
+	perms.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// Now press 'd' to deny all — should affect ALL tools, not just filtered
+	sendPermRune(&perms, 'd')
+
+	// Check that all tools across both servers are denied
+	for _, item := range perms.allItems {
+		ti := item.(toolPermItem)
+		if ti.isHeader {
+			continue
+		}
+		key := ti.serverID + ":" + ti.toolName
+		enabled, exists := perms.currentPerms[key]
+		if !exists {
+			// Default is allow (denyByDefault=false), so should have explicit deny
+			t.Errorf("expected explicit deny for %s, but not in currentPerms", key)
+		} else if enabled {
+			t.Errorf("expected %s to be denied, but it's enabled", key)
+		}
+	}
+}
+
+func TestToolPermissions_ActionKeysWorkInActionMode(t *testing.T) {
+	perms := newPermEditorWithTools(t)
+
+	// Press 'a' in action mode — should trigger enable-safe, not enter filter
+	sendPermRune(&perms, 'a')
+
+	if perms.filterFocused {
+		t.Error("filter should not be focused after 'a' in action mode")
+	}
+	// read_file is safe, should not have explicit perm (already allowed by default)
+	if _, exists := perms.currentPerms["srv1:read_file"]; exists {
+		t.Error("read_file should not have explicit perm (already allowed by namespace default)")
+	}
+}
+
+func TestToolPermissions_FilterNoMatchesEmptyState(t *testing.T) {
+	perms := newPermEditorWithTools(t)
+
+	enterPermFilterMode(&perms)
+	for _, r := range "xyznonexistent" {
+		sendPermRune(&perms, r)
+	}
+
+	if len(perms.list.Items()) != 0 {
+		t.Errorf("expected 0 items, got %d", len(perms.list.Items()))
+	}
+
+	// Space should be a no-op (no panic)
+	perms.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+}
+
+func TestToolPermissions_FilterSkipsHeaderOnCursor(t *testing.T) {
+	perms := newPermEditorWithTools(t)
+
+	// Filter to something that matches tools in one server
+	enterPermFilterMode(&perms)
+	for _, r := range "read" {
+		sendPermRune(&perms, r)
+	}
+
+	// Cursor should be on the first tool, not the header
+	item := perms.list.SelectedItem()
+	if item == nil {
+		t.Fatal("expected a selected item")
+	}
+	ti := item.(toolPermItem)
+	if ti.isHeader {
+		t.Error("cursor should skip past the header to the first tool")
+	}
+
+	// Space should toggle successfully (not be a no-op on a header)
+	perms.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	key := ti.serverID + ":" + ti.toolName
+	if _, exists := perms.currentPerms[key]; !exists {
+		// Default is allow; toggling should create explicit deny
+		t.Errorf("expected toggle to create explicit permission for %s", key)
+	}
+}
+
+func TestToolPermissions_SlashInFilterMode(t *testing.T) {
+	perms := newPermEditorWithTools(t)
+
+	enterPermFilterMode(&perms)
+	for _, r := range "test" {
+		sendPermRune(&perms, r)
+	}
+
+	// Type '/' while in filter mode — should be appended as text
+	sendPermRune(&perms, '/')
+
+	if perms.filterInput.Value() != "test/" {
+		t.Errorf("expected filter text 'test/', got %q", perms.filterInput.Value())
+	}
+	if !perms.filterFocused {
+		t.Error("should still be in filter mode")
+	}
+}
+
 func TestToolPermissions_BulkDenyAll_WithServerDefaults(t *testing.T) {
 	th := theme.New()
 	perms := NewToolPermissions(th)
