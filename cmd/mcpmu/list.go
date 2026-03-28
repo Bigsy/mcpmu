@@ -37,15 +37,9 @@ func init() {
 
 func runList(cmd *cobra.Command, args []string) error {
 	// Load config
-	var cfg *config.Config
-	var err error
-	if listConfigPath != "" {
-		cfg, err = config.LoadFrom(listConfigPath)
-	} else {
-		cfg, err = config.Load()
-	}
+	cfg, err := loadConfig(listConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 
 	// Get servers sorted by name

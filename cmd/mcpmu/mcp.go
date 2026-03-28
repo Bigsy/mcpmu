@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/oauth"
 	"github.com/spf13/cobra"
 )
@@ -64,15 +63,9 @@ func runMCPLogin(cmd *cobra.Command, args []string) error {
 	serverName := args[0]
 
 	// Load config
-	var cfg *config.Config
-	var err error
-	if mcpConfigPath != "" {
-		cfg, err = config.LoadFrom(mcpConfigPath)
-	} else {
-		cfg, err = config.Load()
-	}
+	cfg, err := loadConfig(mcpConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 
 	// Find server
@@ -141,15 +134,9 @@ func runMCPLogout(cmd *cobra.Command, args []string) error {
 	serverName := args[0]
 
 	// Load config
-	var cfg *config.Config
-	var err error
-	if mcpConfigPath != "" {
-		cfg, err = config.LoadFrom(mcpConfigPath)
-	} else {
-		cfg, err = config.Load()
-	}
+	cfg, err := loadConfig(mcpConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 
 	// Find server

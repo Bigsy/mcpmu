@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -40,15 +39,9 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
 	// Load config
-	var cfg *config.Config
-	var err error
-	if removeConfigPath != "" {
-		cfg, err = config.LoadFrom(removeConfigPath)
-	} else {
-		cfg, err = config.Load()
-	}
+	cfg, err := loadConfig(removeConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 
 	// Check server exists
@@ -77,14 +70,8 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	// Save config
-	if removeConfigPath != "" {
-		if err := config.SaveTo(cfg, removeConfigPath); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
-		}
-	} else {
-		if err := config.Save(cfg); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
-		}
+	if err := saveConfig(cfg, removeConfigPath); err != nil {
+		return err
 	}
 
 	fmt.Printf("Removed server %q\n", name)

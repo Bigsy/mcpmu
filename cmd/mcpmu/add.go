@@ -133,14 +133,9 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load config
-	var cfg *config.Config
-	if addConfigPath != "" {
-		cfg, err = config.LoadFrom(addConfigPath)
-	} else {
-		cfg, err = config.Load()
-	}
+	cfg, err := loadConfig(addConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 
 	// Build server config
@@ -160,14 +155,8 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 	}
 
 	// Save config
-	if addConfigPath != "" {
-		if err := config.SaveTo(cfg, addConfigPath); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
-		}
-	} else {
-		if err := config.Save(cfg); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
-		}
+	if err := saveConfig(cfg, addConfigPath); err != nil {
+		return err
 	}
 
 	fmt.Printf("Added server %q\n", name)
@@ -197,14 +186,9 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load config
-	var cfg *config.Config
-	if addConfigPath != "" {
-		cfg, err = config.LoadFrom(addConfigPath)
-	} else {
-		cfg, err = config.Load()
-	}
+	cfg, err := loadConfig(addConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 
 	// Build server config
@@ -235,14 +219,8 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 	}
 
 	// Save config
-	if addConfigPath != "" {
-		if err := config.SaveTo(cfg, addConfigPath); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
-		}
-	} else {
-		if err := config.Save(cfg); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
-		}
+	if err := saveConfig(cfg, addConfigPath); err != nil {
+		return err
 	}
 
 	fmt.Printf("Added HTTP server %q (%s)\n", name, addURL)
