@@ -1,7 +1,6 @@
 package oauth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -531,13 +530,4 @@ func (m *TokenManager) GetAccessToken(ctx context.Context, serverURL string) (st
 // Logout removes credentials for a server.
 func Logout(ctx context.Context, store CredentialStore, serverURL string) error {
 	return store.Delete(serverURL)
-}
-
-// RequestBody helper for creating JSON request bodies.
-func RequestBody(v any) (io.Reader, error) {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	return bytes.NewReader(data), nil
 }

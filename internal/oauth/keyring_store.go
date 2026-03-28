@@ -197,12 +197,10 @@ func (s *KeyringStore) removeFromIndex(url string) error {
 	return s.saveIndex(filtered)
 }
 
+var urlKeyReplacer = strings.NewReplacer("://", "_", "/", "_", ":", "_")
+
 // urlToKey converts a server URL to a keyring key.
 // URLs are sanitized to be valid keyring keys.
 func urlToKey(url string) string {
-	// Replace problematic characters
-	key := strings.ReplaceAll(url, "://", "_")
-	key = strings.ReplaceAll(key, "/", "_")
-	key = strings.ReplaceAll(key, ":", "_")
-	return key
+	return urlKeyReplacer.Replace(url)
 }

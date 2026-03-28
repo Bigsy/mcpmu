@@ -68,14 +68,9 @@ func runPermissionSet(cmd *cobra.Command, args []string) error {
 	toolNameRaw := strings.TrimSpace(args[2])
 	permStr := strings.ToLower(args[3])
 
-	var enabled bool
-	switch permStr {
-	case "allow", "yes", "true", "1":
-		enabled = true
-	case "deny", "no", "false", "0":
-		enabled = false
-	default:
-		return fmt.Errorf("invalid permission %q: expected allow or deny", args[3])
+	enabled, err := parseBoolFlag(permStr, []string{"allow", "yes", "true", "1"}, []string{"deny", "no", "false", "0"}, "permission", "allow or deny")
+	if err != nil {
+		return err
 	}
 
 	cfg, err := loadConfig(permissionSetConfigPath)
@@ -84,13 +79,13 @@ func runPermissionSet(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	if _, ok := cfg.GetNamespace(namespaceName); !ok {
-		return fmt.Errorf("namespace %q not found", namespaceName)
+	if err := requireNamespace(cfg, namespaceName); err != nil {
+		return err
 	}
 
 	// Lookup server by name
-	if _, ok := cfg.GetServer(serverName); !ok {
-		return fmt.Errorf("server %q not found", serverName)
+	if err := requireServer(cfg, serverName); err != nil {
+		return err
 	}
 
 	toolName := normalizeToolName(toolNameRaw, serverName)
@@ -148,13 +143,13 @@ func runPermissionUnset(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	if _, ok := cfg.GetNamespace(namespaceName); !ok {
-		return fmt.Errorf("namespace %q not found", namespaceName)
+	if err := requireNamespace(cfg, namespaceName); err != nil {
+		return err
 	}
 
 	// Lookup server by name
-	if _, ok := cfg.GetServer(serverName); !ok {
-		return fmt.Errorf("server %q not found", serverName)
+	if err := requireServer(cfg, serverName); err != nil {
+		return err
 	}
 
 	toolName := normalizeToolName(toolNameRaw, serverName)
@@ -377,14 +372,9 @@ func runPermissionSetServerDefault(cmd *cobra.Command, args []string) error {
 	serverName := args[1]
 	permStr := strings.ToLower(args[2])
 
-	var denyByDefault bool
-	switch permStr {
-	case "deny", "no", "false", "0":
-		denyByDefault = true
-	case "allow", "yes", "true", "1":
-		denyByDefault = false
-	default:
-		return fmt.Errorf("invalid value %q: expected deny or allow", args[2])
+	denyByDefault, err := parseBoolFlag(permStr, []string{"deny", "no", "false", "0"}, []string{"allow", "yes", "true", "1"}, "value", "deny or allow")
+	if err != nil {
+		return err
 	}
 
 	cfg, err := loadConfig(permissionSetServerDefaultConfigPath)
@@ -438,12 +428,12 @@ func runPermissionUnsetServerDefault(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if _, ok := cfg.GetNamespace(namespaceName); !ok {
-		return fmt.Errorf("namespace %q not found", namespaceName)
+	if err := requireNamespace(cfg, namespaceName); err != nil {
+		return err
 	}
 
-	if _, ok := cfg.GetServer(serverName); !ok {
-		return fmt.Errorf("server %q not found", serverName)
+	if err := requireServer(cfg, serverName); err != nil {
+		return err
 	}
 
 	if err := cfg.UnsetServerDefault(namespaceName, serverName); err != nil {

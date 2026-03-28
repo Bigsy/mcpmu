@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -45,20 +42,17 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check server exists
-	if _, ok := cfg.GetServer(name); !ok {
-		return fmt.Errorf("server %q not found", name)
+	if err := requireServer(cfg, name); err != nil {
+		return err
 	}
 
 	// Confirm unless --yes
 	if !removeYes {
-		fmt.Printf("Remove server %q? [y/N] ", name)
-		reader := bufio.NewReader(os.Stdin)
-		response, err := reader.ReadString('\n')
+		confirmed, err := confirmAction(fmt.Sprintf("Remove server %q?", name))
 		if err != nil {
-			return fmt.Errorf("failed to read response: %w", err)
+			return err
 		}
-		response = strings.TrimSpace(strings.ToLower(response))
-		if response != "y" && response != "yes" {
+		if !confirmed {
 			fmt.Println("Cancelled")
 			return nil
 		}

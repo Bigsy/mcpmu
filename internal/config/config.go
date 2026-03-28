@@ -187,7 +187,7 @@ func (c *Config) DeleteServer(name string) error {
 
 	// Clean up namespace references and server defaults
 	for nsName, ns := range c.Namespaces {
-		ns.ServerIDs = removeString(ns.ServerIDs, name)
+		ns.ServerIDs = slices.DeleteFunc(slices.Clone(ns.ServerIDs), func(item string) bool { return item == name })
 		if ns.ServerDefaults != nil {
 			delete(ns.ServerDefaults, name)
 			if len(ns.ServerDefaults) == 0 {
@@ -250,16 +250,6 @@ func (c *Config) RenameServer(oldName, newName string) error {
 	}
 
 	return nil
-}
-
-func removeString(slice []string, s string) []string {
-	result := make([]string, 0, len(slice))
-	for _, item := range slice {
-		if item != s {
-			result = append(result, item)
-		}
-	}
-	return result
 }
 
 // AddNamespace adds a new namespace to the config with the given name.
@@ -421,7 +411,7 @@ func (c *Config) UnassignServerFromNamespace(namespaceName, serverName string) e
 		return fmt.Errorf("namespace %q not found", namespaceName)
 	}
 
-	ns.ServerIDs = removeString(ns.ServerIDs, serverName)
+	ns.ServerIDs = slices.DeleteFunc(slices.Clone(ns.ServerIDs), func(item string) bool { return item == serverName })
 	if ns.ServerDefaults != nil {
 		delete(ns.ServerDefaults, serverName)
 		if len(ns.ServerDefaults) == 0 {
@@ -558,7 +548,7 @@ func (c *Config) AllowTool(serverName, toolName string) error {
 	if !exists {
 		return fmt.Errorf("server %q not found", serverName)
 	}
-	srv.DeniedTools = removeString(srv.DeniedTools, toolName)
+	srv.DeniedTools = slices.DeleteFunc(slices.Clone(srv.DeniedTools), func(item string) bool { return item == toolName })
 	if len(srv.DeniedTools) == 0 {
 		srv.DeniedTools = nil
 	}

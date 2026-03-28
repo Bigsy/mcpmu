@@ -53,8 +53,8 @@ func runServerDenyTool(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if _, ok := cfg.GetServer(serverName); !ok {
-		return fmt.Errorf("server %q not found", serverName)
+	if err := requireServer(cfg, serverName); err != nil {
+		return err
 	}
 
 	for _, toolName := range toolNames {
@@ -107,8 +107,8 @@ func runServerAllowTool(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if _, ok := cfg.GetServer(serverName); !ok {
-		return fmt.Errorf("server %q not found", serverName)
+	if err := requireServer(cfg, serverName); err != nil {
+		return err
 	}
 
 	for _, toolName := range toolNames {

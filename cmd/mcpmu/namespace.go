@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -254,20 +252,17 @@ func runNamespaceRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check namespace exists
-	if _, ok := cfg.GetNamespace(name); !ok {
-		return fmt.Errorf("namespace %q not found", name)
+	if err := requireNamespace(cfg, name); err != nil {
+		return err
 	}
 
 	// Confirm unless --yes
 	if !namespaceRemoveYes {
-		fmt.Printf("Remove namespace %q? [y/N] ", name)
-		reader := bufio.NewReader(os.Stdin)
-		response, err := reader.ReadString('\n')
+		confirmed, err := confirmAction(fmt.Sprintf("Remove namespace %q?", name))
 		if err != nil {
-			return fmt.Errorf("failed to read response: %w", err)
+			return err
 		}
-		response = strings.TrimSpace(strings.ToLower(response))
-		if response != "y" && response != "yes" {
+		if !confirmed {
 			fmt.Println("Cancelled")
 			return nil
 		}
@@ -319,13 +314,13 @@ func runNamespaceAssign(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	if _, ok := cfg.GetNamespace(namespaceName); !ok {
-		return fmt.Errorf("namespace %q not found", namespaceName)
+	if err := requireNamespace(cfg, namespaceName); err != nil {
+		return err
 	}
 
 	// Lookup server by name
-	if _, ok := cfg.GetServer(serverName); !ok {
-		return fmt.Errorf("server %q not found", serverName)
+	if err := requireServer(cfg, serverName); err != nil {
+		return err
 	}
 
 	if err := cfg.AssignServerToNamespace(namespaceName, serverName); err != nil {
@@ -373,13 +368,13 @@ func runNamespaceUnassign(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	if _, ok := cfg.GetNamespace(namespaceName); !ok {
-		return fmt.Errorf("namespace %q not found", namespaceName)
+	if err := requireNamespace(cfg, namespaceName); err != nil {
+		return err
 	}
 
 	// Lookup server by name (optional - might want to unassign even if server was removed)
-	if _, ok := cfg.GetServer(serverName); !ok {
-		return fmt.Errorf("server %q not found", serverName)
+	if err := requireServer(cfg, serverName); err != nil {
+		return err
 	}
 
 	if err := cfg.UnassignServerFromNamespace(namespaceName, serverName); err != nil {
@@ -426,8 +421,8 @@ func runNamespaceDefault(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lookup namespace by name
-	if _, ok := cfg.GetNamespace(name); !ok {
-		return fmt.Errorf("namespace %q not found", name)
+	if err := requireNamespace(cfg, name); err != nil {
+		return err
 	}
 
 	cfg.DefaultNamespace = name
@@ -469,14 +464,9 @@ func runNamespaceSetDenyDefault(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
 	valueStr := strings.ToLower(args[1])
 
-	var denyByDefault bool
-	switch valueStr {
-	case "true", "yes", "1":
-		denyByDefault = true
-	case "false", "no", "0":
-		denyByDefault = false
-	default:
-		return fmt.Errorf("invalid value %q: expected true or false", args[1])
+	denyByDefault, err := parseBoolFlag(valueStr, []string{"true", "yes", "1"}, []string{"false", "no", "0"}, "value", "true or false")
+	if err != nil {
+		return err
 	}
 
 	cfg, err := loadConfig(namespaceSetDenyDefaultConfigPath)
