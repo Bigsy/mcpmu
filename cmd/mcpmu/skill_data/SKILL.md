@@ -1,5 +1,6 @@
 ---
 name: mcpmu
+disable-model-invocation: true
 description: Install, set up, and manage MCP servers using the mcpmu CLI. Use when the user wants to install mcpmu, register it as an MCP server, add/remove/list MCP servers, manage namespaces, set tool permissions, manage server-level denied tools, or expose servers via serve mode.
 allowed-tools: Bash(mcpmu *), Bash(brew *), Bash(go install *), Bash(claude mcp *), Bash(codex mcp *), Bash(which mcpmu), Bash(command -v mcpmu)
 ---
@@ -41,6 +42,18 @@ claude mcp add mcpmu -- mcpmu serve --stdio
 codex mcp add mcpmu -- mcpmu serve --stdio
 ```
 
+**OpenCode** (global config `~/.config/opencode/config.json`, or project-level `opencode.json`):
+```json
+{
+  "mcp": {
+    "mcpmu": {
+      "type": "local",
+      "command": ["mcpmu", "serve", "--stdio"]
+    }
+  }
+}
+```
+
 **Any MCP config JSON (Cursor, Windsurf, etc.):**
 ```json
 {
@@ -57,6 +70,18 @@ claude mcp add work -- mcpmu serve --stdio --namespace work
 codex mcp add work -- mcpmu serve --stdio --namespace work
 ```
 
+**OpenCode** (namespace-specific):
+```json
+{
+  "mcp": {
+    "work": {
+      "type": "local",
+      "command": ["mcpmu", "serve", "--stdio", "--namespace", "work"]
+    }
+  }
+}
+```
+
 **With management tools (lets the agent add/remove servers via MCP):**
 ```bash
 claude mcp add mcpmu -- mcpmu serve --stdio --expose-manager-tools
@@ -66,6 +91,7 @@ You can verify the registration:
 ```bash
 claude mcp list
 codex mcp list
+opencode mcp list
 ```
 
 To remove mcpmu from an agent:
@@ -73,6 +99,7 @@ To remove mcpmu from an agent:
 claude mcp remove mcpmu
 codex mcp remove mcpmu
 ```
+For OpenCode, remove the entry from the config JSON file.
 
 ### Scoped registration (Claude Code)
 
@@ -94,6 +121,7 @@ To go from zero to a working mcpmu setup:
 5. Register with your agent:
    - Claude Code: `claude mcp add mcpmu -- mcpmu serve --stdio`
    - Codex: `codex mcp add mcpmu -- mcpmu serve --stdio`
+   - OpenCode: add to `~/.config/opencode/config.json` (global) or `opencode.json` (project)
    - Others: add the JSON config entry shown above
 6. Restart your agent — all mcpmu-managed tools are now available
 
@@ -255,6 +283,18 @@ For other agents:
 codex mcp add mcpmu -- mcpmu serve --stdio
 ```
 
+**OpenCode** (global `~/.config/opencode/config.json` or project `opencode.json`):
+```json
+{
+  "mcp": {
+    "mcpmu": {
+      "type": "local",
+      "command": ["mcpmu", "serve", "--stdio"]
+    }
+  }
+}
+```
+
 **Any MCP config JSON (Cursor, Windsurf, etc.):**
 ```json
 {
@@ -266,6 +306,25 @@ codex mcp add mcpmu -- mcpmu serve --stdio
 ```
 
 For a namespace-specific entry:
+
+**Codex:**
+```bash
+codex mcp add work -- mcpmu serve --stdio --namespace work
+```
+
+**OpenCode:**
+```json
+{
+  "mcp": {
+    "work": {
+      "type": "local",
+      "command": ["mcpmu", "serve", "--stdio", "--namespace", "work"]
+    }
+  }
+}
+```
+
+**Cursor, Windsurf, etc.:**
 ```json
 {
   "work": {
