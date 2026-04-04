@@ -10,12 +10,14 @@ import (
 	"log"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
+	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/fsnotify/fsnotify"
 )
@@ -31,6 +33,8 @@ type Options struct {
 	Namespace          string        // Namespace to expose (empty = auto-select)
 	EagerStart         bool          // Pre-start all servers
 	ExposeManagerTools bool          // Include mcpmu.* tools in tools/list
+	ExposeResources    bool          // Passthrough resources/* from upstream servers
+	ExposePrompts      bool          // Passthrough prompts/* from upstream servers
 	DebounceDelay      time.Duration // Delay before applying config changes (default: 150ms)
 	LogLevel           string
 	Stdin              io.Reader
@@ -227,6 +231,26 @@ func (s *Server) handleRequest(ctx context.Context, method string, params json.R
 		return s.handleToolsList(ctx)
 	case "tools/call":
 		return s.handleToolsCall(ctx, params)
+	case "resources/list":
+		if !s.opts.ExposeResources {
+			return nil, ErrMethodNotFound(method)
+		}
+		return s.handleResourcesList(ctx)
+	case "resources/read":
+		if !s.opts.ExposeResources {
+			return nil, ErrMethodNotFound(method)
+		}
+		return s.handleResourcesRead(ctx, params)
+	case "prompts/list":
+		if !s.opts.ExposePrompts {
+			return nil, ErrMethodNotFound(method)
+		}
+		return s.handlePromptsList(ctx)
+	case "prompts/get":
+		if !s.opts.ExposePrompts {
+			return nil, ErrMethodNotFound(method)
+		}
+		return s.handlePromptsGet(ctx, params)
 	default:
 		return nil, ErrMethodNotFound(method)
 	}
@@ -279,6 +303,17 @@ func (s *Server) handleInitialize(ctx context.Context, params json.RawMessage) (
 
 	s.initialized = true
 
+	// Build capabilities
+	caps := capabilities{
+		Tools: &toolsCapability{ListChanged: true},
+	}
+	if s.opts.ExposeResources {
+		caps.Resources = &resourcesCapability{ListChanged: true}
+	}
+	if s.opts.ExposePrompts {
+		caps.Prompts = &promptsCapability{ListChanged: true}
+	}
+
 	// Return server capabilities
 	return initializeResult{
 		ProtocolVersion: s.opts.ProtocolVersion,
@@ -286,9 +321,7 @@ func (s *Server) handleInitialize(ctx context.Context, params json.RawMessage) (
 			Name:    s.opts.ServerName,
 			Version: s.opts.ServerVersion,
 		},
-		Capabilities: capabilities{
-			Tools: &toolsCapability{ListChanged: true},
-		},
+		Capabilities: caps,
 	}, nil
 }
 
@@ -461,6 +494,271 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 	}
 
 	return result, nil
+}
+
+// handleResourcesList handles the resources/list request.
+func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
+	s.mu.RLock()
+	if !s.initialized {
+		s.mu.RUnlock()
+		return nil, ErrInvalidRequest("not initialized")
+	}
+	activeServerNames := s.activeServerNames
+	s.mu.RUnlock()
+
+	type qualifiedResource struct {
+		URI         string `json:"uri"`
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		MimeType    string `json:"mimeType,omitempty"`
+	}
+
+	var allResources []qualifiedResource
+	var mu sync.Mutex
+	sem := make(chan struct{}, MaxConcurrentDiscovery)
+	var wg sync.WaitGroup
+
+	for _, name := range activeServerNames {
+		wg.Add(1)
+		go func(serverName string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			sc, rpcErr := s.ensureServerClient(ctx, serverName)
+			if rpcErr != nil {
+				log.Printf("Failed to get client for %s (resources/list): %v", serverName, rpcErr)
+				return
+			}
+
+			callCtx, cancel := context.WithTimeout(ctx, sc.timeout)
+			defer cancel()
+
+			resources, err := sc.client.ListResources(callCtx)
+			if err != nil {
+				log.Printf("Failed to list resources from %s: %v", serverName, err)
+				return
+			}
+
+			mu.Lock()
+			for _, r := range resources {
+				allResources = append(allResources, qualifiedResource{
+					URI:         serverName + ":" + r.URI,
+					Name:        r.Name,
+					Description: r.Description,
+					MimeType:    r.MimeType,
+				})
+			}
+			mu.Unlock()
+		}(name)
+	}
+
+	wg.Wait()
+
+	if allResources == nil {
+		allResources = []qualifiedResource{}
+	}
+	return struct {
+		Resources []qualifiedResource `json:"resources"`
+	}{Resources: allResources}, nil
+}
+
+// handleResourcesRead handles the resources/read request.
+func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	s.mu.RLock()
+	if !s.initialized {
+		s.mu.RUnlock()
+		return nil, ErrInvalidRequest("not initialized")
+	}
+	activeServerNames := s.activeServerNames
+	s.mu.RUnlock()
+
+	var req struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, ErrInvalidParams(err.Error())
+	}
+
+	// Split on first ':' to extract server name and original URI
+	serverName, originalURI, ok := strings.Cut(req.URI, ":")
+	if !ok || serverName == "" || originalURI == "" {
+		return nil, ErrInvalidParams("invalid resource URI: " + req.URI)
+	}
+
+	if !slices.Contains(activeServerNames, serverName) {
+		return nil, ErrServerNotFound(serverName)
+	}
+
+	sc, rpcErr := s.ensureServerClient(ctx, serverName)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, sc.timeout)
+	defer cancel()
+
+	contents, err := sc.client.ReadResource(callCtx, originalURI)
+	if err != nil {
+		return nil, ErrInternalError(fmt.Sprintf("resources/read from %s: %v", serverName, err))
+	}
+
+	return struct {
+		Contents json.RawMessage `json:"contents"`
+	}{Contents: contents}, nil
+}
+
+// handlePromptsList handles the prompts/list request.
+func (s *Server) handlePromptsList(ctx context.Context) (any, *RPCError) {
+	s.mu.RLock()
+	if !s.initialized {
+		s.mu.RUnlock()
+		return nil, ErrInvalidRequest("not initialized")
+	}
+	activeServerNames := s.activeServerNames
+	s.mu.RUnlock()
+
+	type qualifiedPrompt struct {
+		Name        string               `json:"name"`
+		Description string               `json:"description,omitempty"`
+		Arguments   []mcp.PromptArgument `json:"arguments,omitempty"`
+	}
+
+	var allPrompts []qualifiedPrompt
+	var mu sync.Mutex
+	sem := make(chan struct{}, MaxConcurrentDiscovery)
+	var wg sync.WaitGroup
+
+	for _, name := range activeServerNames {
+		wg.Add(1)
+		go func(serverName string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			sc, rpcErr := s.ensureServerClient(ctx, serverName)
+			if rpcErr != nil {
+				log.Printf("Failed to get client for %s (prompts/list): %v", serverName, rpcErr)
+				return
+			}
+
+			callCtx, cancel := context.WithTimeout(ctx, sc.timeout)
+			defer cancel()
+
+			prompts, err := sc.client.ListPrompts(callCtx)
+			if err != nil {
+				log.Printf("Failed to list prompts from %s: %v", serverName, err)
+				return
+			}
+
+			mu.Lock()
+			for _, p := range prompts {
+				desc := p.Description
+				if desc != "" {
+					desc = fmt.Sprintf("[%s] %s", serverName, desc)
+				} else {
+					desc = fmt.Sprintf("[%s]", serverName)
+				}
+				allPrompts = append(allPrompts, qualifiedPrompt{
+					Name:        serverName + "." + p.Name,
+					Description: desc,
+					Arguments:   p.Arguments,
+				})
+			}
+			mu.Unlock()
+		}(name)
+	}
+
+	wg.Wait()
+
+	if allPrompts == nil {
+		allPrompts = []qualifiedPrompt{}
+	}
+	return struct {
+		Prompts []qualifiedPrompt `json:"prompts"`
+	}{Prompts: allPrompts}, nil
+}
+
+// handlePromptsGet handles the prompts/get request.
+func (s *Server) handlePromptsGet(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	s.mu.RLock()
+	if !s.initialized {
+		s.mu.RUnlock()
+		return nil, ErrInvalidRequest("not initialized")
+	}
+	activeServerNames := s.activeServerNames
+	s.mu.RUnlock()
+
+	var req struct {
+		Name      string            `json:"name"`
+		Arguments map[string]string `json:"arguments,omitempty"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, ErrInvalidParams(err.Error())
+	}
+
+	// Split on first '.' to extract server name and original prompt name
+	serverName, originalName, ok := strings.Cut(req.Name, ".")
+	if !ok || serverName == "" || originalName == "" {
+		return nil, ErrInvalidParams("invalid prompt name: " + req.Name)
+	}
+
+	if !slices.Contains(activeServerNames, serverName) {
+		return nil, ErrServerNotFound(serverName)
+	}
+
+	sc, rpcErr := s.ensureServerClient(ctx, serverName)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, sc.timeout)
+	defer cancel()
+
+	messages, err := sc.client.GetPrompt(callCtx, originalName, req.Arguments)
+	if err != nil {
+		return nil, ErrInternalError(fmt.Sprintf("prompts/get from %s: %v", serverName, err))
+	}
+
+	return struct {
+		Messages json.RawMessage `json:"messages"`
+	}{Messages: messages}, nil
+}
+
+// serverClient holds a client and its per-server timeout.
+type serverClient struct {
+	client  *mcp.Client
+	timeout time.Duration
+}
+
+// ensureServerClient starts a server if needed and returns its MCP client
+// along with the per-server tool timeout for wrapping upstream calls.
+func (s *Server) ensureServerClient(ctx context.Context, serverName string) (serverClient, *RPCError) {
+	srv, ok := s.cfg.GetServer(serverName)
+	if !ok {
+		return serverClient{}, ErrServerNotFound(serverName)
+	}
+	if !srv.IsEnabled() {
+		return serverClient{}, NewRPCError(ErrCodeServerNotRunning, "server is disabled: "+serverName, nil)
+	}
+
+	handle := s.supervisor.Get(serverName)
+	if handle == nil || !handle.IsRunning() {
+		var err error
+		handle, err = s.supervisor.Start(ctx, serverName, srv)
+		if err != nil {
+			return serverClient{}, ErrServerFailedToStart(serverName, err.Error())
+		}
+	}
+
+	if err := handle.WaitForTools(ctx); err != nil {
+		return serverClient{}, ErrServerFailedToStart(serverName, err.Error())
+	}
+
+	return serverClient{
+		client:  handle.Client(),
+		timeout: time.Duration(srv.ToolTimeout()) * time.Second,
+	}, nil
 }
 
 // resolveNamespace determines which namespace to use and which servers are active.
@@ -715,8 +1013,14 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 		go s.startEagerServers(ctx)
 	}
 
-	// Notify client that the tool list may have changed
+	// Notify client that lists may have changed
 	s.sendNotification("notifications/tools/list_changed")
+	if s.opts.ExposeResources {
+		s.sendNotification("notifications/resources/list_changed")
+	}
+	if s.opts.ExposePrompts {
+		s.sendNotification("notifications/prompts/list_changed")
+	}
 
 	log.Printf("Config reload complete")
 }
@@ -805,10 +1109,20 @@ type serverInfo struct {
 }
 
 type capabilities struct {
-	Tools *toolsCapability `json:"tools,omitempty"`
+	Tools     *toolsCapability     `json:"tools,omitempty"`
+	Resources *resourcesCapability `json:"resources,omitempty"`
+	Prompts   *promptsCapability   `json:"prompts,omitempty"`
 }
 
 type toolsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+type resourcesCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+type promptsCapability struct {
 	ListChanged bool `json:"listChanged,omitempty"`
 }
 

@@ -121,6 +121,15 @@ Serve mode uses a two-phase `tools/list` flow so clients are not blocked behind 
 
 This keeps `tools/list` responsive for clients with tight request timeouts while still converging to the full aggregated tool set.
 
+## Resource and Prompt Passthrough
+
+When enabled via `--resources` and/or `--prompts`, serve mode passes through `resources/*` and `prompts/*` MCP methods from upstream servers. These are off by default to avoid context bloat.
+
+- **Resources**: URIs are qualified with the server name prefix (`serverName:originalUri`). On `resources/read`, the prefix is stripped before forwarding upstream. The `:` separator is safe because server names cannot contain `:`.
+- **Prompts**: Names are qualified as `serverName.promptName` (same as tools). Descriptions are prefixed with `[serverName]`. On `prompts/get`, the prefix is stripped before forwarding upstream.
+- **No caching**: Resources and prompts are fetched on demand from upstream servers, not cached or discovered at startup.
+- **No permissions**: Unlike tools, resources and prompts have no permission layer — they are read-only and user-initiated.
+
 ## Permission Resolution
 
 Tool access follows a four-tier resolution. The server-level global deny applies even without a namespace:

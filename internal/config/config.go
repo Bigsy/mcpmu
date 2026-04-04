@@ -129,13 +129,16 @@ func SaveTo(cfg *Config, path string) error {
 }
 
 // ValidateName checks if a server or namespace name is valid.
-// Names cannot be empty or contain '.'.
+// Names cannot be empty or contain '.' or ':'.
 func ValidateName(name string) error {
 	if name == "" {
 		return errors.New("name cannot be empty")
 	}
 	if strings.Contains(name, ".") {
 		return errors.New("name cannot contain '.'")
+	}
+	if strings.Contains(name, ":") {
+		return errors.New("name cannot contain ':'")
 	}
 	return nil
 }

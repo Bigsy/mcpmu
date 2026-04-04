@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"testing"
 	"time"
@@ -251,6 +252,116 @@ func TestClient_LargeToolList(t *testing.T) {
 	}
 	if len(resultTools) != 100 {
 		t.Errorf("expected 100 tools, got %d", len(resultTools))
+	}
+
+	_ = client.Close()
+	<-serverDone
+}
+
+func TestClient_ListResources(t *testing.T) {
+	serverIn, serverOut, clientIn, clientOut := testPipe()
+	defer func() { _ = clientIn.Close() }()
+	defer func() { _ = clientOut.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := fakeserver.Config{
+		Resources: []fakeserver.Resource{
+			{URI: "file:///readme.md", Name: "readme", Description: "The readme", MimeType: "text/markdown"},
+		},
+		ResourceContents: map[string]json.RawMessage{
+			"file:///readme.md": json.RawMessage(`[{"uri":"file:///readme.md","text":"# Hello"}]`),
+		},
+	}
+
+	serverDone := runFakeServer(ctx, serverIn, serverOut, cfg)
+
+	transport := NewStdioTransport(clientIn, clientOut)
+	client := NewClient(transport)
+
+	if err := client.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
+	resources, err := client.ListResources(ctx)
+	if err != nil {
+		t.Fatalf("ListResources failed: %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 resource, got %d", len(resources))
+	}
+	if resources[0].URI != "file:///readme.md" {
+		t.Errorf("expected URI 'file:///readme.md', got %q", resources[0].URI)
+	}
+	if resources[0].Name != "readme" {
+		t.Errorf("expected name 'readme', got %q", resources[0].Name)
+	}
+
+	contents, err := client.ReadResource(ctx, "file:///readme.md")
+	if err != nil {
+		t.Fatalf("ReadResource failed: %v", err)
+	}
+	if contents == nil {
+		t.Fatal("expected non-nil contents")
+	}
+
+	_ = client.Close()
+	<-serverDone
+}
+
+func TestClient_ListPrompts(t *testing.T) {
+	serverIn, serverOut, clientIn, clientOut := testPipe()
+	defer func() { _ = clientIn.Close() }()
+	defer func() { _ = clientOut.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := fakeserver.Config{
+		Prompts: []fakeserver.Prompt{
+			{
+				Name:        "summarize",
+				Description: "Summarize text",
+				Arguments: []fakeserver.PromptArgument{
+					{Name: "text", Description: "Text to summarize", Required: true},
+				},
+			},
+		},
+		PromptMessages: map[string]json.RawMessage{
+			"summarize": json.RawMessage(`[{"role":"user","content":{"type":"text","text":"Summarize: hello"}}]`),
+		},
+	}
+
+	serverDone := runFakeServer(ctx, serverIn, serverOut, cfg)
+
+	transport := NewStdioTransport(clientIn, clientOut)
+	client := NewClient(transport)
+
+	if err := client.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
+	prompts, err := client.ListPrompts(ctx)
+	if err != nil {
+		t.Fatalf("ListPrompts failed: %v", err)
+	}
+	if len(prompts) != 1 {
+		t.Fatalf("expected 1 prompt, got %d", len(prompts))
+	}
+	if prompts[0].Name != "summarize" {
+		t.Errorf("expected name 'summarize', got %q", prompts[0].Name)
+	}
+	if len(prompts[0].Arguments) != 1 {
+		t.Fatalf("expected 1 argument, got %d", len(prompts[0].Arguments))
+	}
+
+	messages, err := client.GetPrompt(ctx, "summarize", map[string]string{"text": "hello"})
+	if err != nil {
+		t.Fatalf("GetPrompt failed: %v", err)
+	}
+	if messages == nil {
+		t.Fatal("expected non-nil messages")
 	}
 
 	_ = client.Close()

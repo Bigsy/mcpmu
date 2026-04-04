@@ -23,6 +23,8 @@ var (
 	serveLogLevel           string
 	serveEager              bool
 	serveExposeManagerTools bool
+	serveResources          bool
+	servePrompts            bool
 )
 
 var serveCmd = &cobra.Command{
@@ -56,6 +58,8 @@ func init() {
 	serveCmd.Flags().StringVarP(&serveLogLevel, "log-level", "l", "info", "Log level (debug, info, warn, error)")
 	serveCmd.Flags().BoolVar(&serveEager, "eager", false, "Pre-start all servers on init (default: lazy start)")
 	serveCmd.Flags().BoolVar(&serveExposeManagerTools, "expose-manager-tools", false, "Include mcpmu.* tools in tools/list (default: hidden)")
+	serveCmd.Flags().BoolVar(&serveResources, "resources", false, "Passthrough resources/* from upstream servers")
+	serveCmd.Flags().BoolVar(&servePrompts, "prompts", false, "Passthrough prompts/* from upstream servers")
 
 	rootCmd.AddCommand(serveCmd)
 }
@@ -117,6 +121,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Namespace:          serveNamespace,
 		EagerStart:         serveEager,
 		ExposeManagerTools: serveExposeManagerTools,
+		ExposeResources:    serveResources,
+		ExposePrompts:      servePrompts,
 		LogLevel:           serveLogLevel,
 		Stdin:              os.Stdin,
 		Stdout:             os.Stdout,

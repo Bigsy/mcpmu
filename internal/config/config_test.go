@@ -191,8 +191,9 @@ func TestValidateName(t *testing.T) {
 		{"test_server", false},
 		{"server123", false},
 		{"filesystem", false},
-		{"", true},        // empty
-		{"has.dot", true}, // dot not allowed (used as namespace separator)
+		{"", true},          // empty
+		{"has.dot", true},   // dot not allowed (used as namespace separator)
+		{"has:colon", true}, // colon not allowed (used as resource URI separator)
 	}
 
 	for _, tt := range tests {
@@ -977,6 +978,17 @@ func TestValidateName_RejectsDots(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), ".") {
 		t.Errorf("expected error to mention dot, got: %v", err)
+	}
+}
+
+// Test that ValidateName rejects colons (used as resource URI separator)
+func TestValidateName_RejectsColons(t *testing.T) {
+	err := ValidateName("server:name")
+	if err == nil {
+		t.Error("expected error for name with colon")
+	}
+	if !strings.Contains(err.Error(), ":") {
+		t.Errorf("expected error to mention colon, got: %v", err)
 	}
 }
 

@@ -12,6 +12,7 @@ Key differentiators:
 - **Interactive TUI** — Monitor, test, and manage servers with a terminal interface
 - **Tool permissions** — Block unused tools per-namespace or globally deny dangerous tools at the server level
 - **Defense-in-depth** — Server-level global deny list that overrides all namespace permissions
+- **Resource & prompt passthrough** — Optionally expose upstream resources and prompts via `--resources` and `--prompts` flags
 
 
 <table>

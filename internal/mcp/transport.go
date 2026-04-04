@@ -3,6 +3,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 )
 
@@ -22,6 +23,14 @@ type McpClient interface {
 	Initialize(ctx context.Context) error
 	// ListTools retrieves the list of tools from the server.
 	ListTools(ctx context.Context) ([]Tool, error)
+	// ListResources retrieves the list of resources from the server.
+	ListResources(ctx context.Context) ([]Resource, error)
+	// ReadResource reads a specific resource by URI.
+	ReadResource(ctx context.Context, uri string) (json.RawMessage, error)
+	// ListPrompts retrieves the list of prompts from the server.
+	ListPrompts(ctx context.Context) ([]Prompt, error)
+	// GetPrompt retrieves a specific prompt with arguments.
+	GetPrompt(ctx context.Context, name string, arguments map[string]string) (json.RawMessage, error)
 	// Close closes the client connection.
 	Close() error
 }
@@ -31,6 +40,28 @@ type Tool struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	InputSchema any    `json:"inputSchema,omitempty"`
+}
+
+// Resource represents an MCP resource definition.
+type Resource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
+// Prompt represents an MCP prompt definition.
+type Prompt struct {
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Arguments   []PromptArgument `json:"arguments,omitempty"`
+}
+
+// PromptArgument represents an argument for an MCP prompt.
+type PromptArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
 }
 
 // StdioTransportConfig holds configuration for stdio transport.

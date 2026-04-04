@@ -166,6 +166,44 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	return result.Tools, nil
 }
 
+// ListResources retrieves the list of resources from the server.
+func (c *Client) ListResources(ctx context.Context) ([]Resource, error) {
+	var result resourcesListResult
+	if err := c.call(ctx, "resources/list", nil, &result); err != nil {
+		return nil, fmt.Errorf("resources/list: %w", err)
+	}
+	return result.Resources, nil
+}
+
+// ReadResource reads a specific resource by URI.
+func (c *Client) ReadResource(ctx context.Context, uri string) (json.RawMessage, error) {
+	params := resourceReadParams{URI: uri}
+	var result resourceReadResult
+	if err := c.call(ctx, "resources/read", params, &result); err != nil {
+		return nil, fmt.Errorf("resources/read: %w", err)
+	}
+	return result.Contents, nil
+}
+
+// ListPrompts retrieves the list of prompts from the server.
+func (c *Client) ListPrompts(ctx context.Context) ([]Prompt, error) {
+	var result promptsListResult
+	if err := c.call(ctx, "prompts/list", nil, &result); err != nil {
+		return nil, fmt.Errorf("prompts/list: %w", err)
+	}
+	return result.Prompts, nil
+}
+
+// GetPrompt retrieves a specific prompt with arguments.
+func (c *Client) GetPrompt(ctx context.Context, name string, arguments map[string]string) (json.RawMessage, error) {
+	params := promptGetParams{Name: name, Arguments: arguments}
+	var result promptGetResult
+	if err := c.call(ctx, "prompts/get", params, &result); err != nil {
+		return nil, fmt.Errorf("prompts/get: %w", err)
+	}
+	return result.Messages, nil
+}
+
 // ServerInfo returns information about the connected server.
 func (c *Client) ServerInfo() (name, version string) {
 	return c.serverName, c.serverVersion
@@ -187,6 +225,33 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments json.RawMe
 		Content: result.Content,
 		IsError: result.IsError,
 	}, nil
+}
+
+// resourcesListResult is the result of resources/list.
+type resourcesListResult struct {
+	Resources []Resource `json:"resources"`
+}
+
+type resourceReadParams struct {
+	URI string `json:"uri"`
+}
+
+type resourceReadResult struct {
+	Contents json.RawMessage `json:"contents"`
+}
+
+// promptsListResult is the result of prompts/list.
+type promptsListResult struct {
+	Prompts []Prompt `json:"prompts"`
+}
+
+type promptGetParams struct {
+	Name      string            `json:"name"`
+	Arguments map[string]string `json:"arguments,omitempty"`
+}
+
+type promptGetResult struct {
+	Messages json.RawMessage `json:"messages"`
 }
 
 // toolCallParams is the params for tools/call.

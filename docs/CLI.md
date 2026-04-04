@@ -47,6 +47,26 @@ mcpmu mcp login slack                 # scopes auto-discovered from server metad
 mcpmu mcp logout <server>             # remove stored credentials
 ```
 
+## Serve mode
+
+```bash
+mcpmu serve --stdio --namespace default
+mcpmu serve --stdio -n work --log-level debug --eager
+mcpmu serve --stdio --expose-manager-tools
+mcpmu serve --stdio --resources --prompts
+```
+
+### Serve flags
+
+- `--namespace` / `-n` — namespace to expose (default: auto-select)
+- `--log-level` / `-l` — log level: debug, info, warn, error (default: info)
+- `--eager` — pre-start all servers on init (default: lazy start)
+- `--expose-manager-tools` — include mcpmu.* tools in tools/list (default: hidden)
+- `--resources` — passthrough resources/* from upstream servers (default: off)
+- `--prompts` — passthrough prompts/* from upstream servers (default: off)
+
+When `--resources` is enabled, resource URIs are qualified as `serverName:originalUri`. When `--prompts` is enabled, prompt names are qualified as `serverName.promptName`.
+
 ## Namespace commands (alias: `ns`)
 
 ```bash

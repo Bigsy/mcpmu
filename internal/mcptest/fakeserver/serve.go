@@ -79,10 +79,17 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		// Handle methods
 		switch req.Method {
 		case "initialize":
+			caps := Capabilities{Tools: &ToolsCapability{}}
+			if len(cfg.Resources) > 0 || cfg.ResourceContents != nil {
+				caps.Resources = &ResourcesCapability{}
+			}
+			if len(cfg.Prompts) > 0 || cfg.PromptMessages != nil {
+				caps.Prompts = &PromptsCapability{}
+			}
 			_ = writeResponse(out, req.ID, InitializeResult{
 				ProtocolVersion: "2024-11-05",
 				ServerInfo:      ServerInfo{Name: "fake-server", Version: "1.0.0"},
-				Capabilities:    Capabilities{Tools: &ToolsCapability{}},
+				Capabilities:    caps,
 			}, cfg)
 
 		case "tools/list":
@@ -132,6 +139,56 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			// If no handler and no echo, return success with tool name
 			_ = writeResponse(out, req.ID, ToolCallResult{
 				Content: []ContentBlock{{Type: "text", Text: "Tool executed: " + params.Name}},
+			}, cfg)
+
+		case "resources/list":
+			resources := cfg.Resources
+			if resources == nil {
+				resources = []Resource{}
+			}
+			_ = writeResponse(out, req.ID, ResourcesListResult{Resources: resources}, cfg)
+
+		case "resources/read":
+			var params ResourceReadParams
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				_ = writeErrorResponse(out, req.ID, JSONRPCError{
+					Code: -32602, Message: "Invalid params: " + err.Error(),
+				}, cfg)
+				continue
+			}
+			if cfg.ResourceContents != nil {
+				if content, ok := cfg.ResourceContents[params.URI]; ok {
+					_ = writeResponse(out, req.ID, ResourceReadResult{Contents: content}, cfg)
+					continue
+				}
+			}
+			_ = writeErrorResponse(out, req.ID, JSONRPCError{
+				Code: -32002, Message: "Resource not found: " + params.URI,
+			}, cfg)
+
+		case "prompts/list":
+			prompts := cfg.Prompts
+			if prompts == nil {
+				prompts = []Prompt{}
+			}
+			_ = writeResponse(out, req.ID, PromptsListResult{Prompts: prompts}, cfg)
+
+		case "prompts/get":
+			var params PromptGetParams
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				_ = writeErrorResponse(out, req.ID, JSONRPCError{
+					Code: -32602, Message: "Invalid params: " + err.Error(),
+				}, cfg)
+				continue
+			}
+			if cfg.PromptMessages != nil {
+				if messages, ok := cfg.PromptMessages[params.Name]; ok {
+					_ = writeResponse(out, req.ID, PromptGetResult{Messages: messages}, cfg)
+					continue
+				}
+			}
+			_ = writeErrorResponse(out, req.ID, JSONRPCError{
+				Code: -32002, Message: "Prompt not found: " + params.Name,
 			}, cfg)
 
 		case "notifications/initialized":

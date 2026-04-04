@@ -12,6 +12,16 @@ type Config struct {
 	// Tools to return from tools/list
 	Tools []Tool `json:"tools"`
 
+	// Resources to return from resources/list
+	Resources []Resource `json:"resources"`
+	// ResourceContents maps URI -> raw content for resources/read
+	ResourceContents map[string]json.RawMessage `json:"resourceContents,omitempty"`
+
+	// Prompts to return from prompts/list
+	Prompts []Prompt `json:"prompts"`
+	// PromptMessages maps prompt name -> raw messages for prompts/get
+	PromptMessages map[string]json.RawMessage `json:"promptMessages,omitempty"`
+
 	// Per-method delays (simulate slow responses)
 	// NOTE: Use short delays (10-50ms) in tests to avoid slow suite.
 	Delays map[string]time.Duration `json:"delays"`
@@ -92,7 +102,19 @@ type ServerInfo struct {
 
 // Capabilities describes server capabilities.
 type Capabilities struct {
-	Tools *ToolsCapability `json:"tools,omitempty"`
+	Tools     *ToolsCapability     `json:"tools,omitempty"`
+	Resources *ResourcesCapability `json:"resources,omitempty"`
+	Prompts   *PromptsCapability   `json:"prompts,omitempty"`
+}
+
+// ResourcesCapability indicates the server supports resources.
+type ResourcesCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+// PromptsCapability indicates the server supports prompts.
+type PromptsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
 }
 
 // ToolsCapability indicates the server supports tools.
@@ -121,6 +143,59 @@ type ToolCallResult struct {
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+}
+
+// Resource represents an MCP resource definition.
+type Resource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
+// Prompt represents an MCP prompt definition.
+type Prompt struct {
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Arguments   []PromptArgument `json:"arguments,omitempty"`
+}
+
+// PromptArgument represents an argument for an MCP prompt.
+type PromptArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+}
+
+// ResourcesListResult is the result of resources/list.
+type ResourcesListResult struct {
+	Resources []Resource `json:"resources"`
+}
+
+// ResourceReadParams is the params for resources/read.
+type ResourceReadParams struct {
+	URI string `json:"uri"`
+}
+
+// ResourceReadResult is the result of resources/read.
+type ResourceReadResult struct {
+	Contents json.RawMessage `json:"contents"`
+}
+
+// PromptsListResult is the result of prompts/list.
+type PromptsListResult struct {
+	Prompts []Prompt `json:"prompts"`
+}
+
+// PromptGetParams is the params for prompts/get.
+type PromptGetParams struct {
+	Name      string            `json:"name"`
+	Arguments map[string]string `json:"arguments,omitempty"`
+}
+
+// PromptGetResult is the result of prompts/get.
+type PromptGetResult struct {
+	Messages json.RawMessage `json:"messages"`
 }
 
 // ToolHandler is a function that handles a tool call.
