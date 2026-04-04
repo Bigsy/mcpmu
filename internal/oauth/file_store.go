@@ -133,8 +133,14 @@ func (s *FileStore) load() ([]*Credential, error) {
 
 // save writes credentials to the file (caller must hold lock).
 func (s *FileStore) save(creds []*Credential) error {
+	// Resolve symlinks so atomic rename targets the real file
+	path := s.path
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+
 	// Ensure directory exists
-	dir := filepath.Dir(s.path)
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create credentials dir: %w", err)
 	}
@@ -145,13 +151,13 @@ func (s *FileStore) save(creds []*Credential) error {
 	}
 
 	// Write to temp file first
-	tmpPath := s.path + ".tmp"
+	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 
 	// Atomic rename
-	if err := os.Rename(tmpPath, s.path); err != nil {
+	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename credentials: %w", err)
 	}

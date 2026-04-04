@@ -175,7 +175,13 @@ func (tc *ToolCache) load() {
 }
 
 func (tc *ToolCache) save() error {
-	dir := filepath.Dir(tc.path)
+	// Resolve symlinks so atomic rename targets the real file
+	path := tc.path
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
@@ -185,12 +191,12 @@ func (tc *ToolCache) save() error {
 		return fmt.Errorf("marshal tool cache: %w", err)
 	}
 
-	tmpFile := tc.path + ".tmp"
+	tmpFile := path + ".tmp"
 	if err := os.WriteFile(tmpFile, data, 0600); err != nil {
 		return fmt.Errorf("write temp cache: %w", err)
 	}
 
-	if err := os.Rename(tmpFile, tc.path); err != nil {
+	if err := os.Rename(tmpFile, path); err != nil {
 		_ = os.Remove(tmpFile)
 		return fmt.Errorf("rename cache: %w", err)
 	}

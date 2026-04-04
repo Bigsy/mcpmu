@@ -116,6 +116,54 @@ func TestSave_AtomicWrite(t *testing.T) {
 	}
 }
 
+func TestSave_PreservesSymlink(t *testing.T) {
+	dir := t.TempDir()
+
+	// Real file lives in a subdirectory
+	realDir := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	realPath := filepath.Join(realDir, "config.json")
+	if err := os.WriteFile(realPath, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlink points to the real file
+	linkPath := filepath.Join(dir, "config.json")
+	if err := os.Symlink(realPath, linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := NewConfig()
+	cfg.Servers["test"] = ServerConfig{
+		Kind:    ServerKindStdio,
+		Command: "echo",
+	}
+
+	if err := SaveTo(cfg, linkPath); err != nil {
+		t.Fatalf("SaveTo via symlink failed: %v", err)
+	}
+
+	// Symlink must still exist and point to the same target
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("symlink was destroyed: %v", err)
+	}
+	if target != realPath {
+		t.Errorf("symlink target changed: got %s, want %s", target, realPath)
+	}
+
+	// Content should be written to the real file
+	loaded, err := LoadFrom(linkPath)
+	if err != nil {
+		t.Fatalf("LoadFrom via symlink failed: %v", err)
+	}
+	if len(loaded.Servers) != 1 {
+		t.Errorf("expected 1 server, got %d", len(loaded.Servers))
+	}
+}
+
 func TestSave_CreatesDirectory(t *testing.T) {
 	testutil.SetupTestHome(t)
 

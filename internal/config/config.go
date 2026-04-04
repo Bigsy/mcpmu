@@ -98,6 +98,11 @@ func SaveTo(cfg *Config, path string) error {
 		path = filepath.Join(home, path[2:])
 	}
 
+	// Resolve symlinks so atomic rename targets the real file
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+
 	// Ensure config directory exists
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
