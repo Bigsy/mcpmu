@@ -77,6 +77,8 @@
     --shadow: 0 1px 3px rgba(0,0,0,0.08);
     --shadow-lg: 0 4px 12px rgba(0,0,0,0.12);
   }
+  .topbar-icon-dark { display: none; }
+  .topbar-icon-light { display: inline; }
 }
 
 /* Reset */
@@ -89,6 +91,29 @@ body {
   color: var(--text);
   background: var(--bg);
   min-height: 100vh;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  bottom: 80px;
+  left: 40px;
+  width: 400px;
+  height: 400px;
+  background-image: url('/static/mcp-icon-dark.png');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  opacity: 0.03;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@media (prefers-color-scheme: light) {
+  body::before {
+    background-image: url('/static/mcp-icon-light.png');
+    opacity: 0.035;
+  }
 }
 
 a { color: var(--primary); text-decoration: none; }
@@ -117,11 +142,22 @@ code, .mono {
 }
 
 .topbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 700;
   font-size: 16px;
   color: var(--primary);
   letter-spacing: -0.5px;
 }
+
+.topbar-icon {
+  height: 28px;
+  width: auto;
+}
+
+.topbar-icon-light { display: none; }
+.topbar-icon-dark { display: inline; }
 
 .topbar-logo span { color: var(--text-faint); font-weight: 400; }
 

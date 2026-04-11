@@ -5,6 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{block "title" .}}mcpmu{{end}}</title>
+  <link rel="icon" type="image/png" href="/static/mcp-icon-dark.png">
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/htmx.min.js"></script>
   <script src="/static/sse.js"></script>
@@ -13,7 +14,11 @@
 <div class="shell">
 
   <header class="topbar">
-    <div class="topbar-logo">mcpmu <span>web</span></div>
+    <div class="topbar-logo">
+      <img src="/static/mcp-icon-dark.png" alt="" class="topbar-icon topbar-icon-dark">
+      <img src="/static/mcp-icon-light.png" alt="" class="topbar-icon topbar-icon-light">
+      mcpmu <span>web</span>
+    </div>
     <nav>
       <ul class="topbar-nav">
         <li><a href="/servers"{{if eq .Page "servers"}} class="active"{{end}}>
