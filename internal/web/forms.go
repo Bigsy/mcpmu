@@ -223,12 +223,45 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) config.
 }
 
 // handleServerAddPage renders the add server form.
+// Accepts query params from the registry browser to pre-populate the form:
+//
+//	?from=registry&name=...&kind=stdio|http&command=...&args=...&url=...&bearer_env=...&env=KEY=val
 func (s *Server) handleServerAddPage(w http.ResponseWriter, r *http.Request) {
+	fd := newServerFormData()
+
+	// Pre-populate from registry install query params
+	q := r.URL.Query()
+	if q.Get("from") == "registry" {
+		if name := q.Get("name"); name != "" {
+			fd.Name = name
+		}
+		fd.IsHTTP = q.Get("kind") == "http"
+		if cmd := q.Get("command"); cmd != "" {
+			fd.Command = cmd
+		}
+		if args := q.Get("args"); args != "" {
+			fd.Args = args
+		}
+		if u := q.Get("url"); u != "" {
+			fd.URL = u
+		}
+		if bearer := q.Get("bearer_env"); bearer != "" {
+			fd.AuthMode = "bearer"
+			fd.BearerEnv = bearer
+		}
+		// Parse env=KEY=val pairs
+		for _, ev := range q["env"] {
+			if k, v, ok := strings.Cut(ev, "="); ok && k != "" {
+				fd.EnvPairs = append(fd.EnvPairs, envPair{Key: k, Val: v})
+			}
+		}
+	}
+
 	data := serverFormPageData{
 		Page:       "servers",
 		ConfigPath: s.configPathDisplay(),
 		Action:     "/servers",
-		Form:       newServerFormData(),
+		Form:       fd,
 	}
 	s.render(w, "server_form.html", data)
 }

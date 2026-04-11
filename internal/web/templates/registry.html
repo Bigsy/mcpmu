@@ -1,0 +1,39 @@
+{{define "title"}}Registry — mcpmu{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>MCP Registry</h1>
+    <p class="subtitle">Search and install MCP servers from the official registry</p>
+  </div>
+</div>
+
+<!-- Search -->
+<form id="registry-search" action="/registry" method="GET">
+  <div class="search-bar">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+      <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/>
+    </svg>
+    <input type="text" name="q" placeholder="Search servers... (e.g. postgres, slack, github)"
+           value="{{.Query}}"
+           hx-get="/fragments/registry/results"
+           hx-trigger="input changed delay:400ms, search"
+           hx-target="#results"
+           hx-include="this"
+           hx-indicator="#search-spinner">
+    <svg id="search-spinner" class="htmx-indicator" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--primary)" stroke-width="2" style="animation: spin 1s linear infinite;">
+      <path d="M8 1a7 7 0 1 0 7 7" stroke-linecap="round"/>
+    </svg>
+  </div>
+</form>
+
+<div id="results">
+  {{template "registry_results" .}}
+</div>
+
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+.htmx-indicator { display: none; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline-block; }
+</style>
+{{end}}

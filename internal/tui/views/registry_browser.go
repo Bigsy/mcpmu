@@ -580,6 +580,12 @@ func (m RegistryBrowserModel) renderDetailContent(width int) string {
 				b.WriteString("\n")
 			}
 		}
+		if spec.Headers != nil {
+			for k, v := range spec.Headers {
+				b.WriteString(m.theme.Muted.Render("Header: " + k + ": " + v))
+				b.WriteString("\n")
+			}
+		}
 		if spec.BearerTokenEnvVar != "" {
 			b.WriteString(m.theme.Muted.Render("Bearer token: " + spec.BearerTokenEnvVar))
 			b.WriteString("\n")

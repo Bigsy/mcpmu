@@ -186,7 +186,8 @@ mcpmu embeds a `SKILL.md` file in the binary (`cmd/mcpmu/skill_data/SKILL.md` vi
 - `forms.go` — Form page handlers and CRUD operations (add/edit/delete servers and namespaces)
 - `actions.go` — Live action handlers (start/stop, OAuth login/logout, denied tools, permissions, server defaults, set default namespace)
 - `handlers.go` — JSON API endpoints (`/api/servers`, `/api/namespaces`, `/api/config/export|import`)
-- `fragments.go` — htmx fragment handlers (server table, status pill)
+- `registry.go` — Registry browser page, htmx fragment, and JSON API (`/api/registry/search`)
+- `fragments.go` — htmx fragment handlers (server table, status pill, registry results)
 - `sse.go` — Server-Sent Events for live log streaming
 - `status.go` — `StatusTracker` subscribes to event bus, maintains last-known status per server
 - `middleware.go` — Request logging, panic recovery

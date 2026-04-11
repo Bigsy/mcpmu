@@ -12,6 +12,7 @@ type InstallSpec struct {
 	Args              string            // Space-separated arguments
 	Env               map[string]string // Environment variables with placeholders
 	BearerTokenEnvVar string            // Bearer token env var for HTTP servers
+	Headers           map[string]string // Required HTTP headers (non-bearer) for remote servers
 }
 
 // SelectBestPackage chooses the best installable option from a server.
@@ -163,18 +164,20 @@ func buildRemoteSpec(name string, remote *Remote) InstallSpec {
 		}
 	}
 
-	// Collect non-Authorization headers as env vars for user to fill
-	env := make(map[string]string)
+	// Collect non-Authorization headers separately — these are HTTP headers,
+	// not process environment variables. The form/UI layer decides how to
+	// present them (http_headers config field, or a manual-config note).
+	headers := make(map[string]string)
 	for _, h := range remote.Headers {
 		if strings.EqualFold(h.Name, "Authorization") {
 			continue
 		}
 		if h.IsRequired {
-			env[h.Name] = fmt.Sprintf("<your-%s>", h.Name)
+			headers[h.Name] = fmt.Sprintf("<your-%s>", h.Name)
 		}
 	}
-	if len(env) > 0 {
-		spec.Env = env
+	if len(headers) > 0 {
+		spec.Headers = headers
 	}
 
 	return spec

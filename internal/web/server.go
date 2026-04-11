@@ -16,6 +16,7 @@ import (
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/process"
+	"github.com/Bigsy/mcpmu/internal/registry"
 )
 
 //go:embed static
@@ -32,6 +33,7 @@ type Server struct {
 	supervisor *process.Supervisor
 	bus        *events.Bus
 	toolCache  *config.ToolCache
+	registry   *registry.Client
 	status     *StatusTracker
 	templates  map[string]*template.Template
 	httpServer *http.Server
@@ -60,6 +62,7 @@ func New(opts Options) (*Server, error) {
 		supervisor: opts.Supervisor,
 		bus:        opts.Bus,
 		toolCache:  opts.ToolCache,
+		registry:   registry.NewClient(),
 		status:     NewStatusTracker(opts.Bus),
 		templates:  tmpl,
 	}
@@ -115,6 +118,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /namespaces/add", s.handleNamespaceAddPage)
 	mux.HandleFunc("GET /namespaces/{name}/edit", s.handleNamespaceEditPage)
 	mux.HandleFunc("GET /config/import", s.handleConfigImportPage)
+	mux.HandleFunc("GET /registry", s.handleRegistryPage)
 
 	// Form submissions (Phase 2)
 	mux.HandleFunc("POST /servers", s.handleServerCreate)
@@ -155,10 +159,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config/export", s.handleAPIExportConfig)
 	mux.HandleFunc("POST /api/config/import", s.handleAPIImportConfig)
 	mux.HandleFunc("POST /api/config/import/apply", s.handleAPIImportApply)
+	mux.HandleFunc("GET /api/registry/search", s.handleAPIRegistrySearch)
 
 	// Fragments (HTML partials for htmx swaps)
 	mux.HandleFunc("GET /fragments/servers/table", s.handleFragmentServerTable)
 	mux.HandleFunc("GET /fragments/servers/{name}/status", s.handleFragmentServerStatus)
+	mux.HandleFunc("GET /fragments/registry/results", s.handleFragmentRegistryResults)
 
 	// SSE
 	mux.HandleFunc("GET /servers/{name}/logs/stream", s.handleSSELogs)
@@ -173,6 +179,7 @@ var pageTemplates = []string{
 	"templates/namespace_detail.html",
 	"templates/namespace_form.html",
 	"templates/config_import.html",
+	"templates/registry.html",
 }
 
 func parseTemplates() (map[string]*template.Template, error) {

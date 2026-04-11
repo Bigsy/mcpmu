@@ -15,6 +15,7 @@ import (
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/process"
+	"github.com/Bigsy/mcpmu/internal/registry"
 )
 
 func newTestServer(t *testing.T) *Server {
@@ -1108,5 +1109,342 @@ func TestLayoutHasExportImportLinks(t *testing.T) {
 	}
 	if !strings.Contains(html, "/config/import") {
 		t.Error("missing import link in layout")
+	}
+}
+
+// --- Phase 4: Registry browser tests ---
+
+// registryFixture is a minimal registry API response for tests.
+const registryFixture = `{
+  "servers": [
+    {
+      "server": {
+        "name": "io.github.example/test-mcp-server",
+        "title": "Test MCP Server",
+        "description": "A test MCP server for unit tests.",
+        "version": "1.0.0",
+        "repository": { "url": "https://github.com/example/test-mcp-server", "source": "github" },
+        "packages": [
+          {
+            "registryType": "npm",
+            "identifier": "@example/test-mcp-server",
+            "version": "1.0.0",
+            "runtimeHint": "npx",
+            "transport": { "type": "stdio" },
+            "environmentVariables": [
+              { "name": "TEST_API_KEY", "description": "Test API key", "isRequired": true, "isSecret": true }
+            ]
+          }
+        ]
+      },
+      "_meta": {}
+    }
+  ],
+  "metadata": { "count": 1 }
+}`
+
+// newTestServerWithRegistry creates a test web server with a mock registry backend.
+func newTestServerWithRegistry(t *testing.T, fixture string) *Server {
+	t.Helper()
+
+	mockRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(fixture))
+	}))
+	t.Cleanup(mockRegistry.Close)
+
+	srv := newTestServer(t)
+	srv.registry = registry.NewClientWithBase(mockRegistry.URL)
+	return srv
+}
+
+func TestRegistryPage_EmptySearch(t *testing.T) {
+	srv := newTestServerWithRegistry(t, registryFixture)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/registry", nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+
+	if !strings.Contains(html, "MCP Registry") {
+		t.Error("missing Registry heading")
+	}
+	if !strings.Contains(html, "Search the MCP Registry") {
+		t.Error("missing empty state message")
+	}
+	// Should not have results without a query
+	if strings.Contains(html, "reg-item") {
+		t.Error("should not show results without a query")
+	}
+}
+
+func TestRegistryPage_WithQuery(t *testing.T) {
+	srv := newTestServerWithRegistry(t, registryFixture)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/registry?q=test", nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+
+	if !strings.Contains(html, "io.github.example/test-mcp-server") {
+		t.Error("missing server name in results")
+	}
+	if !strings.Contains(html, "A test MCP server") {
+		t.Error("missing server description")
+	}
+	if !strings.Contains(html, "npm") {
+		t.Error("missing registry type badge")
+	}
+	if !strings.Contains(html, "stdio") {
+		t.Error("missing transport badge")
+	}
+	if !strings.Contains(html, "TEST_API_KEY") {
+		t.Error("missing env var in results")
+	}
+	if !strings.Contains(html, "/servers/add?") {
+		t.Error("missing install URL")
+	}
+}
+
+func TestRegistryPage_NoResults(t *testing.T) {
+	emptyFixture := `{"servers": [], "metadata": {"count": 0}}`
+	srv := newTestServerWithRegistry(t, emptyFixture)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/registry?q=nonexistent", nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+
+	if !strings.Contains(html, "No results found") {
+		t.Error("missing no-results message")
+	}
+}
+
+func TestFragmentRegistryResults(t *testing.T) {
+	srv := newTestServerWithRegistry(t, registryFixture)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/fragments/registry/results?q=test", nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+
+	// Fragment should NOT contain full layout
+	if strings.Contains(html, "<html") {
+		t.Error("fragment should not contain full HTML layout")
+	}
+	if !strings.Contains(html, "io.github.example/test-mcp-server") {
+		t.Error("fragment should contain server name")
+	}
+	if !strings.Contains(html, "Install") {
+		t.Error("fragment should contain Install button")
+	}
+}
+
+func TestFragmentRegistryResults_EmptyQuery(t *testing.T) {
+	srv := newTestServerWithRegistry(t, registryFixture)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/fragments/registry/results", nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+
+	if !strings.Contains(html, "Search the MCP Registry") {
+		t.Error("should show empty state for no query")
+	}
+}
+
+func TestAPIRegistrySearch(t *testing.T) {
+	srv := newTestServerWithRegistry(t, registryFixture)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/registry/search?q=test", nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		t.Errorf("expected JSON content type, got %q", ct)
+	}
+
+	var results []json.RawMessage
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &results); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected 1 result, got %d", len(results))
+	}
+
+	// Verify the result contains an install spec
+	if !strings.Contains(string(body), "installSpec") {
+		t.Error("result should contain installSpec")
+	}
+	if !strings.Contains(string(body), "npx") {
+		t.Error("install spec should reference npx command")
+	}
+}
+
+func TestAPIRegistrySearch_NoQuery(t *testing.T) {
+	srv := newTestServerWithRegistry(t, registryFixture)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/registry/search", nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestServerAddPage_RegistryPrepopulate(t *testing.T) {
+	srv := newTestServer(t)
+
+	params := url.Values{
+		"from":    {"registry"},
+		"name":    {"brave-search"},
+		"kind":    {"stdio"},
+		"command": {"npx"},
+		"args":    {"-y @brave/brave-search-mcp-server"},
+		"env":     {"BRAVE_API_KEY=<your-BRAVE_API_KEY>"},
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/servers/add?"+params.Encode(), nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+
+	// Verify form is pre-populated
+	if !strings.Contains(html, `value="brave-search"`) {
+		t.Error("name field not pre-populated")
+	}
+	if !strings.Contains(html, `value="npx"`) {
+		t.Error("command field not pre-populated")
+	}
+	if !strings.Contains(html, `value="-y @brave/brave-search-mcp-server"`) {
+		t.Error("args field not pre-populated")
+	}
+	if !strings.Contains(html, "BRAVE_API_KEY") {
+		t.Error("env var key not pre-populated")
+	}
+}
+
+func TestServerAddPage_RegistryPrepopulate_HTTP(t *testing.T) {
+	srv := newTestServer(t)
+
+	params := url.Values{
+		"from":       {"registry"},
+		"name":       {"my-remote"},
+		"kind":       {"http"},
+		"url":        {"https://example.com/mcp"},
+		"bearer_env": {"MY_TOKEN"},
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/servers/add?"+params.Encode(), nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+
+	if !strings.Contains(html, `value="my-remote"`) {
+		t.Error("name field not pre-populated")
+	}
+	if !strings.Contains(html, `value="https://example.com/mcp"`) {
+		t.Error("url field not pre-populated")
+	}
+	if !strings.Contains(html, `value="MY_TOKEN"`) {
+		t.Error("bearer_env field not pre-populated")
+	}
+	// HTTP mode should set kind to http
+	if !strings.Contains(html, `value="http"`) {
+		t.Error("kind field should be http")
+	}
+}
+
+func TestRegistryNavLink(t *testing.T) {
+	srv := newTestServer(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/servers", nil)
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+
+	if !strings.Contains(html, `href="/registry"`) {
+		t.Error("missing Registry nav link")
 	}
 }

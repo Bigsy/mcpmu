@@ -148,6 +148,7 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 - **Lazy or eager startup** — Start servers on-demand or pre-start everything with `--eager`
 - **Registry browser** — Search the official MCP server registry from the TUI and install with pre-populated config (`a` → Official Registry)
 - **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
+- **Web UI** — Browser-based management via `mcpmu web` with live log streaming, CRUD operations, and registry browser
 
 ## Serve Mode
 

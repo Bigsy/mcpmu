@@ -258,6 +258,36 @@ func TestBuildInstallSpec_Remote(t *testing.T) {
 	}
 }
 
+func TestBuildInstallSpec_RemoteWithHeaders(t *testing.T) {
+	srv := Server{Name: "io.github.example/custom-server"}
+	remote := &Remote{
+		Type: "streamable-http",
+		URL:  "https://example.com/mcp",
+		Headers: []RemoteHeader{
+			{Name: "Authorization", Value: "Bearer {api_key}", IsRequired: true, IsSecret: true},
+			{Name: "X-Custom-Header", Value: "some-value", IsRequired: true},
+			{Name: "X-Optional", Value: "optional", IsRequired: false},
+		},
+	}
+
+	spec := BuildInstallSpec(srv, nil, remote)
+
+	if spec.BearerTokenEnvVar != "API_KEY" {
+		t.Errorf("bearer: got %q, want %q", spec.BearerTokenEnvVar, "API_KEY")
+	}
+	// Non-bearer required headers go into Headers, NOT Env
+	if spec.Headers == nil || spec.Headers["X-Custom-Header"] == "" {
+		t.Error("expected X-Custom-Header in Headers")
+	}
+	if spec.Env != nil {
+		t.Errorf("Env should be nil for remote specs with only headers, got %v", spec.Env)
+	}
+	// Optional headers are not included
+	if _, ok := spec.Headers["X-Optional"]; ok {
+		t.Error("optional header should not be in Headers")
+	}
+}
+
 func TestBuildInstallSpec_RemoteNoAuth(t *testing.T) {
 	srv := Server{Name: "test/server"}
 	remote := &Remote{

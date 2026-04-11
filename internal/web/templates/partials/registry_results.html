@@ -1,0 +1,103 @@
+{{define "registry_results"}}
+{{if .Query}}
+  {{if .Error}}
+    <div class="alert alert-error" role="alert">
+      <strong>Error:</strong> {{.Error}}
+    </div>
+  {{else if .Results}}
+    <p class="text-sm text-faint mb-4">{{len .Results}} result{{if ne (len .Results) 1}}s{{end}} for "{{.Query}}"</p>
+
+    <div class="card">
+      <div class="card-body no-pad">
+        {{range $i, $r := .Results}}
+        <div class="reg-item">
+          <div style="flex: 1; min-width: 0;">
+            <div class="reg-name">
+              {{$r.Name}}
+              {{if $r.Version}}<span class="version">v{{$r.Version}}</span>{{end}}
+            </div>
+            {{if $r.Description}}
+            <div class="reg-desc">{{$r.Description}}</div>
+            {{end}}
+            <div class="reg-meta">
+              {{if $r.RegistryType}}<span class="badge">{{$r.RegistryType}}</span>{{end}}
+              {{if $r.Transport}}<span class="badge">{{$r.Transport}}</span>{{end}}
+              {{if $r.IsOfficial}}<span class="badge badge-info">official</span>{{end}}
+            </div>
+
+            {{if $r.EnvVars}}
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+              <h3 class="text-xs fw-500 text-faint" style="text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Environment Variables</h3>
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                {{range $r.EnvVars}}
+                <div>
+                  <div class="flex items-center gap-2">
+                    <span class="mono text-sm" style="color: var(--primary)">{{.Name}}</span>
+                    {{if .IsRequired}}<span class="badge badge-danger">required</span>{{end}}
+                    {{if .IsSecret}}<span class="badge badge-warning">secret</span>{{end}}
+                  </div>
+                  {{if .Description}}<span class="text-xs text-faint">{{.Description}}</span>{{end}}
+                </div>
+                {{end}}
+              </div>
+            </div>
+            {{end}}
+
+            {{if $r.InstallPreview}}
+            <div style="background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; margin-top: 12px;">
+              <h3 class="text-xs fw-500 text-faint" style="text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Install Preview</h3>
+              <div class="mono text-sm">
+                {{if $r.Spec.IsHTTP}}
+                <div style="color: var(--primary);">URL: {{$r.Spec.CommandOrURL}}</div>
+                {{if $r.Spec.BearerTokenEnvVar}}<div style="color: var(--text-faint);">Bearer: {{$r.Spec.BearerTokenEnvVar}}</div>{{end}}
+                {{range $k, $v := $r.Spec.Headers}}
+                <div style="color: var(--text-faint);">Header: {{$k}}: {{$v}}</div>
+                {{end}}
+                {{else}}
+                <div style="color: var(--primary);">{{$r.Spec.CommandOrURL}} {{$r.Spec.Args}}</div>
+                {{end}}
+                {{range $k, $v := $r.Spec.Env}}
+                <div style="color: var(--text-faint);">Env: {{$k}}={{$v}}</div>
+                {{end}}
+              </div>
+              {{if $r.Spec.Headers}}
+              <p class="text-xs text-faint" style="margin-top: 8px;">Note: required HTTP headers must be configured manually after install.</p>
+              {{end}}
+            </div>
+            {{end}}
+          </div>
+
+          <div style="flex-shrink: 0; margin-left: 16px; align-self: flex-start;">
+            <a href="{{$r.InstallURL}}" class="btn btn-primary btn-sm">Install</a>
+          </div>
+        </div>
+        {{end}}
+      </div>
+    </div>
+  {{else}}
+    <div class="card">
+      <div class="card-body">
+        <div class="empty">
+          <div class="empty-icon" style="font-size: 32px; opacity: 0.5;">&#128528;</div>
+          <h3>No results found</h3>
+          <p>Try a different search term or <a href="/servers/add">add a server manually</a></p>
+        </div>
+      </div>
+    </div>
+  {{end}}
+{{else}}
+  <div class="card">
+    <div class="card-body">
+      <div class="empty">
+        <div class="empty-icon" style="font-size: 32px; opacity: 0.5;">
+          <svg width="32" height="32" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/>
+          </svg>
+        </div>
+        <h3>Search the MCP Registry</h3>
+        <p>Find and install MCP servers from the official registry at registry.modelcontextprotocol.io</p>
+      </div>
+    </div>
+  </div>
+{{end}}
+{{end}}
