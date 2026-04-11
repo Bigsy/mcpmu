@@ -127,6 +127,16 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /namespaces/{name}/assign", s.handleNamespaceAssign)
 	mux.HandleFunc("POST /namespaces/{name}/unassign", s.handleNamespaceUnassign)
 
+	// Live actions (Phase 3)
+	mux.HandleFunc("POST /servers/{name}/start", s.handleServerStart)
+	mux.HandleFunc("POST /servers/{name}/stop", s.handleServerStop)
+	mux.HandleFunc("POST /servers/{name}/login", s.handleServerLogin)
+	mux.HandleFunc("POST /servers/{name}/logout", s.handleServerLogout)
+	mux.HandleFunc("POST /servers/{name}/denied-tools", s.handleServerDeniedTools)
+	mux.HandleFunc("POST /namespaces/{name}/set-default", s.handleNamespaceSetDefault)
+	mux.HandleFunc("POST /namespaces/{name}/permission", s.handleNamespacePermission)
+	mux.HandleFunc("POST /namespaces/{name}/server-default", s.handleNamespaceServerDefault)
+
 	// JSON API (Phase 2)
 	mux.HandleFunc("GET /api/servers", s.handleAPIListServers)
 	mux.HandleFunc("POST /api/servers", s.handleAPICreateServer)
@@ -138,6 +148,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/namespaces/{name}", s.handleAPIGetNamespace)
 	mux.HandleFunc("PUT /api/namespaces/{name}", s.handleAPIUpdateNamespace)
 	mux.HandleFunc("DELETE /api/namespaces/{name}", s.handleAPIDeleteNamespace)
+	mux.HandleFunc("POST /api/servers/{name}/start", s.handleAPIServerStart)
+	mux.HandleFunc("POST /api/servers/{name}/stop", s.handleAPIServerStop)
+	mux.HandleFunc("POST /api/servers/{name}/login", s.handleAPIServerLogin)
+	mux.HandleFunc("POST /api/servers/{name}/logout", s.handleAPIServerLogout)
 	mux.HandleFunc("GET /api/config/export", s.handleAPIExportConfig)
 	mux.HandleFunc("POST /api/config/import", s.handleAPIImportConfig)
 	mux.HandleFunc("POST /api/config/import/apply", s.handleAPIImportApply)
@@ -163,10 +177,25 @@ var pageTemplates = []string{
 
 func parseTemplates() (map[string]*template.Template, error) {
 	funcMap := template.FuncMap{
-		"stateClass": stateClass,
-		"stateDot":   stateDot,
-		"stateLabel": stateLabel,
-		"kindBadge":  kindBadge,
+		"stateClass":  stateClass,
+		"stateDot":    stateDot,
+		"stateLabel":  stateLabel,
+		"kindBadge":   kindBadge,
+		"isRunning":   func(s events.RuntimeState) bool { return s == events.StateRunning },
+		"isStarting":  func(s events.RuntimeState) bool { return s == events.StateStarting },
+		"isStopping":  func(s events.RuntimeState) bool { return s == events.StateStopping },
+		"isNeedsAuth": func(s events.RuntimeState) bool { return s == events.StateNeedsAuth },
+		"canStart": func(s events.RuntimeState) bool {
+			return s == events.StateIdle || s == events.StateStopped || s == events.StateError || s == events.StateCrashed
+		},
+		"permKey": func(server, tool string) string { return server + ":" + tool },
+		"mapGet": func(m map[string]bool, key string) bool {
+			return m[key]
+		},
+		"mapHas": func(m map[string]bool, key string) bool {
+			_, ok := m[key]
+			return ok
+		},
 		"formatUptime": func(d time.Duration) string {
 			if d <= 0 {
 				return "\u2014"

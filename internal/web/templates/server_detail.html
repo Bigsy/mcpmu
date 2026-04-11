@@ -25,6 +25,31 @@
     </div>
   </div>
   <div class="btn-group">
+    {{if .Config.IsEnabled}}
+      {{if isRunning .Status.State}}
+        <button class="btn btn-sm btn-danger"
+                hx-post="/servers/{{.Name}}/stop"
+                hx-swap="none">Stop</button>
+      {{else if isNeedsAuth .Status.State}}
+        <button class="btn btn-sm btn-primary"
+                hx-post="/servers/{{.Name}}/login"
+                hx-swap="none">Login</button>
+      {{else if isStarting .Status.State}}
+        <button class="btn btn-sm" disabled>Starting...</button>
+      {{else if isStopping .Status.State}}
+        <button class="btn btn-sm" disabled>Stopping...</button>
+      {{else}}
+        <button class="btn btn-sm btn-success"
+                hx-post="/servers/{{.Name}}/start"
+                hx-swap="none">Start</button>
+      {{end}}
+    {{end}}
+    {{if and .Config.IsHTTP .IsLoggedIn}}
+      <button class="btn btn-sm"
+              hx-post="/servers/{{.Name}}/logout"
+              hx-confirm="Logout from '{{.Name}}'? The server will be stopped."
+              hx-swap="none">Logout</button>
+    {{end}}
     <button class="btn btn-sm"
             hx-post="/servers/{{.Name}}/toggle"
             hx-swap="none">
@@ -121,7 +146,19 @@
               {{end}}
             </div>
             <div class="tool-meta">
-              {{if .Denied}}<span class="badge badge-danger">denied</span>{{end}}
+              {{if .Denied}}
+                <form method="POST" action="/servers/{{$.Name}}/denied-tools" style="margin:0">
+                  <input type="hidden" name="action" value="remove">
+                  <input type="hidden" name="tool" value="{{.Name}}">
+                  <button type="submit" class="badge badge-danger" style="cursor:pointer; border:none;" title="Click to allow">denied</button>
+                </form>
+              {{else}}
+                <form method="POST" action="/servers/{{$.Name}}/denied-tools" style="margin:0">
+                  <input type="hidden" name="action" value="add">
+                  <input type="hidden" name="tool" value="{{.Name}}">
+                  <button type="submit" class="btn-icon" style="font-size:11px; color: var(--text-faint);" title="Deny this tool">deny</button>
+                </form>
+              {{end}}
               {{if gt .TokenCount 0}}<span class="tool-tokens">~{{.TokenCount}} tok</span>{{end}}
             </div>
           </div>
@@ -134,23 +171,39 @@
       </div>
     </div>
 
-    {{if .Config.DeniedTools}}
     <!-- Denied tools -->
     <div class="card section">
       <div class="card-header">
         <h2>Denied Tools ({{len .Config.DeniedTools}})</h2>
       </div>
       <div class="card-body no-pad">
-        {{range .Config.DeniedTools}}
-        <div class="tool-item">
-          <div>
-            <span class="mono text-sm" style="color: var(--danger)">{{.}}</span>
+        {{if .Config.DeniedTools}}
+          {{range .Config.DeniedTools}}
+          <div class="tool-item">
+            <div>
+              <span class="mono text-sm" style="color: var(--danger)">{{.}}</span>
+            </div>
+            <form method="POST" action="/servers/{{$.Name}}/denied-tools" style="margin:0">
+              <input type="hidden" name="action" value="remove">
+              <input type="hidden" name="tool" value="{{.}}">
+              <button type="submit" class="btn-icon" title="Remove from deny list" style="color: var(--danger)">&#10005;</button>
+            </form>
           </div>
-        </div>
+          {{end}}
+        {{else}}
+          <div style="padding: 12px 16px;">
+            <span class="text-sm text-faint">No tools denied.</span>
+          </div>
         {{end}}
+        <div style="padding: 8px 16px; border-top: 1px solid var(--border);">
+          <form method="POST" action="/servers/{{.Name}}/denied-tools" class="flex items-center gap-2" style="margin:0">
+            <input type="hidden" name="action" value="add">
+            <input type="text" name="tool" placeholder="Tool name to deny..." style="flex:1; padding: 4px 8px; font-size: 13px;">
+            <button type="submit" class="btn btn-sm">Deny</button>
+          </form>
+        </div>
       </div>
     </div>
-    {{end}}
 
   </div>
 

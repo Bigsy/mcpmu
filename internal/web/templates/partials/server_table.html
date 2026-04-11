@@ -57,6 +57,25 @@
       </td>
       <td class="td-actions">
         <div class="btn-group">
+          {{if .Config.IsEnabled}}
+            {{if isRunning .Status.State}}
+              <button class="btn btn-sm btn-danger"
+                      hx-post="/servers/{{.Name}}/stop"
+                      hx-swap="none">Stop</button>
+            {{else if isNeedsAuth .Status.State}}
+              <button class="btn btn-sm btn-primary"
+                      hx-post="/servers/{{.Name}}/login"
+                      hx-swap="none">Login</button>
+            {{else if isStarting .Status.State}}
+              <button class="btn btn-sm" disabled>Starting</button>
+            {{else if isStopping .Status.State}}
+              <button class="btn btn-sm" disabled>Stopping</button>
+            {{else}}
+              <button class="btn btn-sm btn-success"
+                      hx-post="/servers/{{.Name}}/start"
+                      hx-swap="none">Start</button>
+            {{end}}
+          {{end}}
           <button class="btn btn-sm"
                   hx-post="/servers/{{.Name}}/toggle"
                   hx-swap="none"

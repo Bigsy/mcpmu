@@ -51,6 +51,11 @@
             </td>
             <td class="td-actions">
               <div class="btn-group">
+                {{if not .IsDefault}}
+                  <button class="btn btn-sm" style="color: var(--primary);"
+                          hx-post="/namespaces/{{.Name}}/set-default"
+                          hx-swap="none">Default</button>
+                {{end}}
                 <a href="/namespaces/{{.Name}}/edit" class="btn btn-sm">Edit</a>
                 <button class="btn btn-sm btn-danger"
                         hx-post="/namespaces/{{.Name}}/delete"

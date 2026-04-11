@@ -20,6 +20,16 @@
     {{end}}
   </div>
   <div class="btn-group">
+    {{if not .IsDefault}}
+      <button class="btn btn-sm" style="color: var(--primary);"
+              hx-post="/namespaces/{{.Name}}/set-default"
+              hx-swap="none">Set Default</button>
+    {{else}}
+      <button class="btn btn-sm"
+              hx-post="/namespaces/{{.Name}}/set-default"
+              hx-swap="none"
+              title="Clear default">Unset Default</button>
+    {{end}}
     <a href="/namespaces/{{.Name}}/edit" class="btn btn-sm">Edit</a>
     <button class="btn btn-sm btn-danger"
             hx-post="/namespaces/{{.Name}}/delete"
@@ -42,11 +52,13 @@
           <th>Name</th>
           <th>Status</th>
           <th>Type</th>
+          <th>Server Default</th>
           <th>Tools</th>
         </tr>
       </thead>
       <tbody>
         {{range .Servers}}
+        {{$effectiveDeny := index $.EffectiveDefaults .Name}}
         <tr>
           <td><span class="dot {{stateDot .Status.State}}"></span></td>
           <td class="td-name">
@@ -61,6 +73,47 @@
               <span class="badge badge-info">http</span>
             {{else}}
               <span class="badge">stdio</span>
+            {{end}}
+          </td>
+          <td>
+            {{if mapHas $.Config.ServerDefaults .Name}}
+              {{if $effectiveDeny}}
+                <form method="POST" action="/namespaces/{{$.Name}}/server-default" style="margin:0; display:inline">
+                  <input type="hidden" name="action" value="set">
+                  <input type="hidden" name="server" value="{{.Name}}">
+                  <input type="hidden" name="deny" value="false">
+                  <button type="submit" class="badge badge-warning" style="cursor:pointer; border:none;" title="Click to switch to allow">Deny by default</button>
+                </form>
+                <form method="POST" action="/namespaces/{{$.Name}}/server-default" style="margin:0; display:inline">
+                  <input type="hidden" name="action" value="unset">
+                  <input type="hidden" name="server" value="{{.Name}}">
+                  <button type="submit" class="btn-icon" title="Clear override" style="font-size:11px; color: var(--text-faint);">clear</button>
+                </form>
+              {{else}}
+                <form method="POST" action="/namespaces/{{$.Name}}/server-default" style="margin:0; display:inline">
+                  <input type="hidden" name="action" value="set">
+                  <input type="hidden" name="server" value="{{.Name}}">
+                  <input type="hidden" name="deny" value="true">
+                  <button type="submit" class="badge badge-success" style="cursor:pointer; border:none;" title="Click to switch to deny">Allow by default</button>
+                </form>
+                <form method="POST" action="/namespaces/{{$.Name}}/server-default" style="margin:0; display:inline">
+                  <input type="hidden" name="action" value="unset">
+                  <input type="hidden" name="server" value="{{.Name}}">
+                  <button type="submit" class="btn-icon" title="Clear override" style="font-size:11px; color: var(--text-faint);">clear</button>
+                </form>
+              {{end}}
+            {{else}}
+              {{if $effectiveDeny}}
+                <span class="text-xs text-faint" title="Inherited from namespace deny-by-default">deny (inherited)</span>
+              {{else}}
+                <span class="text-xs text-faint" title="Inherited from namespace allow-by-default">allow (inherited)</span>
+              {{end}}
+              <form method="POST" action="/namespaces/{{$.Name}}/server-default" style="margin:0; display:inline">
+                <input type="hidden" name="action" value="set">
+                <input type="hidden" name="server" value="{{.Name}}">
+                <input type="hidden" name="deny" value="{{if $effectiveDeny}}false{{else}}true{{end}}">
+                <button type="submit" class="btn-icon" title="Override for this server" style="font-size:11px; color: var(--text-faint);">override</button>
+              </form>
             {{end}}
           </td>
           <td>
@@ -83,40 +136,147 @@
   </div>
 </div>
 
-{{if .Permissions}}
 <!-- Tool permissions -->
 <div class="card section">
   <div class="card-header">
-    <h2>Tool Permissions ({{len .Permissions}})</h2>
+    <h2>Tool Permissions ({{len .Permissions}} configured)</h2>
   </div>
   <div class="card-body no-pad">
-    <table>
-      <thead>
-        <tr>
-          <th>Server</th>
-          <th>Tool</th>
-          <th>Permission</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Permissions}}
-        <tr>
-          <td class="td-name"><a href="/servers/{{.Server}}">{{.Server}}</a></td>
-          <td><span class="mono text-sm">{{.ToolName}}</span></td>
-          <td>
-            {{if .Enabled}}
-              <span class="perm-allow">&#10003; Allow</span>
-            {{else}}
-              <span class="perm-deny">&#10005; Deny</span>
-            {{end}}
-          </td>
-        </tr>
+    {{if .ServerTools}}
+      {{$nsName := .Name}}
+      {{$permMap := .PermMap}}
+      {{$permSet := .PermSet}}
+      {{$effectiveDefaults := .EffectiveDefaults}}
+      {{range .Servers}}
+        {{$server := .Name}}
+        {{$effectiveDeny := index $effectiveDefaults $server}}
+        {{$tools := index $.ServerTools $server}}
+        {{if $tools}}
+        <div style="border-bottom: 1px solid var(--border);">
+          <div style="padding: 10px 16px; background: var(--bg-surface);">
+            <span class="fw-500 text-sm"><a href="/servers/{{$server}}">{{$server}}</a></span>
+            <span class="text-xs text-faint" style="margin-left: 8px;">Effective default:
+              {{if $effectiveDeny}}deny{{else}}allow{{end}}
+            </span>
+          </div>
+          {{range $tools}}
+            {{$key := permKey $server .Name}}
+            {{$hasExplicit := mapHas $permSet $key}}
+            {{$enabled := mapGet $permMap $key}}
+            <div class="tool-item">
+              <div class="flex items-center gap-2">
+                {{if $hasExplicit}}
+                  {{if $enabled}}
+                    <span class="badge badge-success" style="width: 20px; text-align: center;">+</span>
+                    <span class="mono text-sm">{{.Name}}</span>
+                  {{else}}
+                    <span class="badge badge-danger" style="width: 20px; text-align: center;">&minus;</span>
+                    <span class="mono text-sm" style="color: var(--text-faint); text-decoration: line-through;">{{.Name}}</span>
+                  {{end}}
+                {{else}}
+                  {{if $effectiveDeny}}
+                    <span class="badge badge-danger" style="width: 20px; text-align: center; opacity: 0.5;">&minus;</span>
+                    <span class="mono text-sm text-faint" style="text-decoration: line-through;" title="Effectively denied (no override, default=deny)">{{.Name}}</span>
+                  {{else}}
+                    <span class="badge badge-success" style="width: 20px; text-align: center; opacity: 0.5;">+</span>
+                    <span class="mono text-sm text-faint" title="Effectively allowed (no override, default=allow)">{{.Name}}</span>
+                  {{end}}
+                {{end}}
+              </div>
+              <div class="btn-group">
+                {{if and $hasExplicit $enabled}}
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                    <input type="hidden" name="action" value="set">
+                    <input type="hidden" name="server" value="{{$server}}">
+                    <input type="hidden" name="tool" value="{{.Name}}">
+                    <input type="hidden" name="enabled" value="false">
+                    <button type="submit" class="btn-icon" title="Deny" style="font-size:11px; color: var(--text-faint);">deny</button>
+                  </form>
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                    <input type="hidden" name="action" value="unset">
+                    <input type="hidden" name="server" value="{{$server}}">
+                    <input type="hidden" name="tool" value="{{.Name}}">
+                    <button type="submit" class="btn-icon" title="Clear override" style="font-size:11px; color: var(--text-faint);">clear</button>
+                  </form>
+                {{else if and $hasExplicit (not $enabled)}}
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                    <input type="hidden" name="action" value="set">
+                    <input type="hidden" name="server" value="{{$server}}">
+                    <input type="hidden" name="tool" value="{{.Name}}">
+                    <input type="hidden" name="enabled" value="true">
+                    <button type="submit" class="btn-icon" title="Allow" style="font-size:11px; color: var(--text-faint);">allow</button>
+                  </form>
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                    <input type="hidden" name="action" value="unset">
+                    <input type="hidden" name="server" value="{{$server}}">
+                    <input type="hidden" name="tool" value="{{.Name}}">
+                    <button type="submit" class="btn-icon" title="Clear override" style="font-size:11px; color: var(--text-faint);">clear</button>
+                  </form>
+                {{else}}
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                    <input type="hidden" name="action" value="set">
+                    <input type="hidden" name="server" value="{{$server}}">
+                    <input type="hidden" name="tool" value="{{.Name}}">
+                    <input type="hidden" name="enabled" value="true">
+                    <button type="submit" class="btn-icon" title="Allow" style="font-size:11px; color: var(--text-faint);">allow</button>
+                  </form>
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                    <input type="hidden" name="action" value="set">
+                    <input type="hidden" name="server" value="{{$server}}">
+                    <input type="hidden" name="tool" value="{{.Name}}">
+                    <input type="hidden" name="enabled" value="false">
+                    <button type="submit" class="btn-icon" title="Deny" style="font-size:11px; color: var(--text-faint);">deny</button>
+                  </form>
+                {{end}}
+                {{if gt .TokenCount 0}}<span class="text-xs text-faint">~{{.TokenCount}} tok</span>{{end}}
+              </div>
+            </div>
+          {{end}}
+        </div>
         {{end}}
-      </tbody>
-    </table>
+      {{end}}
+    {{else if .Permissions}}
+      <!-- Fallback: show flat table if no tools discovered -->
+      <table>
+        <thead>
+          <tr>
+            <th>Server</th>
+            <th>Tool</th>
+            <th>Permission</th>
+            <th class="td-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Permissions}}
+          <tr>
+            <td class="td-name"><a href="/servers/{{.Server}}">{{.Server}}</a></td>
+            <td><span class="mono text-sm">{{.ToolName}}</span></td>
+            <td>
+              {{if .Enabled}}
+                <span class="perm-allow">&#10003; Allow</span>
+              {{else}}
+                <span class="perm-deny">&#10005; Deny</span>
+              {{end}}
+            </td>
+            <td class="td-actions">
+              <form method="POST" action="/namespaces/{{$.Name}}/permission" style="margin:0; display:inline">
+                <input type="hidden" name="action" value="unset">
+                <input type="hidden" name="server" value="{{.Server}}">
+                <input type="hidden" name="tool" value="{{.ToolName}}">
+                <button type="submit" class="btn-icon" title="Remove" style="color: var(--danger);">&#10005;</button>
+              </form>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    {{else}}
+      <div class="empty" style="padding: 24px;">
+        <p class="text-sm text-faint">No tool permissions configured. Start servers to discover tools.</p>
+      </div>
+    {{end}}
   </div>
 </div>
-{{end}}
 
 {{if .Config.ServerDefaults}}
 <!-- Server defaults -->
@@ -130,6 +290,7 @@
         <tr>
           <th>Server</th>
           <th>Default Policy</th>
+          <th class="td-actions">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -138,10 +299,27 @@
           <td class="td-name"><a href="/servers/{{$server}}">{{$server}}</a></td>
           <td>
             {{if $deny}}
-              <span class="badge badge-warning">Deny by default</span>
+              <form method="POST" action="/namespaces/{{$.Name}}/server-default" style="margin:0; display:inline">
+                <input type="hidden" name="action" value="set">
+                <input type="hidden" name="server" value="{{$server}}">
+                <input type="hidden" name="deny" value="false">
+                <button type="submit" class="badge badge-warning" style="cursor:pointer; border:none;" title="Click to switch to allow">Deny by default</button>
+              </form>
             {{else}}
-              <span class="badge badge-success">Allow by default</span>
+              <form method="POST" action="/namespaces/{{$.Name}}/server-default" style="margin:0; display:inline">
+                <input type="hidden" name="action" value="set">
+                <input type="hidden" name="server" value="{{$server}}">
+                <input type="hidden" name="deny" value="true">
+                <button type="submit" class="badge badge-success" style="cursor:pointer; border:none;" title="Click to switch to deny">Allow by default</button>
+              </form>
             {{end}}
+          </td>
+          <td class="td-actions">
+            <form method="POST" action="/namespaces/{{$.Name}}/server-default" style="margin:0">
+              <input type="hidden" name="action" value="unset">
+              <input type="hidden" name="server" value="{{$server}}">
+              <button type="submit" class="btn-icon" title="Remove override" style="color: var(--danger);">&#10005;</button>
+            </form>
           </td>
         </tr>
         {{end}}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
+	"github.com/Bigsy/mcpmu/internal/mcp"
 )
 
 // serverRow is the template data for a single server in the list.
@@ -114,6 +115,7 @@ type serverDetailData struct {
 	Uptime     time.Duration
 	Namespaces []string
 	Cached     bool
+	IsLoggedIn bool // true if HTTP server has stored OAuth credentials
 }
 
 type toolDisplay struct {
@@ -172,6 +174,22 @@ func (s *Server) handleServerDetailPage(w http.ResponseWriter, r *http.Request) 
 					Denied:      data.DeniedMap[t.Name],
 					TokenCount:  t.TokenCount,
 				})
+			}
+		}
+	}
+
+	// Check OAuth login status for HTTP servers.
+	// Check both the live handle (if running) and the credential store (if stopped).
+	if srv.IsHTTP() {
+		if handle := s.supervisor.Get(name); handle != nil {
+			data.IsLoggedIn = handle.AuthStatus() == mcp.AuthStatusOAuthOK
+		}
+		if !data.IsLoggedIn {
+			// Also check credential store for stopped servers with stored tokens
+			if credStore := s.supervisor.CredentialStore(); credStore != nil {
+				if cred, err := credStore.Get(srv.URL); err == nil && cred != nil {
+					data.IsLoggedIn = true
+				}
 			}
 		}
 	}
@@ -245,6 +263,15 @@ type namespaceDetailData struct {
 	DefaultNamespace string
 	Servers          []serverRow
 	Permissions      []config.ToolPermission
+	// ServerTools maps server name → list of tools (live or cached) for the permissions editor.
+	ServerTools map[string][]toolDisplay
+	// PermMap maps "server:tool" → enabled for quick lookup in templates.
+	PermMap map[string]bool
+	// PermSet tracks which "server:tool" keys have an explicit permission set.
+	PermSet map[string]bool
+	// EffectiveDefaults maps server name → effective deny default (true=deny).
+	// Resolves: ServerDefaults[server] → namespace DenyByDefault.
+	EffectiveDefaults map[string]bool
 }
 
 func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Request) {
@@ -267,15 +294,70 @@ func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Reques
 		servers = append(servers, s.buildServerRow(sid, srv, statuses))
 	}
 
+	perms := s.cfg.GetToolPermissionsForNamespace(name)
+
+	// Build permission lookup maps
+	permMap := make(map[string]bool, len(perms))
+	permSet := make(map[string]bool, len(perms))
+	for _, p := range perms {
+		key := p.Server + ":" + p.ToolName
+		permMap[key] = p.Enabled
+		permSet[key] = true
+	}
+
+	// Build tools per server for the permissions editor
+	serverTools := make(map[string][]toolDisplay)
+	for _, sid := range ns.ServerIDs {
+		var tools []toolDisplay
+		// Prefer live tools from status tracker
+		if liveTools, ok := s.status.Tools(sid); ok && len(liveTools) > 0 {
+			for _, t := range liveTools {
+				tools = append(tools, toolDisplay{
+					Name:        t.Name,
+					Description: t.Description,
+				})
+			}
+		} else if s.toolCache != nil {
+			// Fall back to cached tools
+			if cached, ok := s.toolCache.Get(sid); ok {
+				for _, t := range cached {
+					tools = append(tools, toolDisplay{
+						Name:        t.Name,
+						Description: t.Description,
+						TokenCount:  t.TokenCount,
+					})
+				}
+			}
+		}
+		if len(tools) > 0 {
+			serverTools[sid] = tools
+		}
+	}
+
+	// Compute effective defaults per server:
+	// ServerDefaults[server] → namespace DenyByDefault
+	effectiveDefaults := make(map[string]bool, len(ns.ServerIDs))
+	for _, sid := range ns.ServerIDs {
+		if serverDeny, found := ns.ServerDefaults[sid]; found {
+			effectiveDefaults[sid] = serverDeny
+		} else {
+			effectiveDefaults[sid] = ns.DenyByDefault
+		}
+	}
+
 	data := namespaceDetailData{
-		Page:             "namespaces",
-		ConfigPath:       s.configPathDisplay(),
-		Name:             name,
-		Config:           ns,
-		IsDefault:        name == s.cfg.DefaultNamespace,
-		DefaultNamespace: s.cfg.DefaultNamespace,
-		Servers:          servers,
-		Permissions:      s.cfg.GetToolPermissionsForNamespace(name),
+		Page:              "namespaces",
+		ConfigPath:        s.configPathDisplay(),
+		Name:              name,
+		Config:            ns,
+		IsDefault:         name == s.cfg.DefaultNamespace,
+		DefaultNamespace:  s.cfg.DefaultNamespace,
+		Servers:           servers,
+		Permissions:       perms,
+		ServerTools:       serverTools,
+		PermMap:           permMap,
+		PermSet:           permSet,
+		EffectiveDefaults: effectiveDefaults,
 	}
 
 	s.render(w, "namespace_detail.html", data)
