@@ -1,0 +1,107 @@
+{{define "title"}}{{if .IsEdit}}Edit {{.Name}}{{else}}Add Namespace{{end}} — mcpmu{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <p class="text-sm text-faint" style="margin-bottom:4px">
+      <a href="/namespaces">Namespaces</a> / {{if .IsEdit}}Edit {{.Name}}{{else}}Add Namespace{{end}}
+    </p>
+    <h1>{{if .IsEdit}}Edit Namespace{{else}}Add Namespace{{end}}</h1>
+  </div>
+</div>
+
+<div style="max-width: 720px;">
+  <form method="POST" action="{{.Action}}">
+    <div class="card">
+      <div class="card-body">
+
+        {{if .Error}}
+          <div class="alert alert-error" role="alert">
+            <strong>Error:</strong> {{.Error}}
+          </div>
+        {{end}}
+
+        <!-- Name -->
+        <div class="form-group">
+          <label for="name">Namespace Name</label>
+          <input type="text" id="name" name="name" placeholder="production"
+                 value="{{.Form.Name}}"{{if .IsEdit}} readonly style="opacity:0.6; cursor:not-allowed"{{end}}>
+          {{if .IsEdit}}
+            <p class="hint">Namespace names cannot be changed here. Use <code>mcpmu namespace rename</code>.</p>
+          {{else}}
+            <p class="hint">Unique identifier. Cannot contain '.' or ':'.</p>
+          {{end}}
+        </div>
+
+        <!-- Description -->
+        <div class="form-group">
+          <label for="description">Description</label>
+          <input type="text" id="description" name="description" placeholder="Production environment servers" value="{{.Form.Description}}">
+        </div>
+
+        <!-- Options -->
+        <div class="form-group">
+          <label>Options</label>
+
+          <div class="toggle-row">
+            <label for="deny_by_default">Deny tools by default</label>
+            <input type="hidden" name="deny_by_default" value="false">
+            <input type="checkbox" name="deny_by_default" value="true" id="deny_by_default"{{if .Form.DenyByDefault}} checked{{end}} style="width:auto">
+          </div>
+          <p class="hint" style="margin-top:0">When enabled, tools from assigned servers are denied unless explicitly allowed.</p>
+        </div>
+
+        {{if .IsEdit}}
+        <!-- Server assignments -->
+        <hr style="border: none; border-top: 1px solid var(--border); margin: 20px 0;">
+        <div class="form-group">
+          <label>Assigned Servers</label>
+          {{if .AssignedServers}}
+          <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px;">
+            {{range .AssignedServers}}
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; background: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border);">
+              <span class="mono text-sm">{{.}}</span>
+              <button type="button" class="btn-icon btn-sm" title="Unassign" style="color: var(--danger);"
+                      hx-post="/namespaces/{{$.Name}}/unassign"
+                      hx-vals='{"server":"{{.}}"}'
+                      hx-confirm="Unassign {{.}} from {{$.Name}}?"
+                      hx-target="body"
+                      hx-swap="none"
+                      onclick="htmx.on('htmx:afterRequest', function(e) { if (e.detail.successful) location.reload(); })">&#10005;</button>
+            </div>
+            {{end}}
+          </div>
+          {{else}}
+          <p class="text-sm text-faint" style="margin-bottom: 8px;">No servers assigned.</p>
+          {{end}}
+
+          {{if .AvailableServers}}
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <select name="assign_server" id="assign-server" style="flex:1">
+              <option value="">Select a server...</option>
+              {{range .AvailableServers}}
+              <option value="{{.}}">{{.}}</option>
+              {{end}}
+            </select>
+            <button type="button" class="btn btn-sm"
+                    hx-post="/namespaces/{{.Name}}/assign"
+                    hx-include="#assign-server"
+                    hx-target="body"
+                    hx-swap="none"
+                    onclick="htmx.on('htmx:afterRequest', function(e) { if (e.detail.successful) location.reload(); })">Assign</button>
+          </div>
+          {{end}}
+        </div>
+        {{end}}
+
+        <!-- Actions -->
+        <div class="form-actions">
+          <a href="{{if .IsEdit}}/namespaces/{{.Name}}{{else}}/namespaces{{end}}" class="btn">Cancel</a>
+          <button type="submit" class="btn btn-primary">{{if .IsEdit}}Save Changes{{else}}Add Namespace{{end}}</button>
+        </div>
+
+      </div>
+    </div>
+  </form>
+</div>
+{{end}}

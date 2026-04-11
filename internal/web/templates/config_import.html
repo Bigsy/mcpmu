@@ -1,0 +1,167 @@
+{{define "title"}}Import Config — mcpmu{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Import Configuration</h1>
+    <p class="subtitle">Upload a config file to preview and apply changes.</p>
+  </div>
+</div>
+
+<div style="max-width: 720px;">
+  <div class="card">
+    <div class="card-body">
+
+      <div class="form-group">
+        <label for="config-file">Config File (JSON)</label>
+        <input type="file" id="config-file" accept=".json,application/json"
+               style="width:100%; padding:8px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-input); color:var(--text);">
+        <p class="hint">Select an exported mcpmu config file.</p>
+      </div>
+
+      <div class="form-actions" style="border-top:none; padding-top:0; margin-top:8px;">
+        <button type="button" class="btn btn-primary" id="preview-btn" disabled>Preview Changes</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Preview results (populated by JS) -->
+  <div id="preview-area" style="display:none;" class="mt-4">
+    <div class="card">
+      <div class="card-header">
+        <h2>Change Preview</h2>
+      </div>
+      <div class="card-body">
+        <div id="preview-content"></div>
+        <div class="form-actions">
+          <a href="/servers" class="btn">Cancel</a>
+          <button type="button" class="btn btn-danger" id="apply-btn">Apply Import</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="result-area" style="display:none;" class="mt-4"></div>
+</div>
+
+<script>
+(function() {
+  var fileInput = document.getElementById('config-file');
+  var previewBtn = document.getElementById('preview-btn');
+  var applyBtn = document.getElementById('apply-btn');
+  var previewArea = document.getElementById('preview-area');
+  var previewContent = document.getElementById('preview-content');
+  var resultArea = document.getElementById('result-area');
+  var configData = null;
+
+  fileInput.addEventListener('change', function() {
+    previewBtn.disabled = !fileInput.files.length;
+    previewArea.style.display = 'none';
+    resultArea.style.display = 'none';
+  });
+
+  previewBtn.addEventListener('click', function() {
+    var file = fileInput.files[0];
+    if (!file) return;
+
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        configData = JSON.parse(e.target.result);
+      } catch(err) {
+        resultArea.innerHTML = '<div class="alert alert-error"><strong>Error:</strong> Invalid JSON: ' + escapeHtml(err.message) + '</div>';
+        resultArea.style.display = '';
+        return;
+      }
+
+      fetch('/api/config/import', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(configData)
+      })
+      .then(function(resp) { return resp.json().then(function(data) { return {ok: resp.ok, data: data}; }); })
+      .then(function(result) {
+        if (!result.ok) {
+          resultArea.innerHTML = '<div class="alert alert-error"><strong>Error:</strong> ' + escapeHtml(result.data.error || 'Unknown error') + '</div>';
+          resultArea.style.display = '';
+          previewArea.style.display = 'none';
+          return;
+        }
+
+        var d = result.data;
+        var html = '';
+        html += renderDiffSection('Servers', d.servers);
+        html += renderDiffSection('Namespaces', d.namespaces);
+
+        if (!html) {
+          html = '<p class="text-faint">No changes detected.</p>';
+        }
+
+        previewContent.innerHTML = html;
+        previewArea.style.display = '';
+        resultArea.style.display = 'none';
+      })
+      .catch(function(err) {
+        resultArea.innerHTML = '<div class="alert alert-error"><strong>Error:</strong> ' + escapeHtml(err.message) + '</div>';
+        resultArea.style.display = '';
+      });
+    };
+    reader.readAsText(file);
+  });
+
+  applyBtn.addEventListener('click', function() {
+    if (!configData) return;
+
+    fetch('/api/config/import/apply', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(configData)
+    })
+    .then(function(resp) { return resp.json().then(function(data) { return {ok: resp.ok, data: data}; }); })
+    .then(function(result) {
+      if (!result.ok) {
+        resultArea.innerHTML = '<div class="alert alert-error"><strong>Error:</strong> ' + escapeHtml(result.data.error || 'Apply failed') + '</div>';
+        resultArea.style.display = '';
+        return;
+      }
+      resultArea.innerHTML = '<div class="alert alert-success"><strong>Success!</strong> Config imported. <a href="/servers">Go to servers</a></div>';
+      resultArea.style.display = '';
+      previewArea.style.display = 'none';
+    })
+    .catch(function(err) {
+      resultArea.innerHTML = '<div class="alert alert-error"><strong>Error:</strong> ' + escapeHtml(err.message) + '</div>';
+      resultArea.style.display = '';
+    });
+  });
+
+  function renderDiffSection(title, diff) {
+    if (!diff) return '';
+    var added = diff.added || [];
+    var removed = diff.removed || [];
+    var changed = diff.changed || [];
+    if (!added.length && !removed.length && !changed.length) return '';
+
+    var html = '<h3 style="font-size:14px; font-weight:600; margin:12px 0 8px;">' + title + '</h3>';
+    html += '<div style="font-size:13px;">';
+    for (var i = 0; i < added.length; i++) {
+      html += '<div style="color:var(--success)">+ ' + escapeHtml(added[i]) + '</div>';
+    }
+    for (var i = 0; i < removed.length; i++) {
+      html += '<div style="color:var(--danger)">- ' + escapeHtml(removed[i]) + '</div>';
+    }
+    for (var i = 0; i < changed.length; i++) {
+      html += '<div style="color:var(--warning)">~ ' + escapeHtml(changed[i]) + '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+})();
+</script>
+{{end}}

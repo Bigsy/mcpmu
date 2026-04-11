@@ -61,6 +61,12 @@ type SupervisorOptions struct {
 	// If empty, the default ~/.config/mcpmu/ directory is used.
 	PIDTrackerDir string
 
+	// PIDFilePrefix scopes the PID tracking file to a specific manager mode.
+	// When set (e.g., "web", "tui"), the file becomes "pids-web.json" instead
+	// of "pids.json". This prevents different manager modes from interfering
+	// with each other's tracked processes during CleanupOrphans.
+	PIDFilePrefix string
+
 	// GlobalOAuthCallbackPort is the global fallback OAuth callback port.
 	// Per-server oauth.callback_port takes precedence over this.
 	GlobalOAuthCallbackPort *int
@@ -77,9 +83,9 @@ func NewSupervisorWithOptions(bus *events.Bus, opts SupervisorOptions) *Supervis
 	var pidTracker *PIDTracker
 	var err error
 	if opts.PIDTrackerDir != "" {
-		pidTracker, err = NewPIDTrackerWithDir(opts.PIDTrackerDir)
+		pidTracker, err = NewPIDTrackerInDir(opts.PIDTrackerDir, opts.PIDFilePrefix)
 	} else {
-		pidTracker, err = NewPIDTracker()
+		pidTracker, err = NewPIDTrackerInDir("", opts.PIDFilePrefix)
 	}
 	if err != nil {
 		log.Printf("Warning: failed to create PID tracker: %v", err)

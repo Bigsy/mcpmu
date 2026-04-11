@@ -10,6 +10,7 @@
       <th>Tools</th>
       <th>Uptime</th>
       <th>Namespaces</th>
+      <th class="td-actions">Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -54,6 +55,21 @@
           <span class="badge badge-ns">{{.}}</span>
         {{end}}
       </td>
+      <td class="td-actions">
+        <div class="btn-group">
+          <button class="btn btn-sm"
+                  hx-post="/servers/{{.Name}}/toggle"
+                  hx-swap="none"
+                  title="{{if .Config.IsEnabled}}Disable{{else}}Enable{{end}}">
+            {{if .Config.IsEnabled}}Disable{{else}}Enable{{end}}
+          </button>
+          <a href="/servers/{{.Name}}/edit" class="btn btn-sm">Edit</a>
+          <button class="btn btn-sm btn-danger"
+                  hx-post="/servers/{{.Name}}/delete"
+                  hx-confirm="Delete server '{{.Name}}'? This cannot be undone."
+                  hx-swap="none">Del</button>
+        </div>
+      </td>
     </tr>
     {{end}}
   </tbody>
@@ -62,7 +78,8 @@
 <div class="empty">
   <div class="empty-icon">&#9881;</div>
   <h3>No servers configured</h3>
-  <p>Add a server with <code>mcpmu add</code> or the TUI to get started.</p>
+  <p>Add a server to get started.</p>
+  <a href="/servers/add" class="btn btn-primary">+ Add Server</a>
 </div>
 {{end}}
 {{end}}

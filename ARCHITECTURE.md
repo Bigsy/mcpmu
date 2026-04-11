@@ -174,6 +174,26 @@ The registry client (`internal/registry/`) handles API calls, type mapping, and 
 
 mcpmu embeds a `SKILL.md` file in the binary (`cmd/mcpmu/skill_data/SKILL.md` via `//go:embed`). The `mcpmu skill install` command writes this to agent-specific skill directories (`~/.claude/skills/mcpmu/`, `~/.codex/skills/mcpmu/`, `~/.agents/skills/mcpmu/`). A checked-in mirror at `.claude/skills/mcpmu/SKILL.md` is kept in sync by a test assertion.
 
+## Web UI
+
+`mcpmu web` starts a browser-based management UI on `127.0.0.1:8080` (configurable via `--addr`). The web UI and TUI are mutually exclusive managers — a `manager.lock` file prevents concurrent instances.
+
+**Stack**: Go `net/http` (stdlib, Go 1.22+ route patterns) + htmx + Go `html/template`, all embedded via `go:embed`. Single binary, no build step.
+
+**Architecture** (`internal/web/`):
+- `server.go` — HTTP server setup, route registration, template parsing, config mutation helper
+- `pages.go` — Full-page handlers (server list, server detail, namespace list, namespace detail)
+- `forms.go` — Form page handlers and CRUD operations (add/edit/delete servers and namespaces)
+- `handlers.go` — JSON API endpoints (`/api/servers`, `/api/namespaces`, `/api/config/export|import`)
+- `fragments.go` — htmx fragment handlers (server table, status pill)
+- `sse.go` — Server-Sent Events for live log streaming
+- `status.go` — `StatusTracker` subscribes to event bus, maintains last-known status per server
+- `middleware.go` — Request logging, panic recovery
+
+**Data flow**: Browser requests go through middleware to handlers, which read/write config (same `internal/config` package as TUI), interact with the supervisor for start/stop, and subscribe to the event bus for live status and logs.
+
+**Config mutations**: The `mutateConfig` helper reloads config from disk, applies the mutation, and atomically saves — safe for the single-manager design.
+
 ## Key Design Principles
 
 1. **Non-blocking initialize**: Return immediately; optionally start `eager` servers in background (otherwise start on-demand)

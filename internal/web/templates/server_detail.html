@@ -24,6 +24,18 @@
       {{end}}
     </div>
   </div>
+  <div class="btn-group">
+    <button class="btn btn-sm"
+            hx-post="/servers/{{.Name}}/toggle"
+            hx-swap="none">
+      {{if .Config.IsEnabled}}Disable{{else}}Enable{{end}}
+    </button>
+    <a href="/servers/{{.Name}}/edit" class="btn btn-sm">Edit</a>
+    <button class="btn btn-sm btn-danger"
+            hx-post="/servers/{{.Name}}/delete"
+            hx-confirm="Delete server '{{.Name}}'? This cannot be undone."
+            hx-swap="none">Delete</button>
+  </div>
 </div>
 
 <div class="detail-layout">

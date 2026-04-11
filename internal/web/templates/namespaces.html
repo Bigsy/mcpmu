@@ -6,6 +6,7 @@
     <h1>Namespaces</h1>
     <p class="subtitle">{{.TotalCount}} namespaces &middot; {{.TotalAssigned}} servers assigned</p>
   </div>
+  <a href="/namespaces/add" class="btn btn-primary">+ Add Namespace</a>
 </div>
 
 <div class="card">
@@ -19,6 +20,7 @@
             <th>Servers</th>
             <th>Policy</th>
             <th>Permissions</th>
+            <th class="td-actions">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -47,6 +49,15 @@
                 <span class="text-sm text-faint">none</span>
               {{end}}
             </td>
+            <td class="td-actions">
+              <div class="btn-group">
+                <a href="/namespaces/{{.Name}}/edit" class="btn btn-sm">Edit</a>
+                <button class="btn btn-sm btn-danger"
+                        hx-post="/namespaces/{{.Name}}/delete"
+                        hx-confirm="Delete namespace '{{.Name}}'? This will remove all tool permissions for this namespace."
+                        hx-swap="none">Del</button>
+              </div>
+            </td>
           </tr>
           {{end}}
         </tbody>
@@ -55,7 +66,8 @@
       <div class="empty">
         <div class="empty-icon">&#128193;</div>
         <h3>No namespaces configured</h3>
-        <p>Add a namespace with <code>mcpmu namespace add</code> or the TUI to get started.</p>
+        <p>Add a namespace to group servers and control tool permissions.</p>
+        <a href="/namespaces/add" class="btn btn-primary">+ Add Namespace</a>
       </div>
       {{end}}
     </div>

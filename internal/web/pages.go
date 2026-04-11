@@ -298,6 +298,18 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	}
 }
 
+// handleConfigImportPage renders the config import page.
+func (s *Server) handleConfigImportPage(w http.ResponseWriter, _ *http.Request) {
+	data := struct {
+		Page       string
+		ConfigPath string
+	}{
+		Page:       "",
+		ConfigPath: s.configPathDisplay(),
+	}
+	s.render(w, "config_import.html", data)
+}
+
 // configPathDisplay returns a display-friendly config path.
 func (s *Server) configPathDisplay() string {
 	if s.configPath != "" {

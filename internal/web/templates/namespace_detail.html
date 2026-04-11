@@ -19,6 +19,13 @@
       <p class="text-sm text-muted" style="margin-top:4px">{{.Config.Description}}</p>
     {{end}}
   </div>
+  <div class="btn-group">
+    <a href="/namespaces/{{.Name}}/edit" class="btn btn-sm">Edit</a>
+    <button class="btn btn-sm btn-danger"
+            hx-post="/namespaces/{{.Name}}/delete"
+            hx-confirm="Delete namespace '{{.Name}}'? This will remove all tool permissions."
+            hx-swap="none">Delete</button>
+  </div>
 </div>
 
 <!-- Assigned servers -->

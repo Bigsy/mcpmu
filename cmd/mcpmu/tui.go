@@ -98,10 +98,11 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		log.Printf("Warning: failed to create tool cache: %v", err)
 	}
 
-	// Create process supervisor with config-specified credential store
+	// Create process supervisor (PIDFilePrefix isolates from serve's pids.json)
 	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
 		CredentialStoreMode:     cfg.MCPOAuthCredentialStore,
 		GlobalOAuthCallbackPort: cfg.MCPOAuthCallbackPort,
+		PIDFilePrefix:           "tui",
 	})
 	supervisor.SetToolCache(toolCache)
 

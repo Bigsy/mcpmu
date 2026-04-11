@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -26,6 +27,7 @@ var templateFS embed.FS
 // Server is the HTTP server for the web UI.
 type Server struct {
 	cfg        *config.Config
+	cfgMu      sync.Mutex // protects config read-modify-write cycles
 	configPath string
 	supervisor *process.Supervisor
 	bus        *events.Bus
@@ -100,12 +102,45 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	staticSub, _ := fs.Sub(staticFS, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
-	// Pages
+	// Pages — read-only
 	mux.HandleFunc("GET /{$}", s.handleServersPage)
 	mux.HandleFunc("GET /servers", s.handleServersPage)
 	mux.HandleFunc("GET /servers/{name}", s.handleServerDetailPage)
 	mux.HandleFunc("GET /namespaces", s.handleNamespacesPage)
 	mux.HandleFunc("GET /namespaces/{name}", s.handleNamespaceDetailPage)
+
+	// Pages — forms (Phase 2)
+	mux.HandleFunc("GET /servers/add", s.handleServerAddPage)
+	mux.HandleFunc("GET /servers/{name}/edit", s.handleServerEditPage)
+	mux.HandleFunc("GET /namespaces/add", s.handleNamespaceAddPage)
+	mux.HandleFunc("GET /namespaces/{name}/edit", s.handleNamespaceEditPage)
+	mux.HandleFunc("GET /config/import", s.handleConfigImportPage)
+
+	// Form submissions (Phase 2)
+	mux.HandleFunc("POST /servers", s.handleServerCreate)
+	mux.HandleFunc("POST /servers/{name}/edit", s.handleServerUpdate)
+	mux.HandleFunc("POST /servers/{name}/delete", s.handleServerDelete)
+	mux.HandleFunc("POST /servers/{name}/toggle", s.handleServerToggle)
+	mux.HandleFunc("POST /namespaces", s.handleNamespaceCreate)
+	mux.HandleFunc("POST /namespaces/{name}/edit", s.handleNamespaceUpdate)
+	mux.HandleFunc("POST /namespaces/{name}/delete", s.handleNamespaceDelete)
+	mux.HandleFunc("POST /namespaces/{name}/assign", s.handleNamespaceAssign)
+	mux.HandleFunc("POST /namespaces/{name}/unassign", s.handleNamespaceUnassign)
+
+	// JSON API (Phase 2)
+	mux.HandleFunc("GET /api/servers", s.handleAPIListServers)
+	mux.HandleFunc("POST /api/servers", s.handleAPICreateServer)
+	mux.HandleFunc("GET /api/servers/{name}", s.handleAPIGetServer)
+	mux.HandleFunc("PUT /api/servers/{name}", s.handleAPIUpdateServer)
+	mux.HandleFunc("DELETE /api/servers/{name}", s.handleAPIDeleteServer)
+	mux.HandleFunc("GET /api/namespaces", s.handleAPIListNamespaces)
+	mux.HandleFunc("POST /api/namespaces", s.handleAPICreateNamespace)
+	mux.HandleFunc("GET /api/namespaces/{name}", s.handleAPIGetNamespace)
+	mux.HandleFunc("PUT /api/namespaces/{name}", s.handleAPIUpdateNamespace)
+	mux.HandleFunc("DELETE /api/namespaces/{name}", s.handleAPIDeleteNamespace)
+	mux.HandleFunc("GET /api/config/export", s.handleAPIExportConfig)
+	mux.HandleFunc("POST /api/config/import", s.handleAPIImportConfig)
+	mux.HandleFunc("POST /api/config/import/apply", s.handleAPIImportApply)
 
 	// Fragments (HTML partials for htmx swaps)
 	mux.HandleFunc("GET /fragments/servers/table", s.handleFragmentServerTable)
@@ -119,8 +154,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 var pageTemplates = []string{
 	"templates/servers.html",
 	"templates/server_detail.html",
+	"templates/server_form.html",
 	"templates/namespaces.html",
 	"templates/namespace_detail.html",
+	"templates/namespace_form.html",
+	"templates/config_import.html",
 }
 
 func parseTemplates() (map[string]*template.Template, error) {
@@ -235,4 +273,28 @@ func kindBadge(srv config.ServerConfig) string {
 		return "http"
 	}
 	return "stdio"
+}
+
+// mutateConfig safely applies a config mutation using a read-modify-write cycle.
+// It reloads config from disk, applies the mutation function, saves back to disk,
+// and updates the in-memory config pointer. The mutex ensures atomicity.
+func (s *Server) mutateConfig(fn func(cfg *config.Config) error) error {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+
+	fresh, err := config.LoadFrom(s.configPath)
+	if err != nil {
+		return fmt.Errorf("reload config: %w", err)
+	}
+
+	if err := fn(fresh); err != nil {
+		return err
+	}
+
+	if err := config.SaveTo(fresh, s.configPath); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	s.cfg = fresh
+	return nil
 }

@@ -44,18 +44,34 @@ type PIDTracker struct {
 
 // NewPIDTracker creates a new PID tracker using the default directory.
 func NewPIDTracker() (*PIDTracker, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-
-	return NewPIDTrackerWithDir(filepath.Join(home, ".config", "mcpmu"))
+	return NewPIDTrackerInDir("", "")
 }
 
 // NewPIDTrackerWithDir creates a new PID tracker storing its state in the given directory.
 func NewPIDTrackerWithDir(dir string) (*PIDTracker, error) {
+	return NewPIDTrackerInDir(dir, "")
+}
+
+// NewPIDTrackerInDir creates a PID tracker in the given directory with an optional file prefix.
+// If dir is empty, uses the default ~/.config/mcpmu/ directory.
+// If prefix is non-empty (e.g. "web"), the file becomes "pids-web.json" instead of "pids.json",
+// isolating different manager modes so they don't kill each other's tracked processes.
+func NewPIDTrackerInDir(dir, prefix string) (*PIDTracker, error) {
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		dir = filepath.Join(home, ".config", "mcpmu")
+	}
+
+	fileName := pidsFile
+	if prefix != "" {
+		fileName = "pids-" + prefix + ".json"
+	}
+
 	pt := &PIDTracker{
-		path: filepath.Join(dir, pidsFile),
+		path: filepath.Join(dir, fileName),
 		pids: make(map[string]pidEntry),
 	}
 

@@ -104,10 +104,11 @@ func runWeb(cmd *cobra.Command, args []string) error {
 		log.Printf("Warning: failed to create tool cache: %v", err)
 	}
 
-	// Create process supervisor
+	// Create process supervisor (PIDFilePrefix isolates from serve's pids.json)
 	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
 		CredentialStoreMode:     cfg.MCPOAuthCredentialStore,
 		GlobalOAuthCallbackPort: cfg.MCPOAuthCallbackPort,
+		PIDFilePrefix:           "web",
 	})
 	supervisor.SetToolCache(toolCache)
 

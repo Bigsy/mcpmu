@@ -1,0 +1,218 @@
+{{define "title"}}{{if .IsEdit}}Edit {{.Name}}{{else}}Add Server{{end}} — mcpmu{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <p class="text-sm text-faint" style="margin-bottom:4px">
+      <a href="/servers">Servers</a> / {{if .IsEdit}}Edit {{.Name}}{{else}}Add Server{{end}}
+    </p>
+    <h1>{{if .IsEdit}}Edit Server{{else}}Add Server{{end}}</h1>
+  </div>
+</div>
+
+<div style="max-width: 720px;">
+  <form method="POST" action="{{.Action}}" id="server-form">
+    <div class="card">
+      <div class="card-body">
+
+        {{if .Error}}
+          <div class="alert alert-error" role="alert">
+            <strong>Error:</strong> {{.Error}}
+          </div>
+        {{end}}
+
+        {{if .Notice}}
+          <div class="alert alert-warning" role="alert">
+            {{.Notice}}
+          </div>
+        {{end}}
+
+        <!-- Server type selector -->
+        <div class="form-group">
+          <label>Server Type</label>
+          <div class="type-tabs">
+            <button type="button" class="type-tab{{if not .Form.IsHTTP}} active{{end}}" onclick="showType('stdio')">
+              <strong>Stdio</strong> &mdash; Local process
+            </button>
+            <button type="button" class="type-tab{{if .Form.IsHTTP}} active{{end}}" onclick="showType('http')">
+              <strong>HTTP</strong> &mdash; Remote server
+            </button>
+          </div>
+          <input type="hidden" name="kind" id="kind-field" value="{{if .Form.IsHTTP}}http{{else}}stdio{{end}}">
+        </div>
+
+        <!-- Name -->
+        <div class="form-group">
+          <label for="name">Server Name</label>
+          <input type="text" id="name" name="name" placeholder="my-server"
+                 value="{{.Form.Name}}"{{if .IsEdit}} readonly style="opacity:0.6; cursor:not-allowed"{{end}}>
+          {{if .IsEdit}}
+            <p class="hint">Server names cannot be changed here. Use <code>mcpmu rename</code> to rename.</p>
+          {{else}}
+            <p class="hint">Unique identifier. Cannot contain '.' or ':'.</p>
+          {{end}}
+        </div>
+
+        <!-- Stdio fields -->
+        <div id="stdio-fields"{{if .Form.IsHTTP}} style="display:none"{{end}}>
+          <div class="form-group">
+            <label for="command">Command</label>
+            <input type="text" id="command" name="command" placeholder="npx" class="mono" value="{{.Form.Command}}">
+          </div>
+
+          <div class="form-group">
+            <label for="args">Arguments</label>
+            <input type="text" id="args" name="args" placeholder="-y @upstash/context7-mcp" class="mono" value="{{.Form.Args}}">
+            <p class="hint">Space-separated arguments passed to the command.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="cwd">Working Directory</label>
+            <input type="text" id="cwd" name="cwd" placeholder="/path/to/project (optional)" class="mono" value="{{.Form.Cwd}}">
+          </div>
+        </div>
+
+        <!-- HTTP fields -->
+        <div id="http-fields"{{if not .Form.IsHTTP}} style="display:none"{{end}}>
+          <div class="form-group">
+            <label for="url">Server URL</label>
+            <input type="url" id="url" name="url" placeholder="https://mcp.example.com/mcp" class="mono" value="{{.Form.URL}}">
+          </div>
+
+          <!-- Auth mode -->
+          <div class="form-group">
+            <label>Authentication</label>
+            <div class="type-tabs">
+              <button type="button" class="type-tab{{if eq .Form.AuthMode "none"}} active{{end}}" style="font-size:12px" onclick="showAuth('none')">None</button>
+              <button type="button" class="type-tab{{if eq .Form.AuthMode "bearer"}} active{{end}}" style="font-size:12px" onclick="showAuth('bearer')">Bearer Token</button>
+              <button type="button" class="type-tab{{if eq .Form.AuthMode "oauth"}} active{{end}}" style="font-size:12px" onclick="showAuth('oauth')">OAuth</button>
+            </div>
+            <input type="hidden" name="auth_mode" id="auth-mode-field" value="{{.Form.AuthMode}}">
+          </div>
+
+          <!-- Bearer fields -->
+          <div id="bearer-fields"{{if ne .Form.AuthMode "bearer"}} style="display:none"{{end}}>
+            <div class="form-group">
+              <label for="bearer_env">Bearer Token Env Var</label>
+              <input type="text" id="bearer_env" name="bearer_env" placeholder="FIGMA_TOKEN" class="mono" value="{{.Form.BearerEnv}}">
+              <p class="hint">Name of the environment variable containing the bearer token.</p>
+            </div>
+          </div>
+
+          <!-- OAuth fields -->
+          <div id="oauth-fields"{{if ne .Form.AuthMode "oauth"}} style="display:none"{{end}}>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="oauth_client_id">Client ID</label>
+                <input type="text" id="oauth_client_id" name="oauth_client_id" placeholder="Optional — dynamic registration" class="mono" value="{{.Form.OAuthClientID}}">
+              </div>
+              <div class="form-group">
+                <label for="oauth_callback_port">Callback Port</label>
+                <input type="number" id="oauth_callback_port" name="oauth_callback_port" placeholder="Auto" class="mono" value="{{.Form.OAuthCallbackPort}}">
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="oauth_scopes">Scopes</label>
+              <input type="text" id="oauth_scopes" name="oauth_scopes" placeholder="read,write (auto-discovered if empty)" class="mono" value="{{.Form.OAuthScopes}}">
+              <p class="hint">Comma-separated. Leave empty to auto-discover from server metadata.</p>
+            </div>
+          </div>
+        </div>
+
+        <hr style="border: none; border-top: 1px solid var(--border); margin: 20px 0;">
+
+        <!-- Environment variables -->
+        <div class="form-group">
+          <label>Environment Variables</label>
+          <div id="env-rows" style="display: flex; flex-direction: column; gap: 8px;">
+            {{range $i, $kv := .Form.EnvPairs}}
+            <div class="env-row form-row">
+              <input type="text" name="env_key" placeholder="KEY" class="mono" style="font-size: 12px;" value="{{$kv.Key}}">
+              <div style="display: flex; gap: 8px;">
+                <input type="text" name="env_val" placeholder="value" class="mono" style="font-size: 12px; flex: 1;" value="{{$kv.Val}}">
+                <button type="button" class="btn-icon" title="Remove" style="color: var(--danger);" onclick="this.closest('.env-row').remove()">&#10005;</button>
+              </div>
+            </div>
+            {{end}}
+          </div>
+          <button type="button" class="btn btn-sm mt-2" onclick="addEnvRow()">+ Add Variable</button>
+        </div>
+
+        <hr style="border: none; border-top: 1px solid var(--border); margin: 20px 0;">
+
+        <!-- Options -->
+        <div class="form-group">
+          <label>Options</label>
+
+          <div class="toggle-row">
+            <label for="enabled">Enabled</label>
+            <input type="hidden" name="enabled" value="false">
+            <input type="checkbox" name="enabled" value="true" id="enabled"{{if .Form.Enabled}} checked{{end}} style="width:auto">
+          </div>
+
+          <div class="toggle-row">
+            <label for="autostart">Autostart</label>
+            <input type="hidden" name="autostart" value="false">
+            <input type="checkbox" name="autostart" value="true" id="autostart"{{if .Form.Autostart}} checked{{end}} style="width:auto">
+          </div>
+
+          <div class="form-row mt-2">
+            <div class="form-group">
+              <label for="startup_timeout">Startup Timeout (seconds)</label>
+              <input type="number" id="startup_timeout" name="startup_timeout" value="{{.Form.StartupTimeout}}" class="mono">
+            </div>
+            <div class="form-group">
+              <label for="tool_timeout">Tool Timeout (seconds)</label>
+              <input type="number" id="tool_timeout" name="tool_timeout" value="{{.Form.ToolTimeout}}" class="mono">
+            </div>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="form-actions">
+          <a href="{{if .IsEdit}}/servers/{{.Name}}{{else}}/servers{{end}}" class="btn">Cancel</a>
+          <button type="submit" class="btn btn-primary">{{if .IsEdit}}Save Changes{{else}}Add Server{{end}}</button>
+        </div>
+
+      </div>
+    </div>
+  </form>
+</div>
+
+<template id="env-row-template">
+  <div class="env-row form-row">
+    <input type="text" name="env_key" placeholder="KEY" class="mono" style="font-size: 12px;">
+    <div style="display: flex; gap: 8px;">
+      <input type="text" name="env_val" placeholder="value" class="mono" style="font-size: 12px; flex: 1;">
+      <button type="button" class="btn-icon" title="Remove" style="color: var(--danger);" onclick="this.closest('.env-row').remove()">&#10005;</button>
+    </div>
+  </div>
+</template>
+
+<script>
+function showType(type) {
+  document.getElementById('kind-field').value = type;
+  document.getElementById('stdio-fields').style.display = type === 'stdio' ? '' : 'none';
+  document.getElementById('http-fields').style.display = type === 'http' ? '' : 'none';
+  var tabs = document.querySelectorAll('.type-tabs')[0].children;
+  tabs[0].classList.toggle('active', type === 'stdio');
+  tabs[1].classList.toggle('active', type === 'http');
+}
+
+function showAuth(mode) {
+  document.getElementById('auth-mode-field').value = mode;
+  document.getElementById('bearer-fields').style.display = mode === 'bearer' ? '' : 'none';
+  document.getElementById('oauth-fields').style.display = mode === 'oauth' ? '' : 'none';
+  var tabs = document.querySelectorAll('.type-tabs')[1].children;
+  tabs[0].classList.toggle('active', mode === 'none');
+  tabs[1].classList.toggle('active', mode === 'bearer');
+  tabs[2].classList.toggle('active', mode === 'oauth');
+}
+
+function addEnvRow() {
+  var tpl = document.getElementById('env-row-template');
+  var clone = tpl.content.cloneNode(true);
+  document.getElementById('env-rows').appendChild(clone);
+}
+</script>
+{{end}}
