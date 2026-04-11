@@ -1,0 +1,68 @@
+{{define "server_table"}}
+{{if .Servers}}
+<table>
+  <thead>
+    <tr>
+      <th style="width: 24px"></th>
+      <th>Name</th>
+      <th>Status</th>
+      <th>Type</th>
+      <th>Tools</th>
+      <th>Uptime</th>
+      <th>Namespaces</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Servers}}
+    <tr{{if not .Config.IsEnabled}} style="opacity: 0.5"{{end}}>
+      <td><span class="dot {{stateDot .Status.State}}"></span></td>
+      <td class="td-name">
+        <a href="/servers/{{.Name}}">{{.Name}}</a>
+        <span class="sub mono">{{serverCommand .Config}}</span>
+      </td>
+      <td>
+        {{if not .Config.IsEnabled}}
+          <span class="pill pill-disabled">Disabled</span>
+        {{else}}
+          <span class="pill pill-{{stateClass .Status.State}}">{{stateLabel .Status.State}}</span>
+        {{end}}
+      </td>
+      <td>
+        {{if .Config.IsHTTP}}
+          <span class="badge badge-info">http</span>
+        {{else}}
+          <span class="badge">stdio</span>
+        {{end}}
+      </td>
+      <td>
+        {{if gt .ToolCount 0}}
+          <span class="mono text-sm{{if .Cached}} text-faint{{end}}">{{.ToolCount}}</span>
+          {{if .Cached}}<span class="pill pill-cached">cached</span>{{end}}
+        {{else}}
+          <span class="text-faint">&mdash;</span>
+        {{end}}
+      </td>
+      <td>
+        {{if gt (len (formatUptime .Uptime)) 1}}
+          <span class="mono text-sm text-faint">{{formatUptime .Uptime}}</span>
+        {{else}}
+          <span class="text-faint">&mdash;</span>
+        {{end}}
+      </td>
+      <td>
+        {{range .Namespaces}}
+          <span class="badge badge-ns">{{.}}</span>
+        {{end}}
+      </td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="empty">
+  <div class="empty-icon">&#9881;</div>
+  <h3>No servers configured</h3>
+  <p>Add a server with <code>mcpmu add</code> or the TUI to get started.</p>
+</div>
+{{end}}
+{{end}}

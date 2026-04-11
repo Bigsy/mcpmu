@@ -1,0 +1,77 @@
+{{define "title"}}Namespaces — mcpmu{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Namespaces</h1>
+    <p class="subtitle">{{.TotalCount}} namespaces &middot; {{.TotalAssigned}} servers assigned</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body no-pad">
+    <div class="table-wrap">
+      {{if .Namespaces}}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Servers</th>
+            <th>Policy</th>
+            <th>Permissions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Namespaces}}
+          <tr>
+            <td class="td-name">
+              <a href="/namespaces/{{.Name}}">{{.Name}}</a>
+              {{if .IsDefault}}<span class="pill pill-default" style="margin-left: 8px;">default</span>{{end}}
+              {{if .Config.Description}}<span class="sub">{{.Config.Description}}</span>{{end}}
+            </td>
+            <td>
+              <span class="fw-500">{{.ServerCount}}</span>
+              <span class="text-faint text-sm">servers</span>
+            </td>
+            <td>
+              {{if .Config.DenyByDefault}}
+                <span class="badge badge-warning">Deny by default</span>
+              {{else}}
+                <span class="badge badge-success">Allow by default</span>
+              {{end}}
+            </td>
+            <td>
+              {{if gt .PermCount 0}}
+                <span class="text-sm text-muted">{{.PermCount}} configured</span>
+              {{else}}
+                <span class="text-sm text-faint">none</span>
+              {{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <div class="empty">
+        <div class="empty-icon">&#128193;</div>
+        <h3>No namespaces configured</h3>
+        <p>Add a namespace with <code>mcpmu namespace add</code> or the TUI to get started.</p>
+      </div>
+      {{end}}
+    </div>
+  </div>
+</div>
+
+{{if .Namespaces}}
+<div class="card mt-4" style="border: 1px solid var(--border);">
+  <div class="card-body" style="padding: 12px 16px;">
+    <p class="text-sm text-muted">
+      <strong>Namespaces</strong> group servers and control tool permissions.
+      Use <code class="mono">mcpmu serve --namespace &lt;name&gt;</code> to expose a namespace as a single MCP endpoint.
+      {{if .DefaultNamespace}}The <span class="pill pill-default" style="font-size:10px">default</span> namespace is used when no namespace is specified.{{end}}
+    </p>
+  </div>
+</div>
+{{end}}
+{{end}}
+

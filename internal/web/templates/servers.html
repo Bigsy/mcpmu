@@ -1,0 +1,22 @@
+{{define "title"}}Servers — mcpmu{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Servers</h1>
+    <p class="subtitle">{{.TotalCount}} servers &middot; {{.RunningCount}} running &middot; {{.TotalTools}} tools</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body no-pad">
+    <div class="table-wrap"
+         id="server-table"
+         hx-get="/fragments/servers/table"
+         hx-trigger="every 5s"
+         hx-swap="innerHTML">
+      {{template "server_table" .}}
+    </div>
+  </div>
+</div>
+{{end}}

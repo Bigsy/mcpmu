@@ -51,9 +51,18 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		log.SetOutput(io.Discard)
 	}
 
+	// Acquire manager lock (prevents concurrent TUI/web instances for same config)
+	mgrLock, err := process.NewManagerLock(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to create manager lock: %w", err)
+	}
+	if err := mgrLock.Acquire("tui"); err != nil {
+		return err
+	}
+	defer mgrLock.Release()
+
 	// Load configuration
 	var cfg *config.Config
-	var err error
 	if configPath != "" {
 		cfg, err = config.LoadFrom(configPath)
 	} else {

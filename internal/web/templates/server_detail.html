@@ -1,0 +1,211 @@
+{{define "title"}}{{.Name}} — mcpmu{{end}}
+
+{{define "content"}}
+<!-- Breadcrumb + header -->
+<div class="page-header">
+  <div>
+    <p class="text-sm text-faint" style="margin-bottom:4px">
+      <a href="/servers">Servers</a> / {{.Name}}
+    </p>
+    <div class="flex items-center gap-3">
+      <h1>{{.Name}}</h1>
+      {{if not .Config.IsEnabled}}
+        <span class="pill pill-disabled">Disabled</span>
+      {{else}}
+        <span class="pill pill-{{stateClass .Status.State}}">{{stateLabel .Status.State}}</span>
+      {{end}}
+      {{if .Config.IsHTTP}}
+        <span class="badge badge-info">http</span>
+      {{else}}
+        <span class="badge">stdio</span>
+      {{end}}
+      {{range .Namespaces}}
+        <span class="badge badge-ns">{{.}}</span>
+      {{end}}
+    </div>
+  </div>
+</div>
+
+<div class="detail-layout">
+
+  <!-- Left column: config + tools -->
+  <div>
+
+    <!-- Runtime info -->
+    <div class="card section">
+      <div class="card-header">
+        <h2>Runtime</h2>
+        {{if gt .Status.PID 0}}
+          <span class="mono text-sm text-faint">PID {{.Status.PID}}</span>
+        {{end}}
+      </div>
+      <div class="card-body">
+        <div class="detail-grid">
+          {{if .Config.IsHTTP}}
+            <span class="detail-label">URL</span>
+            <span class="detail-value mono">{{.Config.URL}}</span>
+          {{else}}
+            <span class="detail-label">Command</span>
+            <span class="detail-value mono">{{serverCommand .Config}}</span>
+          {{end}}
+
+          {{if .Config.Cwd}}
+            <span class="detail-label">Working Dir</span>
+            <span class="detail-value mono">{{.Config.Cwd}}</span>
+          {{end}}
+
+          <span class="detail-label">Uptime</span>
+          <span class="detail-value mono">{{formatUptime .Uptime}}</span>
+
+          <span class="detail-label">Autostart</span>
+          <span class="detail-value">{{if .Config.Autostart}}Yes{{else}}No{{end}}</span>
+
+          <span class="detail-label">Startup Timeout</span>
+          <span class="detail-value mono">{{.Config.StartupTimeout}}s</span>
+
+          <span class="detail-label">Tool Timeout</span>
+          <span class="detail-value mono">{{.Config.ToolTimeout}}s</span>
+
+          {{if .Status.Error}}
+            <span class="detail-label" style="color: var(--danger)">Error</span>
+            <span class="detail-value" style="color: var(--danger)">{{.Status.Error}}</span>
+          {{end}}
+        </div>
+      </div>
+    </div>
+
+    {{if .Config.Env}}
+    <!-- Environment -->
+    <div class="card section">
+      <div class="card-header">
+        <h2>Environment</h2>
+      </div>
+      <div class="card-body no-pad">
+        <table class="env-table">
+          {{range $key, $val := .Config.Env}}
+          <tr>
+            <td class="env-key">{{$key}}</td>
+            <td class="env-val">{{$val}}</td>
+          </tr>
+          {{end}}
+        </table>
+      </div>
+    </div>
+    {{end}}
+
+    <!-- Tools -->
+    <div class="card section">
+      <div class="card-header">
+        <h2>Tools ({{len .Tools}}){{if .Cached}} <span class="pill pill-cached">cached</span>{{end}}</h2>
+      </div>
+      <div class="card-body no-pad">
+        {{if .Tools}}
+          {{range .Tools}}
+          <div class="tool-item">
+            <div>
+              <div class="tool-name{{if .Denied}} denied{{end}}">{{.Name}}</div>
+              {{if .Description}}
+                <div class="tool-desc"{{if .Denied}} style="color:var(--danger)"{{end}}>{{.Description}}{{if .Denied}} (denied){{end}}</div>
+              {{end}}
+            </div>
+            <div class="tool-meta">
+              {{if .Denied}}<span class="badge badge-danger">denied</span>{{end}}
+              {{if gt .TokenCount 0}}<span class="tool-tokens">~{{.TokenCount}} tok</span>{{end}}
+            </div>
+          </div>
+          {{end}}
+        {{else}}
+          <div class="empty" style="padding: 24px;">
+            <p class="text-sm text-faint">Start the server to discover tools.</p>
+          </div>
+        {{end}}
+      </div>
+    </div>
+
+    {{if .Config.DeniedTools}}
+    <!-- Denied tools -->
+    <div class="card section">
+      <div class="card-header">
+        <h2>Denied Tools ({{len .Config.DeniedTools}})</h2>
+      </div>
+      <div class="card-body no-pad">
+        {{range .Config.DeniedTools}}
+        <div class="tool-item">
+          <div>
+            <span class="mono text-sm" style="color: var(--danger)">{{.}}</span>
+          </div>
+        </div>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+
+  </div>
+
+  <!-- Right column: logs -->
+  <div>
+    <div class="card" style="position: sticky; top: 24px;">
+      <div class="log-toolbar">
+        <h2 style="font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted);">Logs</h2>
+      </div>
+      <div class="log-viewer" id="log-viewer"
+           hx-ext="sse"
+           sse-connect="/servers/{{.Name}}/logs/stream"
+           sse-swap="log"
+           hx-swap="beforeend">
+      </div>
+    </div>
+    <script>
+      // Auto-scroll log viewer to bottom on new content
+      const logViewer = document.getElementById('log-viewer');
+      if (logViewer) {
+        const observer = new MutationObserver(function() {
+          logViewer.scrollTop = logViewer.scrollHeight;
+        });
+        observer.observe(logViewer, { childList: true });
+
+        // Handle incoming SSE log events — render as log lines
+        logViewer.addEventListener('sse:log', function(evt) {
+          evt.preventDefault(); // prevent default htmx swap
+          try {
+            const data = JSON.parse(evt.detail.data);
+            const div = document.createElement('div');
+            div.className = 'log-line';
+            const ts = data.timestamp || '';
+            div.innerHTML =
+              '<span class="log-ts">' + ts + '</span>' +
+              '<span class="log-tag">[{{.Name}}]</span>' +
+              '<span class="log-msg">' + escapeHtml(data.line) + '</span>';
+            logViewer.appendChild(div);
+          } catch(e) { /* ignore parse errors */ }
+        });
+
+        // Handle status events
+        logViewer.addEventListener('sse:status', function(evt) {
+          evt.preventDefault();
+          // Status events could update the page header, but for Phase 1
+          // we just log them in the log viewer as status lines
+          try {
+            const data = JSON.parse(evt.detail.data);
+            const div = document.createElement('div');
+            div.className = 'log-line';
+            div.innerHTML =
+              '<span class="log-ts"></span>' +
+              '<span class="log-tag" style="color: var(--info)">[status]</span>' +
+              '<span class="log-msg" style="color: var(--info)">State: ' + escapeHtml(data.state || '') + '</span>';
+            logViewer.appendChild(div);
+          } catch(e) {}
+        });
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+    </script>
+  </div>
+
+</div>
+{{end}}
+

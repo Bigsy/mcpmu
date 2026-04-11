@@ -1,0 +1,147 @@
+{{define "title"}}{{.Name}} — mcpmu{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <p class="text-sm text-faint" style="margin-bottom:4px">
+      <a href="/namespaces">Namespaces</a> / {{.Name}}
+    </p>
+    <div class="flex items-center gap-3">
+      <h1>{{.Name}}</h1>
+      {{if .IsDefault}}<span class="pill pill-default">default</span>{{end}}
+      {{if .Config.DenyByDefault}}
+        <span class="badge badge-warning">Deny by default</span>
+      {{else}}
+        <span class="badge badge-success">Allow by default</span>
+      {{end}}
+    </div>
+    {{if .Config.Description}}
+      <p class="text-sm text-muted" style="margin-top:4px">{{.Config.Description}}</p>
+    {{end}}
+  </div>
+</div>
+
+<!-- Assigned servers -->
+<div class="card section">
+  <div class="card-header">
+    <h2>Servers ({{len .Servers}})</h2>
+  </div>
+  <div class="card-body no-pad">
+    {{if .Servers}}
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 24px"></th>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Type</th>
+          <th>Tools</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Servers}}
+        <tr>
+          <td><span class="dot {{stateDot .Status.State}}"></span></td>
+          <td class="td-name">
+            <a href="/servers/{{.Name}}">{{.Name}}</a>
+            <span class="sub mono">{{serverCommand .Config}}</span>
+          </td>
+          <td>
+            <span class="pill pill-{{stateClass .Status.State}}">{{stateLabel .Status.State}}</span>
+          </td>
+          <td>
+            {{if .Config.IsHTTP}}
+              <span class="badge badge-info">http</span>
+            {{else}}
+              <span class="badge">stdio</span>
+            {{end}}
+          </td>
+          <td>
+            {{if gt .ToolCount 0}}
+              <span class="mono text-sm{{if .Cached}} text-faint{{end}}">{{.ToolCount}}</span>
+              {{if .Cached}}<span class="pill pill-cached">cached</span>{{end}}
+            {{else}}
+              <span class="text-faint">&mdash;</span>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <div class="empty" style="padding: 24px;">
+      <p class="text-sm text-faint">No servers assigned to this namespace.</p>
+    </div>
+    {{end}}
+  </div>
+</div>
+
+{{if .Permissions}}
+<!-- Tool permissions -->
+<div class="card section">
+  <div class="card-header">
+    <h2>Tool Permissions ({{len .Permissions}})</h2>
+  </div>
+  <div class="card-body no-pad">
+    <table>
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th>Tool</th>
+          <th>Permission</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Permissions}}
+        <tr>
+          <td class="td-name"><a href="/servers/{{.Server}}">{{.Server}}</a></td>
+          <td><span class="mono text-sm">{{.ToolName}}</span></td>
+          <td>
+            {{if .Enabled}}
+              <span class="perm-allow">&#10003; Allow</span>
+            {{else}}
+              <span class="perm-deny">&#10005; Deny</span>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+{{if .Config.ServerDefaults}}
+<!-- Server defaults -->
+<div class="card section">
+  <div class="card-header">
+    <h2>Server Defaults</h2>
+  </div>
+  <div class="card-body no-pad">
+    <table>
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th>Default Policy</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range $server, $deny := .Config.ServerDefaults}}
+        <tr>
+          <td class="td-name"><a href="/servers/{{$server}}">{{$server}}</a></td>
+          <td>
+            {{if $deny}}
+              <span class="badge badge-warning">Deny by default</span>
+            {{else}}
+              <span class="badge badge-success">Allow by default</span>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+{{end}}
+
