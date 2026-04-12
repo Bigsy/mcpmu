@@ -46,7 +46,7 @@ type Model struct {
 	supervisor *process.Supervisor
 	bus        *events.Bus
 	ctx        context.Context
-	configPath string // Custom config path, empty for default
+	configPath string // Resolved config path (always set)
 	toolCache  *config.ToolCache
 
 	// UI state
@@ -174,12 +174,9 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 	return m
 }
 
-// saveConfig saves the config to the appropriate file (custom path or default).
+// saveConfig saves the config to the resolved config path.
 func (m *Model) saveConfig() error {
-	if m.configPath != "" {
-		return config.SaveTo(m.cfg, m.configPath)
-	}
-	return config.Save(m.cfg)
+	return config.SaveTo(m.cfg, m.configPath)
 }
 
 func (m *Model) switchToTab(tab Tab) {

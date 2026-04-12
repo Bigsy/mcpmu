@@ -66,7 +66,11 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	if configPath != "" {
 		cfg, err = config.LoadFrom(configPath)
 	} else {
-		cfg, err = config.Load()
+		configPath, err = config.ConfigPath()
+		if err != nil {
+			return fmt.Errorf("failed to resolve config path: %w", err)
+		}
+		cfg, err = config.LoadFrom(configPath)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
