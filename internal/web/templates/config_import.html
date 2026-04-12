@@ -80,6 +80,7 @@
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(configData)
       })
+      .then(checkAuth)
       .then(function(resp) { return resp.json().then(function(data) { return {ok: resp.ok, data: data}; }); })
       .then(function(result) {
         if (!result.ok) {
@@ -118,6 +119,7 @@
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(configData)
     })
+    .then(checkAuth)
     .then(function(resp) { return resp.json().then(function(data) { return {ok: resp.ok, data: data}; }); })
     .then(function(result) {
       if (!result.ok) {
@@ -155,6 +157,14 @@
     }
     html += '</div>';
     return html;
+  }
+
+  function checkAuth(resp) {
+    if (resp.status === 401) {
+      window.location.href = '/login';
+      return new Promise(function() {}); // halt the chain while navigating
+    }
+    return resp;
   }
 
   function escapeHtml(text) {

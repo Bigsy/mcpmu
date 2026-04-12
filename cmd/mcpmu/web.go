@@ -21,6 +21,7 @@ import (
 var (
 	webAddr  string
 	webDebug bool
+	webToken string
 )
 
 var webCmd = &cobra.Command{
@@ -40,6 +41,7 @@ By default, binds to 127.0.0.1:8080 (localhost only).`,
 func init() {
 	webCmd.Flags().StringVar(&webAddr, "addr", "127.0.0.1:8080", "Listen address (host:port)")
 	webCmd.Flags().BoolVar(&webDebug, "debug", false, "Enable debug logging to /tmp/mcpmu-debug.log")
+	webCmd.Flags().StringVar(&webToken, "token", "", "Auth token for web UI (or set MCPMU_WEB_TOKEN)")
 	rootCmd.AddCommand(webCmd)
 }
 
@@ -112,6 +114,12 @@ func runWeb(cmd *cobra.Command, args []string) error {
 	})
 	supervisor.SetToolCache(toolCache)
 
+	// Resolve auth token: --token flag takes precedence over env var
+	token := webToken
+	if token == "" {
+		token = os.Getenv("MCPMU_WEB_TOKEN")
+	}
+
 	// Create web server
 	srv, err := web.New(web.Options{
 		Addr:       webAddr,
@@ -120,6 +128,7 @@ func runWeb(cmd *cobra.Command, args []string) error {
 		Supervisor: supervisor,
 		Bus:        bus,
 		ToolCache:  toolCache,
+		Token:      token,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create web server: %w", err)

@@ -314,7 +314,6 @@ code, .mono {
 .pill-error    { background: var(--danger-bg-solid); color: var(--danger); }
 .pill-auth     { background: var(--info-bg-solid); color: var(--info); }
 .pill-disabled { background: var(--bg-hover); color: var(--text-faint); opacity: 0.7; }
-.pill-cached   { background: var(--bg-hover); color: var(--text-faint); font-weight: 500; }
 .pill-default  { background: var(--primary-bg-strong); color: var(--primary); }
 .pill-deny     { background: var(--warning-bg); color: var(--warning); }
 

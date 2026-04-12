@@ -37,8 +37,7 @@
       </td>
       <td>
         {{if gt .ToolCount 0}}
-          <span class="mono text-sm{{if .Cached}} text-faint{{end}}">{{.ToolCount}}</span>
-          {{if .Cached}}<span class="pill pill-cached">cached</span>{{end}}
+          <span class="mono text-sm">{{.ToolCount}}</span>
         {{else}}
           <span class="text-faint">&mdash;</span>
         {{end}}

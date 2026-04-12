@@ -127,13 +127,10 @@ func (s *Server) handleServerLogin(w http.ResponseWriter, r *http.Request) {
 
 	// If no handle exists or it's not in NeedsAuth state, start the server first
 	// so that the supervisor can discover OAuth requirements and create the handle.
-	handle := s.supervisor.Get(name)
-	if handle == nil {
+	if s.supervisor.Get(name) == nil {
 		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(srv.StartupTimeout())*time.Second)
 		defer cancel()
-		var err error
-		handle, err = s.supervisor.Start(ctx, name, srv)
-		if err != nil {
+		if _, err := s.supervisor.Start(ctx, name, srv); err != nil {
 			log.Printf("oauth login %q: start failed: %v", name, err)
 			s.redirectBack(w, r, "/servers/"+name)
 			return
@@ -205,13 +202,10 @@ func (s *Server) handleAPIServerLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Ensure the server has a handle. If not started, start it so the supervisor
 	// can discover OAuth requirements and create the NeedsAuth handle.
-	handle := s.supervisor.Get(name)
-	if handle == nil {
+	if s.supervisor.Get(name) == nil {
 		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(srv.StartupTimeout())*time.Second)
 		defer cancel()
-		var err error
-		handle, err = s.supervisor.Start(ctx, name, srv)
-		if err != nil {
+		if _, err := s.supervisor.Start(ctx, name, srv); err != nil {
 			jsonError(w, fmt.Sprintf("failed to start server for OAuth: %v", err), http.StatusInternalServerError)
 			return
 		}

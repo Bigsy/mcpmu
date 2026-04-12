@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mcpmu — Login</title>
+  <link rel="icon" type="image/png" href="/static/mcp-icon-dark.png">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .login-wrapper {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+    }
+    .login-card {
+      width: 100%;
+      max-width: 380px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      box-shadow: var(--shadow-lg);
+    }
+    .login-header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .login-header img {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 12px;
+    }
+    .login-header h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text);
+      margin: 0;
+    }
+    .login-header h1 span {
+      color: var(--primary);
+    }
+    .login-header p {
+      font-size: 13px;
+      color: var(--text-faint);
+      margin: 6px 0 0;
+    }
+    .login-error {
+      background: var(--danger-bg);
+      color: var(--danger);
+      border: 1px solid var(--danger);
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+    .login-card .btn-primary {
+      width: 100%;
+      padding: 10px;
+      font-size: 14px;
+      margin-top: 8px;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+<div class="login-wrapper">
+  <div class="login-card">
+    <div class="login-header">
+      <img src="/static/mcp-icon-dark.png" alt="" class="topbar-icon-dark">
+      <img src="/static/mcp-icon-light.png" alt="" class="topbar-icon-light">
+      <h1>mcpmu <span>web</span></h1>
+      <p>Enter the access token to continue</p>
+    </div>
+
+    {{if .Error}}
+    <div class="login-error">Invalid token. Please try again.</div>
+    {{end}}
+
+    <form method="POST" action="/login">
+      <div class="form-group">
+        <label for="token">Access Token</label>
+        <input type="password" id="token" name="token" placeholder="Enter token" autofocus required>
+      </div>
+      <button type="submit" class="btn btn-primary">Sign In</button>
+    </form>
+  </div>
+</div>
+</body>
+</html>

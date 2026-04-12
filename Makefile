@@ -1,5 +1,17 @@
 .PHONY: build install test test-v test-integration test-all lint fmt fmt-check fix check clean run debug
 
+LINT_DIRS := \
+	cmd/mcpmu \
+	internal/config \
+	internal/mcp \
+	internal/oauth \
+	internal/process \
+	internal/registry \
+	internal/server \
+	internal/tui \
+	internal/tui/views \
+	internal/web
+
 build:
 	go build -o mcpmu ./cmd/mcpmu
 
@@ -21,7 +33,11 @@ test-all:
 	go test -tags=integration -race -timeout=5m ./...
 
 lint:
-	golangci-lint run
+	@mkdir -p /tmp/mcpmu-gocache /tmp/mcpmu-golangci
+	@for dir in $(LINT_DIRS); do \
+		echo "golangci-lint $$dir"; \
+		GOCACHE=/tmp/mcpmu-gocache GOLANGCI_LINT_CACHE=/tmp/mcpmu-golangci golangci-lint run $$dir || exit $$?; \
+	done
 
 fix:
 	go fix ./...

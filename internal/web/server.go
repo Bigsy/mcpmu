@@ -37,6 +37,7 @@ type Server struct {
 	status     *StatusTracker
 	templates  map[string]*template.Template
 	httpServer *http.Server
+	auth       *auth // nil when auth is disabled
 }
 
 // Options configures the web server.
@@ -47,11 +48,14 @@ type Options struct {
 	Supervisor *process.Supervisor
 	Bus        *events.Bus
 	ToolCache  *config.ToolCache
+	Token      string // if set, require token auth for all requests
 }
 
 // New creates a new web Server.
 func New(opts Options) (*Server, error) {
-	tmpl, err := parseTemplates()
+	a := newAuth(opts.Token)
+
+	tmpl, err := parseTemplates(a != nil)
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
 	}
@@ -65,14 +69,27 @@ func New(opts Options) (*Server, error) {
 		registry:   registry.NewClient(),
 		status:     NewStatusTracker(opts.Bus),
 		templates:  tmpl,
+		auth:       a,
 	}
 
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 
+	// Auth routes (registered on mux so logging/recovery still apply)
+	if a != nil {
+		mux.HandleFunc("GET /login", a.handleLoginPage(s))
+		mux.HandleFunc("POST /login", a.handleLoginSubmit())
+		mux.HandleFunc("POST /logout", a.handleLogout())
+	}
+
 	var handler http.Handler = mux
 	handler = logging(handler)
 	handler = recovery(handler)
+
+	// Auth middleware wraps everything — it exempts /login and /static internally
+	if a != nil {
+		handler = a.middleware(handler)
+	}
 
 	s.httpServer = &http.Server{
 		Addr:              opts.Addr,
@@ -88,7 +105,11 @@ func (s *Server) ListenAndServe() error {
 	addr := s.httpServer.Addr
 	host, _, _ := net.SplitHostPort(addr)
 	if host != "127.0.0.1" && host != "localhost" && host != "::1" && host != "" {
-		log.Printf("WARNING: binding to %s — the web UI has no authentication. Anyone on the network can access it.", addr)
+		if s.auth == nil {
+			log.Printf("WARNING: binding to %s — the web UI has no authentication. Set --token or MCPMU_WEB_TOKEN.", addr)
+		} else {
+			log.Printf("Binding to %s with token auth enabled", addr)
+		}
 	}
 	log.Printf("mcpmu web listening on http://%s", addr)
 	return s.httpServer.ListenAndServe()
@@ -182,8 +203,9 @@ var pageTemplates = []string{
 	"templates/registry.html",
 }
 
-func parseTemplates() (map[string]*template.Template, error) {
+func parseTemplates(authEnabled bool) (map[string]*template.Template, error) {
 	funcMap := template.FuncMap{
+		"authEnabled": func() bool { return authEnabled },
 		"stateClass":  stateClass,
 		"stateDot":    stateDot,
 		"stateLabel":  stateLabel,
@@ -258,6 +280,13 @@ func parseTemplates() (map[string]*template.Template, error) {
 	// Store the base template (with partials) for fragment rendering.
 	// Fragments execute named partial definitions without the layout wrapper.
 	templates["_fragments"] = base
+
+	// Login page is standalone (no layout wrapper)
+	login, err := template.New("login.html").ParseFS(templateFS, "templates/login.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse login.html: %w", err)
+	}
+	templates["login.html"] = login
 
 	return templates, nil
 }
