@@ -47,17 +47,19 @@ go install github.com/Bigsy/mcpmu/cmd/mcpmu@latest
 
 ## Quick Start
 
-### 1. Add your MCP servers to mcpmu
+### Let your agent set it up
 
-**Let your agent do it:** Install the mcpmu skill, then ask your coding agent to import your existing MCP servers. It can read your current config (e.g. `~/.claude/settings.json`, `.cursor/mcp.json`) and run `mcpmu add` for each one:
+Install the mcpmu skill, then ask your coding agent to do the rest — it can read your existing MCP config, import your servers into mcpmu, and register mcpmu as your single MCP endpoint:
 
 ```bash
 mcpmu skill install
 ```
 
-Then tell your agent: *"Read my current MCP config and add all my servers to mcpmu"*
+Then tell your agent: *"Read my current MCP config, add all my servers to mcpmu, and register mcpmu as an MCP server"*
 
-**Or add them manually:**
+### Or set it up manually
+
+**1. Add your MCP servers:**
 
 ```bash
 # Add a stdio server
@@ -67,19 +69,17 @@ mcpmu add context7 -- npx -y @upstash/context7-mcp
 mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
 ```
 
-### 2. Add mcpmu to your agent
+**2. Register mcpmu with your agent:**
 
-**Claude Code:**
 ```bash
+# Claude Code
 claude mcp add mcpmu -- mcpmu serve --stdio
-```
 
-**Codex:**
-```bash
+# Codex
 codex mcp add mcpmu -- mcpmu serve --stdio
 ```
 
-**Or add directly to any MCP config JSON (Claude Code, Cursor, Windsurf, etc.):**
+Or add directly to any MCP config JSON (Claude Code, Cursor, Windsurf, etc.):
 ```json
 {
   "mcpmu": {
