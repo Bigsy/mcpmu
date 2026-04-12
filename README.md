@@ -49,6 +49,16 @@ go install github.com/Bigsy/mcpmu/cmd/mcpmu@latest
 
 ### 1. Add your MCP servers to mcpmu
 
+**Let your agent do it:** Install the mcpmu skill, then ask your coding agent to import your existing MCP servers. It can read your current config (e.g. `~/.claude/settings.json`, `.cursor/mcp.json`) and run `mcpmu add` for each one:
+
+```bash
+mcpmu skill install
+```
+
+Then tell your agent: *"Read my current MCP config and add all my servers to mcpmu"*
+
+**Or add them manually:**
+
 ```bash
 # Add a stdio server
 mcpmu add context7 -- npx -y @upstash/context7-mcp
