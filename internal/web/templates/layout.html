@@ -9,6 +9,93 @@
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/htmx.min.js"></script>
   <script src="/static/sse.js"></script>
+  <script>
+  (function() {
+    var pendingByRootId = new Map();
+
+    function rootId(root) {
+      return root && root.id ? root.id : "";
+    }
+
+    function cssEscape(value) {
+      if (window.CSS && typeof window.CSS.escape === "function") {
+        return window.CSS.escape(value);
+      }
+      return value.replace(/["\\]/g, "\\$&");
+    }
+
+    document.addEventListener("htmx:beforeRequest", function(evt) {
+      var elt = evt.detail && evt.detail.elt;
+      if (!elt) {
+        return;
+      }
+
+      var root = elt.closest("[data-preserve-scroll]");
+      if (!root) {
+        return;
+      }
+
+      var id = rootId(root);
+      if (!id) {
+        return;
+      }
+
+      var anchor = elt.closest("[data-scroll-key]");
+      pendingByRootId.set(id, {
+        anchorKey: anchor ? anchor.getAttribute("data-scroll-key") : "",
+        anchorTop: anchor ? anchor.getBoundingClientRect().top : 0,
+        rootHeight: root.offsetHeight,
+        scrollY: window.scrollY,
+      });
+    });
+
+    document.addEventListener("htmx:beforeSwap", function(evt) {
+      var target = evt.detail && evt.detail.target;
+      if (!target || !target.hasAttribute("data-preserve-scroll")) {
+        return;
+      }
+
+      var id = rootId(target);
+      var pending = pendingByRootId.get(id);
+      if (!pending) {
+        return;
+      }
+
+      target.style.minHeight = pending.rootHeight + "px";
+    });
+
+    document.addEventListener("htmx:afterSettle", function(evt) {
+      var elt = evt.detail && evt.detail.elt;
+      var root = elt && elt.closest ? elt.closest("[data-preserve-scroll]") : null;
+      if (!root) {
+        return;
+      }
+
+      var id = rootId(root);
+      var pending = pendingByRootId.get(id);
+      if (!pending) {
+        return;
+      }
+
+      root.style.minHeight = "";
+
+      requestAnimationFrame(function() {
+        if (pending.anchorKey) {
+          var selector = '[data-scroll-key="' + cssEscape(pending.anchorKey) + '"]';
+          var anchor = root.querySelector(selector);
+          if (anchor) {
+            window.scrollBy(0, anchor.getBoundingClientRect().top - pending.anchorTop);
+          } else {
+            window.scrollTo(0, pending.scrollY);
+          }
+        } else {
+          window.scrollTo(0, pending.scrollY);
+        }
+        pendingByRootId.delete(id);
+      });
+    });
+  })();
+  </script>
 </head>
 <body>
 <div class="shell">

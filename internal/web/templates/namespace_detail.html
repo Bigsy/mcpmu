@@ -136,6 +136,7 @@
 </div>
 
 <!-- Tool permissions -->
+<div id="tool-permissions" data-preserve-scroll hx-target="#tool-permissions" hx-select="#tool-permissions > .card" hx-swap="innerHTML show:none focus-scroll:false">
 <div class="card section">
   <div class="card-header">
     <h2>Tool Permissions ({{len .Permissions}} configured)</h2>
@@ -162,7 +163,7 @@
             {{$key := permKey $server .Name}}
             {{$hasExplicit := mapHas $permSet $key}}
             {{$enabled := mapGet $permMap $key}}
-            <div class="tool-item">
+            <div class="tool-item" data-scroll-key="{{$server}}::{{.Name}}">
               <div class="flex items-center gap-2">
                 {{if $hasExplicit}}
                   {{if $enabled}}
@@ -184,42 +185,42 @@
               </div>
               <div class="btn-group">
                 {{if and $hasExplicit $enabled}}
-                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" hx-post="/namespaces/{{$nsName}}/permission" style="margin:0">
                     <input type="hidden" name="action" value="set">
                     <input type="hidden" name="server" value="{{$server}}">
                     <input type="hidden" name="tool" value="{{.Name}}">
                     <input type="hidden" name="enabled" value="false">
                     <button type="submit" class="btn-icon" title="Deny" style="font-size:11px; color: var(--text-faint);">deny</button>
                   </form>
-                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" hx-post="/namespaces/{{$nsName}}/permission" style="margin:0">
                     <input type="hidden" name="action" value="unset">
                     <input type="hidden" name="server" value="{{$server}}">
                     <input type="hidden" name="tool" value="{{.Name}}">
                     <button type="submit" class="btn-icon" title="Clear override" style="font-size:11px; color: var(--text-faint);">clear</button>
                   </form>
                 {{else if and $hasExplicit (not $enabled)}}
-                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" hx-post="/namespaces/{{$nsName}}/permission" style="margin:0">
                     <input type="hidden" name="action" value="set">
                     <input type="hidden" name="server" value="{{$server}}">
                     <input type="hidden" name="tool" value="{{.Name}}">
                     <input type="hidden" name="enabled" value="true">
                     <button type="submit" class="btn-icon" title="Allow" style="font-size:11px; color: var(--text-faint);">allow</button>
                   </form>
-                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" hx-post="/namespaces/{{$nsName}}/permission" style="margin:0">
                     <input type="hidden" name="action" value="unset">
                     <input type="hidden" name="server" value="{{$server}}">
                     <input type="hidden" name="tool" value="{{.Name}}">
                     <button type="submit" class="btn-icon" title="Clear override" style="font-size:11px; color: var(--text-faint);">clear</button>
                   </form>
                 {{else}}
-                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" hx-post="/namespaces/{{$nsName}}/permission" style="margin:0">
                     <input type="hidden" name="action" value="set">
                     <input type="hidden" name="server" value="{{$server}}">
                     <input type="hidden" name="tool" value="{{.Name}}">
                     <input type="hidden" name="enabled" value="true">
                     <button type="submit" class="btn-icon" title="Allow" style="font-size:11px; color: var(--text-faint);">allow</button>
                   </form>
-                  <form method="POST" action="/namespaces/{{$nsName}}/permission" style="margin:0">
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" hx-post="/namespaces/{{$nsName}}/permission" style="margin:0">
                     <input type="hidden" name="action" value="set">
                     <input type="hidden" name="server" value="{{$server}}">
                     <input type="hidden" name="tool" value="{{.Name}}">
@@ -238,7 +239,7 @@
       <!-- Fallback: show flat table if no tools discovered -->
       <table>
         <thead>
-          <tr>
+          <tr data-scroll-key="{{.Server}}::{{.ToolName}}">
             <th>Server</th>
             <th>Tool</th>
             <th>Permission</th>
@@ -258,7 +259,7 @@
               {{end}}
             </td>
             <td class="td-actions">
-              <form method="POST" action="/namespaces/{{$.Name}}/permission" style="margin:0; display:inline">
+              <form method="POST" action="/namespaces/{{$.Name}}/permission" hx-post="/namespaces/{{$.Name}}/permission" style="margin:0; display:inline">
                 <input type="hidden" name="action" value="unset">
                 <input type="hidden" name="server" value="{{.Server}}">
                 <input type="hidden" name="tool" value="{{.ToolName}}">
@@ -275,6 +276,7 @@
       </div>
     {{end}}
   </div>
+</div>
 </div>
 
 {{if .Config.ServerDefaults}}
@@ -328,4 +330,3 @@
 </div>
 {{end}}
 {{end}}
-

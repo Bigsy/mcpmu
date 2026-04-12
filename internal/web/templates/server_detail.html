@@ -131,6 +131,7 @@
     {{end}}
 
     <!-- Tools -->
+    <div id="server-tools" data-preserve-scroll hx-target="#server-tools" hx-select="#server-tools > .card" hx-swap="innerHTML show:none focus-scroll:false">
     <div class="card section">
       <div class="card-header">
         <h2>Tools ({{len .Tools}})</h2>
@@ -138,7 +139,7 @@
       <div class="card-body no-pad">
         {{if .Tools}}
           {{range .Tools}}
-          <div class="tool-item">
+          <div class="tool-item" data-scroll-key="{{.Name}}">
             <div>
               <div class="tool-name{{if .Denied}} denied{{end}}">{{.Name}}</div>
               {{if .Description}}
@@ -147,13 +148,13 @@
             </div>
             <div class="tool-meta">
               {{if .Denied}}
-                <form method="POST" action="/servers/{{$.Name}}/denied-tools" style="margin:0">
+                <form method="POST" action="/servers/{{$.Name}}/denied-tools" hx-post="/servers/{{$.Name}}/denied-tools" style="margin:0">
                   <input type="hidden" name="action" value="remove">
                   <input type="hidden" name="tool" value="{{.Name}}">
                   <button type="submit" class="badge badge-danger" style="cursor:pointer; border:none;" title="Click to allow">denied</button>
                 </form>
               {{else}}
-                <form method="POST" action="/servers/{{$.Name}}/denied-tools" style="margin:0">
+                <form method="POST" action="/servers/{{$.Name}}/denied-tools" hx-post="/servers/{{$.Name}}/denied-tools" style="margin:0">
                   <input type="hidden" name="action" value="add">
                   <input type="hidden" name="tool" value="{{.Name}}">
                   <button type="submit" class="btn-icon" style="font-size:11px; color: var(--text-faint);" title="Deny this tool">deny</button>
@@ -179,11 +180,11 @@
       <div class="card-body no-pad">
         {{if .Config.DeniedTools}}
           {{range .Config.DeniedTools}}
-          <div class="tool-item">
+          <div class="tool-item" data-scroll-key="{{.}}">
             <div>
               <span class="mono text-sm" style="color: var(--danger)">{{.}}</span>
             </div>
-            <form method="POST" action="/servers/{{$.Name}}/denied-tools" style="margin:0">
+            <form method="POST" action="/servers/{{$.Name}}/denied-tools" hx-post="/servers/{{$.Name}}/denied-tools" style="margin:0">
               <input type="hidden" name="action" value="remove">
               <input type="hidden" name="tool" value="{{.}}">
               <button type="submit" class="btn-icon" title="Remove from deny list" style="color: var(--danger)">&#10005;</button>
@@ -196,13 +197,14 @@
           </div>
         {{end}}
         <div style="padding: 8px 16px; border-top: 1px solid var(--border);">
-          <form method="POST" action="/servers/{{.Name}}/denied-tools" class="flex items-center gap-2" style="margin:0">
+          <form method="POST" action="/servers/{{.Name}}/denied-tools" hx-post="/servers/{{.Name}}/denied-tools" class="flex items-center gap-2" style="margin:0">
             <input type="hidden" name="action" value="add">
             <input type="text" name="tool" placeholder="Tool name to deny..." style="flex:1; padding: 4px 8px; font-size: 13px;">
             <button type="submit" class="btn btn-sm">Deny</button>
           </form>
         </div>
       </div>
+    </div>
     </div>
 
   </div>

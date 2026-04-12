@@ -199,6 +199,10 @@ code, .mono {
 
 .main { padding: 24px; max-width: 1200px; margin: 0 auto; width: 100%; }
 
+[data-preserve-scroll] {
+  overflow-anchor: none;
+}
+
 /* ── Page header ── */
 .page-header {
   display: flex;

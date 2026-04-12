@@ -276,7 +276,11 @@ func (s *Server) handleServerDeniedTools(w http.ResponseWriter, r *http.Request)
 	action := r.FormValue("action")
 	tool := strings.TrimSpace(r.FormValue("tool"))
 	if tool == "" {
-		s.redirectBack(w, r, "/servers/"+name)
+		if r.Header.Get("HX-Request") == "true" {
+			s.handleServerDetailPage(w, r)
+			return
+		}
+		http.Redirect(w, r, "/servers/"+name, http.StatusSeeOther)
 		return
 	}
 
@@ -298,7 +302,11 @@ func (s *Server) handleServerDeniedTools(w http.ResponseWriter, r *http.Request)
 		log.Printf("denied-tools %q: %v", name, err)
 	}
 
-	s.redirectBack(w, r, "/servers/"+name)
+	if r.Header.Get("HX-Request") == "true" {
+		s.handleServerDetailPage(w, r)
+		return
+	}
+	http.Redirect(w, r, "/servers/"+name, http.StatusSeeOther)
 }
 
 // --- Set Default Namespace ---
@@ -360,7 +368,11 @@ func (s *Server) handleNamespacePermission(w http.ResponseWriter, r *http.Reques
 		log.Printf("permission %q: %v", name, err)
 	}
 
-	s.redirectBack(w, r, "/namespaces/"+name)
+	if r.Header.Get("HX-Request") == "true" {
+		s.handleNamespaceDetailPage(w, r)
+		return
+	}
+	http.Redirect(w, r, "/namespaces/"+name, http.StatusSeeOther)
 }
 
 // --- Server Default Permissions ---
