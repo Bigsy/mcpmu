@@ -245,23 +245,33 @@
           } catch(e) { /* ignore parse errors */ }
         });
 
-        // Handle status events
-        logViewer.addEventListener('sse:status', function(evt) {
-          evt.preventDefault();
-          // Status events could update the page header, but for Phase 1
-          // we just log them in the log viewer as status lines
+      }
+
+      // Watch status updates separately and only reload while the page is
+      // showing a transitional state. That keeps start/stop buttons honest
+      // without causing refresh loops on stable pages.
+      (function() {
+        var currentState = {{.Status.State}};
+        var refreshOnNextStatusChange = {{if or (isStarting .Status.State) (isStopping .Status.State)}}true{{else}}false{{end}};
+        if (!refreshOnNextStatusChange) {
+          return;
+        }
+
+        var statusSource = new EventSource('/servers/{{.Name}}/logs/stream');
+        statusSource.addEventListener('status', function(evt) {
           try {
-            const data = JSON.parse(evt.detail.data);
-            const div = document.createElement('div');
-            div.className = 'log-line';
-            div.innerHTML =
-              '<span class="log-ts"></span>' +
-              '<span class="log-tag" style="color: var(--info)">[status]</span>' +
-              '<span class="log-msg" style="color: var(--info)">State: ' + escapeHtml(data.state || '') + '</span>';
-            logViewer.appendChild(div);
+            const data = JSON.parse(evt.data);
+            if (data.state !== undefined && data.state !== currentState) {
+              statusSource.close();
+              location.reload();
+            }
           } catch(e) {}
         });
-      }
+
+        window.addEventListener('beforeunload', function() {
+          statusSource.close();
+        });
+      })();
 
       function escapeHtml(text) {
         const div = document.createElement('div');
@@ -273,4 +283,3 @@
 
 </div>
 {{end}}
-

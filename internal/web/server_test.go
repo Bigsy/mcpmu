@@ -122,6 +122,9 @@ func TestServerDetailPage(t *testing.T) {
 	if !strings.Contains(html, "Runtime") {
 		t.Error("missing Runtime section")
 	}
+	if !strings.Contains(html, "refreshOnNextStatusChange") {
+		t.Error("missing transitional status refresh logic")
+	}
 }
 
 func TestServerDetailPage_NotFound(t *testing.T) {
