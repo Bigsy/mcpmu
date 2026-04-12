@@ -30,6 +30,12 @@ Key differentiators:
   </tr>
 </table>
 
+
+<img width="1528" height="1024" alt="Screenshot 2026-04-12 at 12 46 46" src="https://github.com/user-attachments/assets/6a9d7ea3-29db-4ab9-b14f-21524e05ded1" />
+<img width="1515" height="1023" alt="Screenshot 2026-04-12 at 12 47 02" src="https://github.com/user-attachments/assets/7ec8f3b1-7bab-4433-a21d-9b720baaf737" />
+<img width="1526" height="1022" alt="Screenshot 2026-04-12 at 12 47 16" src="https://github.com/user-attachments/assets/a3b1a8eb-be48-47cc-8fe8-eaa37a22e9d8" />
+<img width="1511" height="1023" alt="Screenshot 2026-04-12 at 12 48 28" src="https://github.com/user-attachments/assets/e62457c7-70a1-4674-9640-1e6c0136f53d" />
+
 ## Installation
 
 ### Homebrew (macOS/Linux)
