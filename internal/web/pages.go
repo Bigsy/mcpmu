@@ -272,6 +272,9 @@ type namespaceDetailData struct {
 	// EffectiveDefaults maps server name → effective deny default (true=deny).
 	// Resolves: ServerDefaults[server] → namespace DenyByDefault.
 	EffectiveDefaults map[string]bool
+	// DeniedToolSet maps "server:tool" → true for server-level denied tools.
+	// Used by the fallback permissions table when no tools are discovered.
+	DeniedToolSet map[string]bool
 }
 
 func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Request) {
@@ -308,6 +311,7 @@ func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Reques
 	// Build tools per server for the permissions editor
 	serverTools := make(map[string][]toolDisplay)
 	for _, sid := range ns.ServerIDs {
+		srv, _ := s.cfg.GetServer(sid)
 		var tools []toolDisplay
 		// Prefer live tools from status tracker
 		if liveTools, ok := s.status.Tools(sid); ok && len(liveTools) > 0 {
@@ -315,6 +319,7 @@ func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Reques
 				tools = append(tools, toolDisplay{
 					Name:        t.Name,
 					Description: t.Description,
+					Denied:      srv.IsToolDenied(t.Name),
 				})
 			}
 		} else if s.toolCache != nil {
@@ -325,6 +330,7 @@ func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Reques
 						Name:        t.Name,
 						Description: t.Description,
 						TokenCount:  t.TokenCount,
+						Denied:      srv.IsToolDenied(t.Name),
 					})
 				}
 			}
@@ -345,6 +351,16 @@ func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// Build server-level denied tool set for fallback permissions table
+	deniedToolSet := make(map[string]bool)
+	for _, sid := range ns.ServerIDs {
+		if srv, ok := s.cfg.GetServer(sid); ok {
+			for _, t := range srv.DeniedTools {
+				deniedToolSet[sid+":"+t] = true
+			}
+		}
+	}
+
 	data := namespaceDetailData{
 		Page:              "namespaces",
 		ConfigPath:        s.configPathDisplay(),
@@ -358,6 +374,7 @@ func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Reques
 		PermMap:           permMap,
 		PermSet:           permSet,
 		EffectiveDefaults: effectiveDefaults,
+		DeniedToolSet:     deniedToolSet,
 	}
 
 	s.render(w, "namespace_detail.html", data)

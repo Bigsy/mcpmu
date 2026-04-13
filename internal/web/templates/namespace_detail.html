@@ -160,6 +160,29 @@
             </span>
           </div>
           {{range $tools}}
+            {{if .Denied}}
+            {{/* Server-level denied: show as locked, allow clearing stale overrides */}}
+            {{$key := permKey $server .Name}}
+            {{$hasStale := mapHas $permSet $key}}
+            <div class="tool-item" data-scroll-key="{{$server}}::{{.Name}}">
+              <div class="flex items-center gap-2">
+                <span class="badge badge-danger" style="width: 20px; text-align: center;">X</span>
+                <span class="mono text-sm" style="color: var(--text-faint); text-decoration: line-through;">{{.Name}}</span>
+                <span class="text-xs" style="color: var(--danger);">(server denied)</span>
+              </div>
+              <div class="btn-group">
+                {{if $hasStale}}
+                  <form method="POST" action="/namespaces/{{$nsName}}/permission" hx-post="/namespaces/{{$nsName}}/permission" style="margin:0">
+                    <input type="hidden" name="action" value="unset">
+                    <input type="hidden" name="server" value="{{$server}}">
+                    <input type="hidden" name="tool" value="{{.Name}}">
+                    <button type="submit" class="btn-icon" title="Remove stale override" style="font-size:11px; color: var(--text-faint);">clear</button>
+                  </form>
+                {{end}}
+                {{if gt .TokenCount 0}}<span class="text-xs text-faint">~{{.TokenCount}} tok</span>{{end}}
+              </div>
+            </div>
+            {{else}}
             {{$key := permKey $server .Name}}
             {{$hasExplicit := mapHas $permSet $key}}
             {{$enabled := mapGet $permMap $key}}
@@ -231,12 +254,14 @@
                 {{if gt .TokenCount 0}}<span class="text-xs text-faint">~{{.TokenCount}} tok</span>{{end}}
               </div>
             </div>
+            {{end}}
           {{end}}
         </div>
         {{end}}
       {{end}}
     {{else if .Permissions}}
       <!-- Fallback: show flat table if no tools discovered -->
+      {{$deniedToolSet := .DeniedToolSet}}
       <table>
         <thead>
           <tr data-scroll-key="{{.Server}}::{{.ToolName}}">
@@ -248,23 +273,43 @@
         </thead>
         <tbody>
           {{range .Permissions}}
+          {{$isDenied := mapHas $deniedToolSet (permKey .Server .ToolName)}}
           <tr>
             <td class="td-name"><a href="/servers/{{.Server}}">{{.Server}}</a></td>
-            <td><span class="mono text-sm">{{.ToolName}}</span></td>
             <td>
-              {{if .Enabled}}
+              {{if $isDenied}}
+                <span class="mono text-sm" style="color: var(--text-faint); text-decoration: line-through;">{{.ToolName}}</span>
+                <span class="text-xs" style="color: var(--danger);">(server denied)</span>
+              {{else}}
+                <span class="mono text-sm">{{.ToolName}}</span>
+              {{end}}
+            </td>
+            <td>
+              {{if $isDenied}}
+                <span class="perm-deny">X Server denied</span>
+              {{else if .Enabled}}
                 <span class="perm-allow">&#10003; Allow</span>
               {{else}}
                 <span class="perm-deny">&#10005; Deny</span>
               {{end}}
             </td>
             <td class="td-actions">
-              <form method="POST" action="/namespaces/{{$.Name}}/permission" hx-post="/namespaces/{{$.Name}}/permission" style="margin:0; display:inline">
-                <input type="hidden" name="action" value="unset">
-                <input type="hidden" name="server" value="{{.Server}}">
-                <input type="hidden" name="tool" value="{{.ToolName}}">
-                <button type="submit" class="btn-icon" title="Remove" style="color: var(--danger);">&#10005;</button>
-              </form>
+              {{if $isDenied}}
+                {{/* Allow clearing stale overrides even on server-denied tools */}}
+                <form method="POST" action="/namespaces/{{$.Name}}/permission" hx-post="/namespaces/{{$.Name}}/permission" style="margin:0; display:inline">
+                  <input type="hidden" name="action" value="unset">
+                  <input type="hidden" name="server" value="{{.Server}}">
+                  <input type="hidden" name="tool" value="{{.ToolName}}">
+                  <button type="submit" class="btn-icon" title="Remove stale override" style="color: var(--text-faint);">clear</button>
+                </form>
+              {{else}}
+                <form method="POST" action="/namespaces/{{$.Name}}/permission" hx-post="/namespaces/{{$.Name}}/permission" style="margin:0; display:inline">
+                  <input type="hidden" name="action" value="unset">
+                  <input type="hidden" name="server" value="{{.Server}}">
+                  <input type="hidden" name="tool" value="{{.ToolName}}">
+                  <button type="submit" class="btn-icon" title="Remove" style="color: var(--danger);">&#10005;</button>
+                </form>
+              {{end}}
             </td>
           </tr>
           {{end}}

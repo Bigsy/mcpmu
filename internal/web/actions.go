@@ -353,6 +353,12 @@ func (s *Server) handleNamespacePermission(w http.ResponseWriter, r *http.Reques
 		if _, ok := cfg.GetNamespace(name); !ok {
 			return fmt.Errorf("namespace %q not found", name)
 		}
+		// Reject setting permissions on server-level denied tools (but allow unset to clean up stale entries)
+		if action == "set" {
+			if srv, ok := cfg.GetServer(server); ok && srv.IsToolDenied(tool) {
+				return fmt.Errorf("tool %q is denied at server level", tool)
+			}
+		}
 		switch action {
 		case "set":
 			enabled := r.FormValue("enabled") == "true"

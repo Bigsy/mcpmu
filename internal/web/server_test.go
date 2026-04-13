@@ -593,6 +593,67 @@ func TestNamespaceDelete(t *testing.T) {
 	}
 }
 
+func TestNamespacePermission_RejectsSetOnServerDeniedTool(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Deny "echo_tool" at server level
+	s, _ := srv.cfg.GetServer("test-stdio")
+	s.DeniedTools = []string{"echo_tool"}
+	srv.cfg.Servers["test-stdio"] = s
+	_ = config.SaveTo(srv.cfg, srv.configPath)
+
+	form := url.Values{}
+	form.Set("action", "set")
+	form.Set("server", "test-stdio")
+	form.Set("tool", "echo_tool")
+	form.Set("enabled", "true")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/namespaces/default/permission", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	// Should redirect (handler always redirects), but the permission must NOT be set
+	perms := srv.cfg.GetToolPermissionsForNamespace("default")
+	for _, p := range perms {
+		if p.Server == "test-stdio" && p.ToolName == "echo_tool" {
+			t.Error("should not allow setting a permission on a server-denied tool")
+		}
+	}
+}
+
+func TestNamespacePermission_AllowsUnsetOnServerDeniedTool(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Pre-set a permission, then deny the tool at server level (simulates stale override)
+	_ = srv.cfg.SetToolPermission("default", "test-stdio", "echo_tool", true)
+	s, _ := srv.cfg.GetServer("test-stdio")
+	s.DeniedTools = []string{"echo_tool"}
+	srv.cfg.Servers["test-stdio"] = s
+	_ = config.SaveTo(srv.cfg, srv.configPath)
+
+	form := url.Values{}
+	form.Set("action", "unset")
+	form.Set("server", "test-stdio")
+	form.Set("tool", "echo_tool")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/namespaces/default/permission", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	// The stale permission should be cleared
+	perms := srv.cfg.GetToolPermissionsForNamespace("default")
+	for _, p := range perms {
+		if p.Server == "test-stdio" && p.ToolName == "echo_tool" {
+			t.Error("unset on a server-denied tool should clear the stale override")
+		}
+	}
+}
+
 func TestAPIListServers(t *testing.T) {
 	srv := newTestServer(t)
 
