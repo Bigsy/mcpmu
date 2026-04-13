@@ -138,9 +138,11 @@ func runWeb(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create web server: %w", err)
 	}
 
-	// Start autostart servers
+	// Start config file watcher and autostart servers
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go srv.WatchConfig(ctx)
+
 	for name, srvCfg := range cfg.Servers {
 		if srvCfg.Autostart && srvCfg.IsEnabled() {
 			log.Printf("Autostarting server: %s", name)

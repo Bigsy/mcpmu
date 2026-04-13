@@ -38,6 +38,9 @@ type Server struct {
 	templates  map[string]*template.Template
 	httpServer *http.Server
 	auth       *auth // nil when auth is disabled
+
+	// Config file watcher: broadcasts to SSE clients on external changes.
+	configBcast *configBroadcaster
 }
 
 // Options configures the web server.
@@ -61,15 +64,16 @@ func New(opts Options) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:        opts.Config,
-		configPath: opts.ConfigPath,
-		supervisor: opts.Supervisor,
-		bus:        opts.Bus,
-		toolCache:  opts.ToolCache,
-		registry:   registry.NewClient(),
-		status:     NewStatusTracker(opts.Bus),
-		templates:  tmpl,
-		auth:       a,
+		cfg:         opts.Config,
+		configPath:  opts.ConfigPath,
+		supervisor:  opts.Supervisor,
+		bus:         opts.Bus,
+		toolCache:   opts.ToolCache,
+		registry:    registry.NewClient(),
+		status:      NewStatusTracker(opts.Bus),
+		templates:   tmpl,
+		auth:        a,
+		configBcast: newConfigBroadcaster(),
 	}
 
 	mux := http.NewServeMux()
@@ -189,6 +193,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// SSE
 	mux.HandleFunc("GET /servers/{name}/logs/stream", s.handleSSELogs)
+	mux.HandleFunc("GET /events/config", s.handleSSEConfig)
 }
 
 // pageTemplates lists the page templates that each get their own clone of the layout.

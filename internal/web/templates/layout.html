@@ -95,6 +95,20 @@
       });
     });
   })();
+
+  // Config file watcher: reload page when external changes are detected.
+  // Skip form pages so unsaved user input is not lost.
+  (function() {
+    if (/\/(add|edit|import)/.test(location.pathname)) return;
+
+    var src = new EventSource('/events/config');
+    src.addEventListener('config-changed', function() {
+      location.reload();
+    });
+    window.addEventListener('beforeunload', function() {
+      src.close();
+    });
+  })();
   </script>
 </head>
 <body>
