@@ -1853,22 +1853,28 @@ func TestServer_ReloadSendsToolsListChanged(t *testing.T) {
 	}
 	t.Log("Config updated: added srv2")
 
-	// Step 4: Read the notifications/tools/list_changed notification from reload
-	notifMsg, err := readMsg(5 * time.Second)
-	if err != nil {
-		t.Fatalf("notification read: %v", err)
+	// Step 4: Read reload notifications (tools, resources, prompts list_changed).
+	// Drain all of them — order is not guaranteed.
+	gotToolsChanged := false
+	for i := 0; i < 3; i++ {
+		notifMsg, err := readMsg(5 * time.Second)
+		if err != nil {
+			break // fewer notifications than expected is OK
+		}
+		var notif struct {
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(notifMsg, &notif); err != nil {
+			t.Fatalf("Parse notification: %v", err)
+		}
+		t.Logf("Received %s after config reload", notif.Method)
+		if notif.Method == "notifications/tools/list_changed" {
+			gotToolsChanged = true
+		}
 	}
-
-	var notif struct {
-		Method string `json:"method"`
+	if !gotToolsChanged {
+		t.Error("Expected notifications/tools/list_changed among reload notifications")
 	}
-	if err := json.Unmarshal(notifMsg, &notif); err != nil {
-		t.Fatalf("Parse notification: %v", err)
-	}
-	if notif.Method != "notifications/tools/list_changed" {
-		t.Errorf("Expected notifications/tools/list_changed, got %q", notif.Method)
-	}
-	t.Log("Received notifications/tools/list_changed after config reload")
 
 	// Step 5: Send tools/list again to get updated tools
 	send(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
@@ -1887,20 +1893,19 @@ func TestServer_ReloadSendsToolsListChanged(t *testing.T) {
 		Error *RPCError `json:"error"`
 	}
 
-	// The response might be a notification from background discovery — skip to the actual response
-	if err := json.Unmarshal(toolsResp2, &toolsResult2); err != nil {
-		t.Fatalf("Parse second tools/list: %v", err)
-	}
-
-	// If we got a notification instead of the response, read again
-	if toolsResult2.ID == 0 {
-		t.Log("Got another notification, reading actual response")
+	// Skip any notifications (resources/list_changed, prompts/list_changed, etc.)
+	// until we get the actual tools/list response (has a non-zero ID).
+	for {
+		if err := json.Unmarshal(toolsResp2, &toolsResult2); err != nil {
+			t.Fatalf("Parse second tools/list: %v", err)
+		}
+		if toolsResult2.ID != 0 {
+			break
+		}
+		t.Log("Skipping notification, reading next message")
 		toolsResp2, err = readMsg(15 * time.Second)
 		if err != nil {
 			t.Fatalf("reading after notification: %v", err)
-		}
-		if err := json.Unmarshal(toolsResp2, &toolsResult2); err != nil {
-			t.Fatalf("Parse: %v", err)
 		}
 	}
 

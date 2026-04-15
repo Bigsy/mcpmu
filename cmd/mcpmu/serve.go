@@ -58,8 +58,8 @@ func init() {
 	serveCmd.Flags().StringVarP(&serveLogLevel, "log-level", "l", "info", "Log level (debug, info, warn, error)")
 	serveCmd.Flags().BoolVar(&serveEager, "eager", false, "Pre-start all servers on init (default: lazy start)")
 	serveCmd.Flags().BoolVar(&serveExposeManagerTools, "expose-manager-tools", false, "Include mcpmu.* tools in tools/list (default: hidden)")
-	serveCmd.Flags().BoolVar(&serveResources, "resources", false, "Passthrough resources/* from upstream servers")
-	serveCmd.Flags().BoolVar(&servePrompts, "prompts", false, "Passthrough prompts/* from upstream servers")
+	serveCmd.Flags().BoolVar(&serveResources, "resources", true, "Passthrough resources/* from upstream servers")
+	serveCmd.Flags().BoolVar(&servePrompts, "prompts", true, "Passthrough prompts/* from upstream servers")
 
 	rootCmd.AddCommand(serveCmd)
 }

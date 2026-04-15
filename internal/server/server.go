@@ -84,6 +84,9 @@ type Server struct {
 
 	// Hot-reload
 	reloadCh chan *config.Config // Serializes reload with request handling
+
+	// Resource routing: maps original URI → server name (populated by resources/list)
+	resourceMap sync.Map
 }
 
 // New creates a new MCP server.
@@ -241,6 +244,13 @@ func (s *Server) handleRequest(ctx context.Context, method string, params json.R
 			return nil, ErrMethodNotFound(method)
 		}
 		return s.handleResourcesRead(ctx, params)
+	case "resources/templates/list":
+		if !s.opts.ExposeResources {
+			return nil, ErrMethodNotFound(method)
+		}
+		return struct {
+			ResourceTemplates []any `json:"resourceTemplates"`
+		}{ResourceTemplates: []any{}}, nil
 	case "prompts/list":
 		if !s.opts.ExposePrompts {
 			return nil, ErrMethodNotFound(method)
@@ -506,14 +516,17 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 	activeServerNames := s.activeServerNames
 	s.mu.RUnlock()
 
-	type qualifiedResource struct {
-		URI         string `json:"uri"`
-		Name        string `json:"name"`
-		Description string `json:"description,omitempty"`
-		MimeType    string `json:"mimeType,omitempty"`
+	type listedResource struct {
+		URI         string          `json:"uri"`
+		Name        string          `json:"name"`
+		Title       string          `json:"title,omitempty"`
+		Description string          `json:"description,omitempty"`
+		MimeType    string          `json:"mimeType,omitempty"`
+		Size        *int64          `json:"size,omitempty"`
+		Annotations json.RawMessage `json:"annotations,omitempty"`
 	}
 
-	var allResources []qualifiedResource
+	var allResources []listedResource
 	var mu sync.Mutex
 	sem := make(chan struct{}, MaxConcurrentDiscovery)
 	var wg sync.WaitGroup
@@ -542,11 +555,18 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 
 			mu.Lock()
 			for _, r := range resources {
-				allResources = append(allResources, qualifiedResource{
-					URI:         serverName + ":" + r.URI,
+				// Pass through the original URI so clients can match URIs
+				// referenced in tool descriptions. Store the mapping for
+				// routing resources/read to the correct upstream server.
+				s.resourceMap.Store(r.URI, serverName)
+				allResources = append(allResources, listedResource{
+					URI:         r.URI,
 					Name:        r.Name,
+					Title:       r.Title,
 					Description: r.Description,
 					MimeType:    r.MimeType,
+					Size:        r.Size,
+					Annotations: r.Annotations,
 				})
 			}
 			mu.Unlock()
@@ -556,10 +576,10 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 	wg.Wait()
 
 	if allResources == nil {
-		allResources = []qualifiedResource{}
+		allResources = []listedResource{}
 	}
 	return struct {
-		Resources []qualifiedResource `json:"resources"`
+		Resources []listedResource `json:"resources"`
 	}{Resources: allResources}, nil
 }
 
@@ -580,11 +600,12 @@ func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage
 		return nil, ErrInvalidParams(err.Error())
 	}
 
-	// Split on first ':' to extract server name and original URI
-	serverName, originalURI, ok := strings.Cut(req.URI, ":")
-	if !ok || serverName == "" || originalURI == "" {
-		return nil, ErrInvalidParams("invalid resource URI: " + req.URI)
+	// Look up which server owns this URI (populated by resources/list)
+	val, ok := s.resourceMap.Load(req.URI)
+	if !ok {
+		return nil, ErrInvalidParams("unknown resource URI (has resources/list been called?): " + req.URI)
 	}
+	serverName := val.(string)
 
 	if !slices.Contains(activeServerNames, serverName) {
 		return nil, ErrServerNotFound(serverName)
@@ -598,7 +619,7 @@ func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage
 	callCtx, cancel := context.WithTimeout(ctx, sc.timeout)
 	defer cancel()
 
-	contents, err := sc.client.ReadResource(callCtx, originalURI)
+	contents, err := sc.client.ReadResource(callCtx, req.URI)
 	if err != nil {
 		return nil, ErrInternalError(fmt.Sprintf("resources/read from %s: %v", serverName, err))
 	}

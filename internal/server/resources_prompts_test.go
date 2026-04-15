@@ -365,7 +365,7 @@ func TestServer_ResourcesRead_InvalidURI(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if resp.Error == nil {
-		t.Fatal("Expected InvalidParams error for URI without colon")
+		t.Fatal("Expected InvalidParams error for unknown resource URI")
 	}
 	if resp.Error.Code != ErrCodeInvalidParams {
 		t.Errorf("Expected error code %d, got %d", ErrCodeInvalidParams, resp.Error.Code)
@@ -562,7 +562,7 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 				Args:    []string{"-test.run=TestHelperProcess", "--"},
 				Env: map[string]string{
 					"GO_WANT_HELPER_PROCESS": "1",
-					"FAKE_MCP_CFG":           `{"tools":[],"resources":[{"uri":"file:///readme.md","name":"readme","description":"The readme","mimeType":"text/markdown"},{"uri":"file:///config.json","name":"config","description":"App config"}],"resourceContents":{"file:///readme.md":[{"uri":"file:///readme.md","text":"# Hello World"}],"file:///config.json":[{"uri":"file:///config.json","text":"{\"key\":\"value\"}"}]}}`,
+					"FAKE_MCP_CFG":           `{"tools":[],"resources":[{"uri":"file:///readme.md","name":"readme","description":"The readme","mimeType":"text/markdown","annotations":{"audience":["assistant"],"priority":0.8}},{"uri":"file:///config.json","name":"config","description":"App config"}],"resourceContents":{"file:///readme.md":[{"uri":"file:///readme.md","text":"# Hello World"}],"file:///config.json":[{"uri":"file:///config.json","text":"{\"key\":\"value\"}"}]}}`,
 				},
 			},
 			"srv2": {
@@ -582,8 +582,8 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 	stdin := strings.NewReader(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}` + "\n" +
 			`{"jsonrpc":"2.0","id":2,"method":"resources/list"}` + "\n" +
-			`{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"srv1:file:///readme.md"}}` + "\n" +
-			`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"srv2:exa://tools/list"}}` + "\n",
+			`{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"file:///readme.md"}}` + "\n" +
+			`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"exa://tools/list"}}` + "\n",
 	)
 
 	srv, err := New(Options{
@@ -615,9 +615,10 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 		ID     int `json:"id"`
 		Result struct {
 			Resources []struct {
-				URI         string `json:"uri"`
-				Name        string `json:"name"`
-				Description string `json:"description"`
+				URI         string          `json:"uri"`
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				Annotations json.RawMessage `json:"annotations,omitempty"`
 			} `json:"resources"`
 		} `json:"result"`
 		Error *RPCError `json:"error"`
@@ -634,18 +635,46 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 		t.Fatalf("Expected 3 resources, got %d: %+v", len(listResp.Result.Resources), listResp.Result.Resources)
 	}
 
-	// Check URIs are qualified
+	// Check URIs are passed through unqualified (original URIs from upstream)
 	uris := make(map[string]bool)
 	for _, r := range listResp.Result.Resources {
 		uris[r.URI] = true
 	}
-	for _, expected := range []string{"srv1:file:///readme.md", "srv1:file:///config.json", "srv2:exa://tools/list"} {
+	for _, expected := range []string{"file:///readme.md", "file:///config.json", "exa://tools/list"} {
 		if !uris[expected] {
-			t.Errorf("Expected qualified URI %q in resources list, got: %v", expected, uris)
+			t.Errorf("Expected URI %q in resources list, got: %v", expected, uris)
 		}
 	}
 
-	// Response 3: resources/read srv1:file:///readme.md — should strip prefix and return content
+	// Check annotations are passed through for file:///readme.md
+	for _, r := range listResp.Result.Resources {
+		if r.URI == "file:///readme.md" {
+			if r.Annotations == nil {
+				t.Error("Expected annotations on file:///readme.md, got nil")
+			} else {
+				var ann struct {
+					Audience []string `json:"audience"`
+					Priority float64  `json:"priority"`
+				}
+				if err := json.Unmarshal(r.Annotations, &ann); err != nil {
+					t.Fatalf("Unmarshal annotations: %v", err)
+				}
+				if len(ann.Audience) != 1 || ann.Audience[0] != "assistant" {
+					t.Errorf("Expected audience [assistant], got %v", ann.Audience)
+				}
+				if ann.Priority != 0.8 {
+					t.Errorf("Expected priority 0.8, got %v", ann.Priority)
+				}
+			}
+		}
+		if r.URI == "file:///config.json" {
+			if r.Annotations != nil {
+				t.Errorf("Expected no annotations on file:///config.json, got %s", r.Annotations)
+			}
+		}
+	}
+
+	// Response 3: resources/read file:///readme.md — routed to srv1 via resource map
 	var readResp1 struct {
 		ID     int `json:"id"`
 		Result struct {
@@ -663,7 +692,7 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 		t.Errorf("Expected contents to contain 'Hello World', got: %s", string(readResp1.Result.Contents))
 	}
 
-	// Response 4: resources/read srv2:exa://tools/list — prefix stripping with multi-colon URI
+	// Response 4: resources/read exa://tools/list — routed to srv2 via resource map
 	var readResp2 struct {
 		ID     int `json:"id"`
 		Result struct {
@@ -908,8 +937,8 @@ func TestServer_ResourcesList_PartialFailure(t *testing.T) {
 	if len(listResp.Result.Resources) != 1 {
 		t.Fatalf("Expected 1 resource (partial result), got %d", len(listResp.Result.Resources))
 	}
-	if listResp.Result.Resources[0].URI != "good:file:///good.txt" {
-		t.Errorf("Expected URI 'good:file:///good.txt', got %q", listResp.Result.Resources[0].URI)
+	if listResp.Result.Resources[0].URI != "file:///good.txt" {
+		t.Errorf("Expected URI 'file:///good.txt', got %q", listResp.Result.Resources[0].URI)
 	}
 }
 
@@ -1001,7 +1030,7 @@ func TestServer_PromptsList_PartialFailure(t *testing.T) {
 	}
 }
 
-func TestServer_ResourcesRead_ServerNotInNamespace(t *testing.T) {
+func TestServer_ResourcesRead_UnknownURI(t *testing.T) {
 	t.Parallel()
 	enabled := true
 	cfg := &config.Config{
@@ -1017,7 +1046,7 @@ func TestServer_ResourcesRead_ServerNotInNamespace(t *testing.T) {
 	var stdout bytes.Buffer
 	stdin := strings.NewReader(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}` + "\n" +
-			`{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"unknown:file:///test"}}` + "\n",
+			`{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"file:///unknown"}}` + "\n",
 	)
 
 	srv, err := New(Options{
@@ -1052,10 +1081,10 @@ func TestServer_ResourcesRead_ServerNotInNamespace(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if resp.Error == nil {
-		t.Fatal("Expected error for server not in namespace")
+		t.Fatal("Expected error for unknown resource URI")
 	}
-	if resp.Error.Code != ErrCodeServerNotFound {
-		t.Errorf("Expected error code %d (ServerNotFound), got %d", ErrCodeServerNotFound, resp.Error.Code)
+	if resp.Error.Code != ErrCodeInvalidParams {
+		t.Errorf("Expected error code %d (InvalidParams), got %d", ErrCodeInvalidParams, resp.Error.Code)
 	}
 }
 

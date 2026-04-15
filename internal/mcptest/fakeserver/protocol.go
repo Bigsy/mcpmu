@@ -147,10 +147,13 @@ type ContentBlock struct {
 
 // Resource represents an MCP resource definition.
 type Resource struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	MimeType    string `json:"mimeType,omitempty"`
+	URI         string          `json:"uri"`
+	Name        string          `json:"name"`
+	Title       string          `json:"title,omitempty"`
+	Description string          `json:"description,omitempty"`
+	MimeType    string          `json:"mimeType,omitempty"`
+	Size        *int64          `json:"size,omitempty"`
+	Annotations json.RawMessage `json:"annotations,omitempty"`
 }
 
 // Prompt represents an MCP prompt definition.

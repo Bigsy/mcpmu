@@ -123,9 +123,9 @@ This keeps `tools/list` responsive for clients with tight request timeouts while
 
 ## Resource and Prompt Passthrough
 
-When enabled via `--resources` and/or `--prompts`, serve mode passes through `resources/*` and `prompts/*` MCP methods from upstream servers. These are off by default to avoid context bloat.
+Serve mode passes through `resources/*` and `prompts/*` MCP methods from upstream servers (enabled by default, disable with `--resources=false` or `--prompts=false`).
 
-- **Resources**: URIs are qualified with the server name prefix (`serverName:originalUri`). On `resources/read`, the prefix is stripped before forwarding upstream. The `:` separator is safe because server names cannot contain `:`.
+- **Resources**: URIs are passed through unmodified from upstream servers. A reverse map (URI → server name) is built during `resources/list` and used to route `resources/read` calls to the correct upstream server. All MCP resource fields are preserved, including `annotations`, `title`, and `size`. `resources/templates/list` is also supported (returns an empty list if no upstream servers provide templates).
 - **Prompts**: Names are qualified as `serverName.promptName` (same as tools). Descriptions are prefixed with `[serverName]`. On `prompts/get`, the prefix is stripped before forwarding upstream.
 - **No caching**: Resources and prompts are fetched on demand from upstream servers, not cached or discovered at startup.
 - **No permissions**: Unlike tools, resources and prompts have no permission layer — they are read-only and user-initiated.
