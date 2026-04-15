@@ -72,11 +72,19 @@ mcpmu skill install
 
 Then tell your agent: *"Read my current MCP config, add all my servers to mcpmu, and register mcpmu as an MCP server"*
 
-### Or set it up manually
+### Or set it up manually with via the TUI, Web or Cmdline
 
 **1. Add your MCP servers:**
 
 ```bash
+# Start TUI
+mcpmu
+
+# Start web
+mcpmu web
+
+#Or just use the cli
+
 # Add a stdio server
 mcpmu add context7 -- npx -y @upstash/context7-mcp
 
