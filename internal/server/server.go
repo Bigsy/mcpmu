@@ -107,6 +107,15 @@ func New(opts Options) (*Server, error) {
 		GlobalOAuthCallbackPort: opts.Config.MCPOAuthCallbackPort,
 	})
 
+	if opts.ConfigPath != "" {
+		toolCache, err := config.NewToolCache(opts.ConfigPath)
+		if err != nil {
+			log.Printf("Warning: failed to initialize tool cache: %v", err)
+		} else {
+			supervisor.SetToolCache(toolCache)
+		}
+	}
+
 	s := &Server{
 		opts:       opts,
 		cfg:        opts.Config,
