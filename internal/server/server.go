@@ -78,6 +78,11 @@ type Server struct {
 	writer  io.Writer
 	writeMu sync.Mutex
 
+	// Tracks in-flight message-handler goroutines so Run() can wait for them
+	// to drain before returning (otherwise stdout writes may race with the
+	// caller reading the buffer after Run exits).
+	handlersWG sync.WaitGroup
+
 	// Background discovery
 	bgDiscovering        atomic.Bool
 	listToolsGracePeriod time.Duration // 0 means use ListToolsGracePeriod constant
@@ -142,6 +147,10 @@ type readResult struct {
 // Run starts the server and processes requests until context is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	defer s.shutdown()
+	// Wait for in-flight handler goroutines to finish before returning.
+	// Callers (and tests) typically read the stdout buffer after Run exits;
+	// if handlers were still writing, that would be a data race.
+	defer s.handlersWG.Wait()
 
 	// Start config file watcher if ConfigPath is set
 	if s.opts.ConfigPath != "" {
@@ -204,6 +213,18 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
+// isUpstreamMethod reports whether a JSON-RPC method dispatches a request to
+// an upstream MCP server and therefore can block for an arbitrary time. We
+// run these in goroutines so a slow upstream on one request doesn't freeze
+// the main loop and starve every other pending request.
+func isUpstreamMethod(method string) bool {
+	switch method {
+	case "tools/call", "resources/read", "prompts/get":
+		return true
+	}
+	return false
+}
+
 // handleMessage parses and routes a JSON-RPC message.
 func (s *Server) handleMessage(ctx context.Context, data []byte) error {
 	if DebugLogging {
@@ -220,6 +241,24 @@ func (s *Server) handleMessage(ctx context.Context, data []byte) error {
 	// Check if it's a notification (no ID)
 	if msg.ID == nil {
 		return s.handleNotification(ctx, msg.Method, msg.Params)
+	}
+
+	// Requests that dispatch to an upstream MCP server can block for a long
+	// time (up to the per-server tool timeout). Run them in a goroutine so
+	// the main loop stays free to handle other requests — otherwise one
+	// wedged upstream would freeze every other tool call, list, or ping.
+	// JSON-RPC correlates responses by id and send() serializes stdout
+	// writes via writeMu, so concurrent handlers are safe.
+	if isUpstreamMethod(msg.Method) {
+		s.handlersWG.Go(func() {
+			result, rpcErr := s.handleRequest(ctx, msg.Method, msg.Params)
+			if rpcErr != nil {
+				s.sendError(msg.ID, rpcErr)
+			} else {
+				s.sendResult(msg.ID, result)
+			}
+		})
+		return nil
 	}
 
 	// It's a request - handle and respond
@@ -358,6 +397,7 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	}
 	activeNamespaceName := s.activeNamespaceName
 	activeServerNames := s.activeServerNames
+	aggregator := s.aggregator
 	s.mu.RUnlock()
 
 	// Discover tools with a grace period. ListTools starts servers
@@ -369,12 +409,12 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	}
 	graceCtx, cancel := context.WithTimeout(context.Background(), gracePeriod)
 	defer cancel()
-	tools, _ := s.aggregator.ListTools(graceCtx, activeServerNames)
+	tools, _ := aggregator.ListTools(graceCtx, activeServerNames)
 
 	// If any servers didn't finish in time, continue in the background.
 	// Pass the caller's snapshot of activeServerNames so the goroutine
 	// doesn't re-read state that a concurrent reload could change.
-	stillPending := s.aggregator.PendingServers(activeServerNames)
+	stillPending := aggregator.PendingServers(activeServerNames)
 	if len(stillPending) > 0 && s.bgDiscovering.CompareAndSwap(false, true) {
 		go s.discoverAndNotify(stillPending)
 	}
@@ -425,6 +465,10 @@ func (s *Server) discoverAndNotify(pendingNames []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultToolDiscoveryTimeout)
 	defer cancel()
 
+	s.mu.RLock()
+	aggregator := s.aggregator
+	s.mu.RUnlock()
+
 	// Channel signals when any single server finishes discovery successfully.
 	notify := make(chan struct{}, 1)
 	notified := false
@@ -435,7 +479,7 @@ func (s *Server) discoverAndNotify(pendingNames []string) {
 		go func(serverName string) {
 			defer wg.Done()
 
-			tools, err := s.aggregator.DiscoverServer(ctx, serverName)
+			tools, err := aggregator.DiscoverServer(ctx, serverName)
 			if err != nil {
 				log.Printf("Background discovery failed for %s: %v", serverName, err)
 				return
@@ -478,6 +522,7 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 		return nil, ErrInvalidRequest("not initialized")
 	}
 	activeServerNames := s.activeServerNames
+	router := s.router
 	s.mu.RUnlock()
 
 	var req toolsCallRequest
@@ -507,7 +552,7 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 	}
 
 	// Route the call through the router
-	result, rpcErr := s.router.CallTool(ctx, req.Name, req.Arguments)
+	result, rpcErr := router.CallTool(ctx, req.Name, req.Arguments)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -1027,16 +1072,20 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 		s.mu.Unlock()
 	}
 
-	// Rebuild aggregator and router with new config
-	s.aggregator = NewAggregator(s.cfg, s.supervisor, s.opts.ExposeManagerTools)
-	s.router = NewRouter(s.cfg, s.supervisor, s.aggregator)
+	// Rebuild aggregator and router with new config. Swap under the write
+	// lock so concurrently-running handlers see either the whole old pair or
+	// the whole new pair, never a torn read.
+	newAgg := NewAggregator(s.cfg, s.supervisor, s.opts.ExposeManagerTools)
+	newRouter := NewRouter(s.cfg, s.supervisor, newAgg)
 
-	// Update router with active namespace info
-	s.mu.RLock()
+	s.mu.Lock()
+	s.aggregator = newAgg
+	s.router = newRouter
 	activeNsName := s.activeNamespaceName
 	selMethod := s.selectionMethod
-	s.mu.RUnlock()
-	s.router.SetActiveNamespace(activeNsName, selMethod)
+	s.mu.Unlock()
+
+	newRouter.SetActiveNamespace(activeNsName, selMethod)
 
 	// Restart servers if eager start is configured
 	if s.opts.EagerStart {

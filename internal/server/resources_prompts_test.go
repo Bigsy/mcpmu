@@ -674,7 +674,11 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 		}
 	}
 
-	// Response 3: resources/read file:///readme.md — routed to srv1 via resource map
+	// resources/read runs concurrently now (it dispatches to upstream), so
+	// correlate by id rather than by line position.
+	responses := parseResponsesByID(t, stdout.String())
+
+	// Response id=3: resources/read file:///readme.md — routed to srv1 via resource map
 	var readResp1 struct {
 		ID     int `json:"id"`
 		Result struct {
@@ -682,8 +686,8 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 		} `json:"result"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[2]), &readResp1); err != nil {
-		t.Fatalf("Unmarshal resources/read[1]: %v\nLine: %s", err, lines[2])
+	if err := json.Unmarshal(responses[3], &readResp1); err != nil {
+		t.Fatalf("Unmarshal resources/read[1]: %v\nLine: %s", err, responses[3])
 	}
 	if readResp1.Error != nil {
 		t.Fatalf("resources/read[1] error: %v", readResp1.Error)
@@ -692,7 +696,7 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 		t.Errorf("Expected contents to contain 'Hello World', got: %s", string(readResp1.Result.Contents))
 	}
 
-	// Response 4: resources/read exa://tools/list — routed to srv2 via resource map
+	// Response id=4: resources/read exa://tools/list — routed to srv2 via resource map
 	var readResp2 struct {
 		ID     int `json:"id"`
 		Result struct {
@@ -700,8 +704,8 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 		} `json:"result"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[3]), &readResp2); err != nil {
-		t.Fatalf("Unmarshal resources/read[2]: %v\nLine: %s", err, lines[3])
+	if err := json.Unmarshal(responses[4], &readResp2); err != nil {
+		t.Fatalf("Unmarshal resources/read[2]: %v\nLine: %s", err, responses[4])
 	}
 	if readResp2.Error != nil {
 		t.Fatalf("resources/read[2] error: %v", readResp2.Error)

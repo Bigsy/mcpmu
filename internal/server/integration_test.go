@@ -21,6 +21,34 @@ func TestHelperProcess(t *testing.T) {
 	mcptest.RunHelperProcess(t)
 }
 
+// parseResponsesByID parses NDJSON JSON-RPC responses from stdout into a map
+// keyed by response id. Notifications and malformed lines are skipped.
+// Needed because mcpmu now dispatches upstream-blocking requests (tools/call,
+// resources/read, prompts/get) concurrently, so responses can arrive in any
+// order — tests must correlate by id, not by line position.
+func parseResponsesByID(t *testing.T, stdout string) map[int]json.RawMessage {
+	t.Helper()
+	responses := map[int]json.RawMessage{}
+	for line := range strings.SplitSeq(strings.TrimSpace(stdout), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var env struct {
+			ID *int `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(line), &env); err != nil {
+			t.Logf("skipping unparseable response line: %s", line)
+			continue
+		}
+		if env.ID == nil {
+			continue // notification
+		}
+		responses[*env.ID] = json.RawMessage(line)
+	}
+	return responses
+}
+
 func TestServer_ToolsDiscoveryFromUpstream(t *testing.T) {
 	t.Parallel()
 	// Start a fake upstream MCP server
@@ -621,9 +649,9 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 
 	_ = srv.Run(ctx)
 
-	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
-	if len(lines) < 7 {
-		t.Fatalf("Expected at least 7 responses, got %d:\n%s", len(lines), stdout.String())
+	responses := parseResponsesByID(t, stdout.String())
+	if len(responses) < 7 {
+		t.Fatalf("Expected at least 7 responses, got %d:\n%s", len(responses), stdout.String())
 	}
 
 	// Response 1: Initialize - should succeed
@@ -632,7 +660,7 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 		Result any       `json:"result"`
 		Error  *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[0]), &initResp); err != nil {
+	if err := json.Unmarshal(responses[1], &initResp); err != nil {
 		t.Fatalf("Unmarshal init response: %v", err)
 	}
 	if initResp.Error != nil {
@@ -651,7 +679,7 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 		} `json:"result"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[1]), &toolsResp); err != nil {
+	if err := json.Unmarshal(responses[2], &toolsResp); err != nil {
 		t.Fatalf("Unmarshal tools/list response: %v", err)
 	}
 	if toolsResp.Error != nil {
@@ -686,7 +714,7 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 	}
 	t.Logf("tools/list: OK (%d tools, denied tools filtered)", len(toolsResp.Result.Tools))
 
-	// Response 3: Call allowed tool (srv1.read_file)
+	// Response id=3: Call allowed tool (srv1.read_file)
 	// Note: This may fail with EOF due to known server connection management issues,
 	// but it should NOT fail with ErrCodeToolDenied (which would indicate permission problem)
 	var allowedResp struct {
@@ -694,7 +722,7 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 		Result any       `json:"result"`
 		Error  *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[2]), &allowedResp); err != nil {
+	if err := json.Unmarshal(responses[3], &allowedResp); err != nil {
 		t.Fatalf("Unmarshal allowed tool response: %v", err)
 	}
 	if allowedResp.Error != nil {
@@ -708,12 +736,12 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 		t.Log("srv1.read_file (allowed): OK")
 	}
 
-	// Response 4: Call explicitly denied tool (srv1.delete_file) - should fail
+	// Response id=4: Call explicitly denied tool (srv1.delete_file) - should fail
 	var deniedResp struct {
 		ID    int       `json:"id"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[3]), &deniedResp); err != nil {
+	if err := json.Unmarshal(responses[4], &deniedResp); err != nil {
 		t.Fatalf("Unmarshal denied tool response: %v", err)
 	}
 	if deniedResp.Error == nil {
@@ -724,12 +752,12 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 		t.Log("srv1.delete_file (denied): correctly rejected")
 	}
 
-	// Response 5: Call tool denied by DenyByDefault (srv1.write_file) - should fail
+	// Response id=5: Call tool denied by DenyByDefault (srv1.write_file) - should fail
 	var defaultDeniedResp struct {
 		ID    int       `json:"id"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[4]), &defaultDeniedResp); err != nil {
+	if err := json.Unmarshal(responses[5], &defaultDeniedResp); err != nil {
 		t.Fatalf("Unmarshal default-denied tool response: %v", err)
 	}
 	if defaultDeniedResp.Error == nil {
@@ -740,13 +768,13 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 		t.Log("srv1.write_file (default-denied): correctly rejected")
 	}
 
-	// Response 6: Call allowed tool from second server (srv2.get_time) - should succeed
+	// Response id=6: Call allowed tool from second server (srv2.get_time) - should succeed
 	var allowed2Resp struct {
 		ID     int       `json:"id"`
 		Result any       `json:"result"`
 		Error  *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[5]), &allowed2Resp); err != nil {
+	if err := json.Unmarshal(responses[6], &allowed2Resp); err != nil {
 		t.Fatalf("Unmarshal srv2 allowed tool response: %v", err)
 	}
 	if allowed2Resp.Error != nil {
@@ -755,12 +783,12 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 		t.Log("srv2.get_time (allowed): OK")
 	}
 
-	// Response 7: Call tool denied by DenyByDefault from second server (srv2.set_timezone) - should fail
+	// Response id=7: Call tool denied by DenyByDefault from second server (srv2.set_timezone) - should fail
 	var defaultDenied2Resp struct {
 		ID    int       `json:"id"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[6]), &defaultDenied2Resp); err != nil {
+	if err := json.Unmarshal(responses[7], &defaultDenied2Resp); err != nil {
 		t.Fatalf("Unmarshal srv2 default-denied tool response: %v", err)
 	}
 	if defaultDenied2Resp.Error == nil {
@@ -861,24 +889,24 @@ func TestServer_NamespaceServerDefaults_EndToEnd(t *testing.T) {
 
 	_ = srv.Run(ctx)
 
-	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
-	if len(lines) < 5 {
-		t.Fatalf("Expected at least 5 responses, got %d:\n%s", len(lines), stdout.String())
+	responses := parseResponsesByID(t, stdout.String())
+	if len(responses) < 5 {
+		t.Fatalf("Expected at least 5 responses, got %d:\n%s", len(responses), stdout.String())
 	}
 
-	// Response 1: Initialize
+	// Response id=1: Initialize
 	var initResp struct {
 		ID    int       `json:"id"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[0]), &initResp); err != nil {
+	if err := json.Unmarshal(responses[1], &initResp); err != nil {
 		t.Fatalf("Unmarshal init: %v", err)
 	}
 	if initResp.Error != nil {
 		t.Fatalf("Initialize failed: %v", initResp.Error)
 	}
 
-	// Response 2: tools/list - should show srv1.read_file (explicit allow) + all srv2 tools
+	// Response id=2: tools/list - should show srv1.read_file (explicit allow) + all srv2 tools
 	var toolsResp struct {
 		ID     int `json:"id"`
 		Result struct {
@@ -888,7 +916,7 @@ func TestServer_NamespaceServerDefaults_EndToEnd(t *testing.T) {
 		} `json:"result"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[1]), &toolsResp); err != nil {
+	if err := json.Unmarshal(responses[2], &toolsResp); err != nil {
 		t.Fatalf("Unmarshal tools/list: %v", err)
 	}
 	if toolsResp.Error != nil {
@@ -913,24 +941,24 @@ func TestServer_NamespaceServerDefaults_EndToEnd(t *testing.T) {
 		}
 	}
 
-	// Response 3: srv1.read_file (allowed) - should not get ErrCodeToolDenied
+	// Response id=3: srv1.read_file (allowed) - should not get ErrCodeToolDenied
 	var resp3 struct {
 		ID    int       `json:"id"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[2]), &resp3); err != nil {
+	if err := json.Unmarshal(responses[3], &resp3); err != nil {
 		t.Fatalf("Unmarshal resp3: %v", err)
 	}
 	if resp3.Error != nil && resp3.Error.Code == ErrCodeToolDenied {
 		t.Errorf("srv1.read_file should NOT be denied: %v", resp3.Error)
 	}
 
-	// Response 4: srv1.write_file (denied by server default)
+	// Response id=4: srv1.write_file (denied by server default)
 	var resp4 struct {
 		ID    int       `json:"id"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[3]), &resp4); err != nil {
+	if err := json.Unmarshal(responses[4], &resp4); err != nil {
 		t.Fatalf("Unmarshal resp4: %v", err)
 	}
 	if resp4.Error == nil {
@@ -939,12 +967,12 @@ func TestServer_NamespaceServerDefaults_EndToEnd(t *testing.T) {
 		t.Errorf("Expected ErrCodeToolDenied (%d), got %d", ErrCodeToolDenied, resp4.Error.Code)
 	}
 
-	// Response 5: srv2.get_time (allowed, inherits namespace default)
+	// Response id=5: srv2.get_time (allowed, inherits namespace default)
 	var resp5 struct {
 		ID    int       `json:"id"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[4]), &resp5); err != nil {
+	if err := json.Unmarshal(responses[5], &resp5); err != nil {
 		t.Fatalf("Unmarshal resp5: %v", err)
 	}
 	if resp5.Error != nil {
