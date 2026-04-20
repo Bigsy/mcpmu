@@ -822,6 +822,9 @@ func TestServer_PromptsList_EndToEnd(t *testing.T) {
 	}
 
 	// Response 3: prompts/get srv1.summarize — should strip prefix and route correctly
+	// prompts/get runs concurrently now, so correlate by id rather than line position.
+	responses := parseResponsesByID(t, stdout.String())
+
 	var getResp1 struct {
 		ID     int `json:"id"`
 		Result struct {
@@ -829,8 +832,8 @@ func TestServer_PromptsList_EndToEnd(t *testing.T) {
 		} `json:"result"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[2]), &getResp1); err != nil {
-		t.Fatalf("Unmarshal prompts/get[1]: %v\nLine: %s", err, lines[2])
+	if err := json.Unmarshal(responses[3], &getResp1); err != nil {
+		t.Fatalf("Unmarshal prompts/get[1]: %v\nLine: %s", err, responses[3])
 	}
 	if getResp1.Error != nil {
 		t.Fatalf("prompts/get[1] error: %v", getResp1.Error)
@@ -839,7 +842,7 @@ func TestServer_PromptsList_EndToEnd(t *testing.T) {
 		t.Errorf("Expected messages to contain 'Summarize this', got: %s", string(getResp1.Result.Messages))
 	}
 
-	// Response 4: prompts/get srv2.greet — should route to srv2
+	// Response id=4: prompts/get srv2.greet — should route to srv2
 	var getResp2 struct {
 		ID     int `json:"id"`
 		Result struct {
@@ -847,8 +850,8 @@ func TestServer_PromptsList_EndToEnd(t *testing.T) {
 		} `json:"result"`
 		Error *RPCError `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(lines[3]), &getResp2); err != nil {
-		t.Fatalf("Unmarshal prompts/get[2]: %v\nLine: %s", err, lines[3])
+	if err := json.Unmarshal(responses[4], &getResp2); err != nil {
+		t.Fatalf("Unmarshal prompts/get[2]: %v\nLine: %s", err, responses[4])
 	}
 	if getResp2.Error != nil {
 		t.Fatalf("prompts/get[2] error: %v", getResp2.Error)
