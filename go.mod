@@ -7,7 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/huh v0.8.0
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/fsnotify/fsnotify v1.7.0
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/spf13/cobra v1.10.2
 	github.com/tiktoken-go/tokenizer v0.7.0
 	github.com/zalando/go-keyring v0.2.6
