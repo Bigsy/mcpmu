@@ -1856,7 +1856,7 @@ func TestServer_ReloadSendsToolsListChanged(t *testing.T) {
 	// Step 4: Read reload notifications (tools, resources, prompts list_changed).
 	// Drain all of them — order is not guaranteed.
 	gotToolsChanged := false
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		notifMsg, err := readMsg(5 * time.Second)
 		if err != nil {
 			break // fewer notifications than expected is OK

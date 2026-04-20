@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -88,6 +89,89 @@ func TestBuildAuthorizationURL_IncludesResource(t *testing.T) {
 	}
 	if !strings.Contains(authURL, "mcp.example.com") {
 		t.Error("expected resource to contain server URL")
+	}
+}
+
+func TestBuildAuthorizationURL_EndpointWithExistingQuery(t *testing.T) {
+	// Regression: Sentry's discovery returns an authorization_endpoint that
+	// already contains a query string (e.g. "?resource=https%3A%2F%2Fmcp.sentry.dev%2Fmcp").
+	// We must use '&' as the separator and preserve (not duplicate) existing params.
+	f := &Flow{
+		config: FlowConfig{
+			ServerURL: "https://mcp.sentry.dev/mcp",
+			Scopes:    []string{"org:read"},
+		},
+		metadata: &AuthorizationServerMetadata{
+			AuthorizationEndpoint: "https://mcp.sentry.dev/oauth/authorize?resource=https%3A%2F%2Fmcp.sentry.dev%2Fmcp",
+		},
+		clientID: "test-client",
+		pkce:     &PKCE{Challenge: "challenge123", Method: "S256", Verifier: "verifier123"},
+		state:    "state123",
+	}
+
+	authURL := f.buildAuthorizationURL("http://127.0.0.1:3118/callback")
+
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("resulting URL is unparseable: %v\nURL: %s", err, authURL)
+	}
+
+	// Exactly one '?' between path and query.
+	if strings.Count(authURL, "?") != 1 {
+		t.Errorf("expected exactly one '?' separator, got %d\nURL: %s", strings.Count(authURL, "?"), authURL)
+	}
+
+	q := parsed.Query()
+
+	// Per RFC 6749 §3.1, "Request and response parameters MUST NOT be included more than once."
+	for key, vals := range q {
+		if len(vals) > 1 {
+			t.Errorf("param %q appears %d times; must appear once: %v", key, len(vals), vals)
+		}
+	}
+
+	// client_id must be a real, parseable param — the bug swallowed it into 'resource'.
+	if got := q.Get("client_id"); got != "test-client" {
+		t.Errorf("client_id = %q, want %q", got, "test-client")
+	}
+
+	// The pre-existing 'resource' from the endpoint must be preserved as-is.
+	if got := q.Get("resource"); got != "https://mcp.sentry.dev/mcp" {
+		t.Errorf("resource = %q, want %q", got, "https://mcp.sentry.dev/mcp")
+	}
+
+	// PKCE + response_type must still be present.
+	if got := q.Get("code_challenge"); got != "challenge123" {
+		t.Errorf("code_challenge = %q, want %q", got, "challenge123")
+	}
+	if got := q.Get("response_type"); got != "code" {
+		t.Errorf("response_type = %q, want %q", got, "code")
+	}
+}
+
+func TestBuildAuthorizationURL_EndpointQueryParamConflict(t *testing.T) {
+	// If the endpoint's baked query sets a param we also try to set (e.g. resource)
+	// with a DIFFERENT value, our value wins — our config is authoritative.
+	f := &Flow{
+		config: FlowConfig{
+			ServerURL: "https://mcp.example.com/mcp",
+		},
+		metadata: &AuthorizationServerMetadata{
+			AuthorizationEndpoint: "https://auth.example.com/authorize?resource=https%3A%2F%2Fstale.example.com%2Fmcp",
+		},
+		clientID: "test-client",
+		pkce:     &PKCE{Challenge: "c", Method: "S256", Verifier: "v"},
+		state:    "s",
+	}
+
+	authURL := f.buildAuthorizationURL("http://127.0.0.1:3118/callback")
+
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("unparseable URL: %v", err)
+	}
+	if got := parsed.Query().Get("resource"); got != "https://mcp.example.com/mcp" {
+		t.Errorf("resource = %q, want our config value %q", got, "https://mcp.example.com/mcp")
 	}
 }
 

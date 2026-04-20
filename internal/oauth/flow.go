@@ -246,25 +246,36 @@ func (f *Flow) discoverViaChallenge(ctx context.Context) (*DiscoverResult, error
 
 // buildAuthorizationURL constructs the OAuth authorization URL.
 func (f *Flow) buildAuthorizationURL(redirectURI string) string {
-	params := url.Values{
-		"response_type":         {"code"},
-		"client_id":             {f.clientID},
-		"redirect_uri":          {redirectURI},
-		"state":                 {f.state},
-		"code_challenge":        {f.pkce.Challenge},
-		"code_challenge_method": {f.pkce.Method},
+	// Per RFC 6749 §3.1, the authorization endpoint URI may itself include a
+	// query component that MUST be retained when adding request parameters.
+	// Parse the endpoint so we merge into its existing query instead of
+	// blindly concatenating "?...".
+	endpoint, err := url.Parse(f.metadata.AuthorizationEndpoint)
+	if err != nil {
+		endpoint = &url.URL{Path: f.metadata.AuthorizationEndpoint}
 	}
+	params := endpoint.Query()
+
+	params.Set("response_type", "code")
+	params.Set("client_id", f.clientID)
+	params.Set("redirect_uri", redirectURI)
+	params.Set("state", f.state)
+	params.Set("code_challenge", f.pkce.Challenge)
+	params.Set("code_challenge_method", f.pkce.Method)
 
 	if len(f.config.Scopes) > 0 {
 		params.Set("scope", joinScopes(f.config.Scopes))
 	}
 
-	// MCP spec requires the resource parameter (the MCP server URL)
+	// MCP spec requires the resource parameter (the MCP server URL).
+	// Using Set (not Add) ensures we don't duplicate it if the endpoint
+	// already has a resource= hint baked in.
 	if f.config.ServerURL != "" {
 		params.Set("resource", f.config.ServerURL)
 	}
 
-	return f.metadata.AuthorizationEndpoint + "?" + params.Encode()
+	endpoint.RawQuery = params.Encode()
+	return endpoint.String()
 }
 
 // TokenAuthMethod specifies how to authenticate to the token endpoint.
