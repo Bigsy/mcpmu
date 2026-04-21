@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -946,6 +947,133 @@ func TestLegacySSE_CallTool(t *testing.T) {
 	}
 	if mock.ToolCallCount() != 1 {
 		t.Errorf("expected 1 tool call, got %d", mock.ToolCallCount())
+	}
+}
+
+// TestClient_HTTP_AsyncNotification_ViaSSEResponse verifies that when an
+// upstream HTTP server streams a notification event ahead of the response
+// event in the SSE-formatted POST reply, the notification is delivered to
+// the Client's notification handler and the call still completes.
+//
+// Stage 1 of #4: locks in that the new demux reader is wired correctly for
+// the HTTP transport (not just stdio).
+func TestClient_HTTP_AsyncNotification_ViaSSEResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+
+		// Notifications (no id) get 202 Accepted with no body.
+		if req.Method == "notifications/initialized" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+
+		switch req.Method {
+		case "initialize":
+			_, _ = fmt.Fprintf(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":%d,\"result\":{\"protocolVersion\":\"2024-11-05\",\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0\"},\"capabilities\":{}}}\n\n", req.ID)
+		case "tools/list":
+			// Stream a notification before the response to exercise demux.
+			_, _ = fmt.Fprint(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/resources/updated\",\"params\":{\"uri\":\"file:///x\"}}\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+			_, _ = fmt.Fprintf(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":%d,\"result\":{\"tools\":[]}}\n\n", req.ID)
+		default:
+			_, _ = fmt.Fprintf(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":%d,\"error\":{\"code\":-32601,\"message\":\"not found\"}}\n\n", req.ID)
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	transport := NewStreamableHTTPTransport(StreamableHTTPConfig{URL: server.URL})
+	client := NewClient(transport)
+	defer func() { _ = client.Close() }()
+
+	gotMethod := make(chan string, 4)
+	client.SetNotificationHandler(func(method string, params json.RawMessage) {
+		gotMethod <- method
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := client.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
+	if _, err := client.ListTools(ctx); err != nil {
+		t.Fatalf("ListTools failed: %v", err)
+	}
+
+	// We expect the resources/updated notification to land in the handler.
+	for {
+		select {
+		case m := <-gotMethod:
+			if m == "notifications/resources/updated" {
+				return
+			}
+			// Tolerate stray notifications (e.g. test/noise or absent "event:" lines from
+			// inline transport bookkeeping) — keep draining until we see the one we want.
+		case <-time.After(2 * time.Second):
+			t.Fatal("notification handler never saw resources/updated")
+		}
+	}
+}
+
+// TestClient_HTTP_CloseWhileIdle verifies that Close on an HTTP-backed
+// client that has no in-flight request unblocks the reader's pending
+// Receive and tears down the goroutine cleanly.
+func TestClient_HTTP_CloseWhileIdle(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Minimal POST handler for initialize; respond with plain JSON.
+		var req struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		if req.Method == "notifications/initialized" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2024-11-05","serverInfo":{"name":"mock","version":"1.0"},"capabilities":{}}}`, req.ID)
+	}))
+	defer server.Close()
+
+	transport := NewStreamableHTTPTransport(StreamableHTTPConfig{URL: server.URL})
+	client := NewClient(transport)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- client.Close() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Close returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return within timeout")
 	}
 }
 

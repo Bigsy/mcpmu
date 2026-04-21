@@ -3,7 +3,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -387,5 +390,364 @@ func TestClient_Timeout(t *testing.T) {
 	}
 	if err != context.DeadlineExceeded {
 		t.Logf("received error: %v (context cancellation triggered pipe close)", err)
+	}
+}
+
+// syntheticTransport is a minimal Transport used to drive specific reader-loop
+// scenarios (malformed frames, server→client requests, etc.) by feeding
+// hand-crafted JSON frames from a channel.
+type syntheticTransport struct {
+	in     chan []byte
+	out    chan []byte
+	done   chan struct{}
+	mu     sync.Mutex
+	closed bool
+}
+
+func newSyntheticTransport() *syntheticTransport {
+	return &syntheticTransport{
+		in:   make(chan []byte, 16),
+		out:  make(chan []byte, 16),
+		done: make(chan struct{}),
+	}
+}
+
+func (s *syntheticTransport) Send(ctx context.Context, msg []byte) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	s.mu.Unlock()
+
+	cp := make([]byte, len(msg))
+	copy(cp, msg)
+	select {
+	case s.out <- cp:
+		return nil
+	case <-s.done:
+		return io.ErrClosedPipe
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *syntheticTransport) Receive(ctx context.Context) ([]byte, error) {
+	select {
+	case msg, ok := <-s.in:
+		if !ok {
+			return nil, io.EOF
+		}
+		return msg, nil
+	case <-s.done:
+		return nil, io.ErrClosedPipe
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *syntheticTransport) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.mu.Unlock()
+	close(s.done)
+	return nil
+}
+
+// inject writes a raw frame to the client's reader as if it had been received
+// from the server.
+func (s *syntheticTransport) inject(frame []byte) {
+	select {
+	case s.in <- frame:
+	case <-s.done:
+	}
+}
+
+// nextSent returns the next frame the client attempted to send, or fails the
+// test if none arrives within timeout.
+func (s *syntheticTransport) nextSent(t *testing.T, timeout time.Duration) []byte {
+	t.Helper()
+	select {
+	case msg := <-s.out:
+		return msg
+	case <-time.After(timeout):
+		t.Fatal("no outgoing frame within timeout")
+		return nil
+	}
+}
+
+// TestClient_NotificationHandler_Idle verifies that a notification received
+// while no call is in flight is delivered to the installed handler.
+func TestClient_NotificationHandler_Idle(t *testing.T) {
+	tp := newSyntheticTransport()
+	client := NewClient(tp)
+	defer func() { _ = client.Close() }()
+
+	got := make(chan string, 1)
+	client.SetNotificationHandler(func(method string, params json.RawMessage) {
+		got <- method
+	})
+
+	tp.inject([]byte(`{"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri":"file:///x"}}`))
+
+	select {
+	case method := <-got:
+		if method != "notifications/resources/updated" {
+			t.Errorf("unexpected method: %q", method)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler not invoked")
+	}
+}
+
+// TestClient_NotificationHandler_ConcurrentWithCall verifies that a
+// notification arriving while a call is outstanding is delivered to the
+// handler AND the call still completes successfully.
+func TestClient_NotificationHandler_ConcurrentWithCall(t *testing.T) {
+	tp := newSyntheticTransport()
+	client := NewClient(tp)
+	defer func() { _ = client.Close() }()
+
+	gotNotif := make(chan struct{}, 1)
+	client.SetNotificationHandler(func(method string, params json.RawMessage) {
+		if method == "test/noise" {
+			gotNotif <- struct{}{}
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := client.ListTools(ctx)
+		callDone <- err
+	}()
+
+	// Wait for the request frame so we can learn its ID.
+	reqFrame := tp.nextSent(t, 2*time.Second)
+	var parsed struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(reqFrame, &parsed); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+
+	// Inject a notification, then the response.
+	tp.inject([]byte(`{"jsonrpc":"2.0","method":"test/noise"}`))
+	respFrame := fmt.Appendf(nil, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[]}}`, parsed.ID)
+	tp.inject(respFrame)
+
+	select {
+	case <-gotNotif:
+	case <-time.After(2 * time.Second):
+		t.Fatal("notification handler not invoked during pending call")
+	}
+
+	select {
+	case err := <-callDone:
+		if err != nil {
+			t.Fatalf("ListTools failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("call did not complete")
+	}
+}
+
+// TestClient_UnknownResponseID verifies that a response with an ID that does
+// not match any in-flight call is dropped silently (no panic, no effect on
+// subsequent calls).
+func TestClient_UnknownResponseID(t *testing.T) {
+	tp := newSyntheticTransport()
+	client := NewClient(tp)
+	defer func() { _ = client.Close() }()
+
+	// Drop a bogus response before any call is made.
+	tp.inject([]byte(`{"jsonrpc":"2.0","id":99999,"result":{}}`))
+
+	// Now make a real call and make sure it still works.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := client.ListTools(ctx)
+		callDone <- err
+	}()
+
+	req := tp.nextSent(t, 2*time.Second)
+	var parsed struct {
+		ID int64 `json:"id"`
+	}
+	_ = json.Unmarshal(req, &parsed)
+	tp.inject(fmt.Appendf(nil, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[]}}`, parsed.ID))
+
+	if err := <-callDone; err != nil {
+		t.Fatalf("call after unknown-id drop failed: %v", err)
+	}
+}
+
+// TestClient_ServerToClientRequest verifies that a frame with both an id and a
+// method (a server-initiated request such as sampling/roots) is dropped
+// without panic.
+func TestClient_ServerToClientRequest(t *testing.T) {
+	tp := newSyntheticTransport()
+	client := NewClient(tp)
+	defer func() { _ = client.Close() }()
+
+	// Inject a server→client request. Stage 1 logs + drops.
+	tp.inject([]byte(`{"jsonrpc":"2.0","id":42,"method":"sampling/createMessage","params":{}}`))
+
+	// Verify the reader is still alive by completing a normal call afterwards.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := client.ListTools(ctx)
+		callDone <- err
+	}()
+
+	req := tp.nextSent(t, 2*time.Second)
+	var parsed struct {
+		ID int64 `json:"id"`
+	}
+	_ = json.Unmarshal(req, &parsed)
+	tp.inject(fmt.Appendf(nil, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[]}}`, parsed.ID))
+
+	if err := <-callDone; err != nil {
+		t.Fatalf("call after server→client request failed: %v", err)
+	}
+}
+
+// TestClient_MalformedFrameSkipped verifies that a non-JSON frame does not
+// kill the reader — subsequent valid frames still arrive.
+func TestClient_MalformedFrameSkipped(t *testing.T) {
+	tp := newSyntheticTransport()
+	client := NewClient(tp)
+	defer func() { _ = client.Close() }()
+
+	tp.inject([]byte(`this is not json`))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := client.ListTools(ctx)
+		callDone <- err
+	}()
+
+	req := tp.nextSent(t, 2*time.Second)
+	var parsed struct {
+		ID int64 `json:"id"`
+	}
+	_ = json.Unmarshal(req, &parsed)
+	tp.inject(fmt.Appendf(nil, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[]}}`, parsed.ID))
+
+	if err := <-callDone; err != nil {
+		t.Fatalf("call after malformed frame failed: %v", err)
+	}
+}
+
+// TestClient_CloseUnblocksPendingCall verifies that Close while a call is
+// waiting causes the call to return a clean transport-closed error and no
+// goroutines are leaked.
+func TestClient_CloseUnblocksPendingCall(t *testing.T) {
+	tp := newSyntheticTransport()
+	client := NewClient(tp)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := client.ListTools(ctx)
+		callDone <- err
+	}()
+
+	// Drain the outgoing request frame so send can proceed past sendMu.
+	_ = tp.nextSent(t, 2*time.Second)
+
+	// Close without ever delivering a response.
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	select {
+	case err := <-callDone:
+		if err == nil {
+			t.Fatal("expected transport-closed error, got nil")
+		}
+		if !strings.Contains(err.Error(), "transport closed") {
+			t.Errorf("expected 'transport closed' in error, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("call did not unblock after Close")
+	}
+}
+
+// TestClient_Capabilities_Stub verifies the Stage 1 Capabilities() stub is
+// nil before Initialize and populated with the server's capabilities after.
+// Stage 2 will narrow the return type to a typed struct.
+func TestClient_Capabilities_Stub(t *testing.T) {
+	serverIn, serverOut, clientIn, clientOut := testPipe()
+	defer func() { _ = clientIn.Close() }()
+	defer func() { _ = clientOut.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := fakeserver.Config{Tools: []fakeserver.Tool{{Name: "t"}}}
+	serverDone := runFakeServer(ctx, serverIn, serverOut, cfg)
+
+	transport := NewStdioTransport(clientIn, clientOut)
+	client := NewClient(transport)
+
+	if got := client.Capabilities(); got != nil {
+		t.Errorf("Capabilities() before Initialize: want nil, got %v", got)
+	}
+
+	if err := client.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	caps := client.Capabilities()
+	if caps == nil {
+		t.Fatal("Capabilities() after Initialize: got nil")
+	}
+	m, ok := caps.(map[string]any)
+	if !ok {
+		t.Fatalf("Capabilities() returned %T, want map[string]any", caps)
+	}
+	if _, hasTools := m["tools"]; !hasTools {
+		t.Errorf("expected 'tools' key in capabilities, got: %v", m)
+	}
+
+	_ = client.Close()
+	<-serverDone
+}
+
+// TestClient_CloseWithoutInitialize ensures Close is safe on a client that
+// was never Initialize'd — the reader goroutine started in NewClient must
+// still tear down cleanly.
+func TestClient_CloseWithoutInitialize(t *testing.T) {
+	tp := newSyntheticTransport()
+	client := NewClient(tp)
+
+	done := make(chan error, 1)
+	go func() { done <- client.Close() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Close returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return on un-Initialized client")
 	}
 }
