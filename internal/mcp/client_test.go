@@ -691,10 +691,9 @@ func TestClient_CloseUnblocksPendingCall(t *testing.T) {
 	}
 }
 
-// TestClient_Capabilities_Stub verifies the Stage 1 Capabilities() stub is
-// nil before Initialize and populated with the server's capabilities after.
-// Stage 2 will narrow the return type to a typed struct.
-func TestClient_Capabilities_Stub(t *testing.T) {
+// TestClient_Capabilities verifies Capabilities() is the zero value before
+// Initialize and populated with the server's typed capabilities after.
+func TestClient_Capabilities(t *testing.T) {
 	serverIn, serverOut, clientIn, clientOut := testPipe()
 	defer func() { _ = clientIn.Close() }()
 	defer func() { _ = clientOut.Close() }()
@@ -708,8 +707,8 @@ func TestClient_Capabilities_Stub(t *testing.T) {
 	transport := NewStdioTransport(clientIn, clientOut)
 	client := NewClient(transport)
 
-	if got := client.Capabilities(); got != nil {
-		t.Errorf("Capabilities() before Initialize: want nil, got %v", got)
+	if got := client.Capabilities(); got.Tools != nil || got.Resources != nil || got.Prompts != nil {
+		t.Errorf("Capabilities() before Initialize: want zero value, got %+v", got)
 	}
 
 	if err := client.Initialize(ctx); err != nil {
@@ -717,15 +716,8 @@ func TestClient_Capabilities_Stub(t *testing.T) {
 	}
 
 	caps := client.Capabilities()
-	if caps == nil {
-		t.Fatal("Capabilities() after Initialize: got nil")
-	}
-	m, ok := caps.(map[string]any)
-	if !ok {
-		t.Fatalf("Capabilities() returned %T, want map[string]any", caps)
-	}
-	if _, hasTools := m["tools"]; !hasTools {
-		t.Errorf("expected 'tools' key in capabilities, got: %v", m)
+	if caps.Tools == nil {
+		t.Errorf("expected Tools capability, got nil; caps=%+v", caps)
 	}
 
 	_ = client.Close()

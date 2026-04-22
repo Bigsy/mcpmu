@@ -92,6 +92,12 @@ type Server struct {
 
 	// Resource routing: maps original URI → server name (populated by resources/list)
 	resourceMap sync.Map
+
+	// Active resource subscriptions: URI → upstream server name. Populated
+	// by successful resources/subscribe calls; cleared on unsubscribe and on
+	// config reload. Guarded by subMu.
+	subMu sync.Mutex
+	subs  map[string]string
 }
 
 // New creates a new MCP server.
@@ -129,7 +135,13 @@ func New(opts Options) (*Server, error) {
 		reader:     bufio.NewReader(opts.Stdin),
 		writer:     opts.Stdout,
 		reloadCh:   make(chan *config.Config, 1), // Buffered to avoid blocking watcher
+		subs:       make(map[string]string),
 	}
+
+	// Wire the server as the supervisor's notification sink before any
+	// upstream client is constructed so every handler is installed the
+	// moment Initialize completes.
+	supervisor.SetNotificationSink(s)
 
 	// Create aggregator and router (will be initialized after namespace selection)
 	s.aggregator = NewAggregator(s.cfg, supervisor, opts.ExposeManagerTools)
@@ -219,7 +231,8 @@ func (s *Server) Run(ctx context.Context) error {
 // the main loop and starve every other pending request.
 func isUpstreamMethod(method string) bool {
 	switch method {
-	case "tools/call", "resources/read", "prompts/get":
+	case "tools/call", "resources/read", "prompts/get",
+		"resources/subscribe", "resources/unsubscribe":
 		return true
 	}
 	return false
@@ -292,6 +305,16 @@ func (s *Server) handleRequest(ctx context.Context, method string, params json.R
 			return nil, ErrMethodNotFound(method)
 		}
 		return s.handleResourcesRead(ctx, params)
+	case "resources/subscribe":
+		if !s.opts.ExposeResources {
+			return nil, ErrMethodNotFound(method)
+		}
+		return s.handleResourcesSubscribe(ctx, params)
+	case "resources/unsubscribe":
+		if !s.opts.ExposeResources {
+			return nil, ErrMethodNotFound(method)
+		}
+		return s.handleResourcesUnsubscribe(ctx, params)
 	case "resources/templates/list":
 		if !s.opts.ExposeResources {
 			return nil, ErrMethodNotFound(method)
@@ -366,7 +389,11 @@ func (s *Server) handleInitialize(ctx context.Context, params json.RawMessage) (
 		Tools: &toolsCapability{ListChanged: true},
 	}
 	if s.opts.ExposeResources {
-		caps.Resources = &resourcesCapability{ListChanged: true}
+		// Advertise subscribe optimistically — capabilities are returned at
+		// initialize before any upstream is started. Per-URI enforcement in
+		// handleResourcesSubscribe returns a clean error if the owning
+		// upstream doesn't support subscribe.
+		caps.Resources = &resourcesCapability{ListChanged: true, Subscribe: true}
 	}
 	if s.opts.ExposePrompts {
 		caps.Prompts = &promptsCapability{ListChanged: true}
@@ -443,14 +470,62 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 
 // sendNotification sends a JSON-RPC notification (no ID, no response expected).
 func (s *Server) sendNotification(method string) {
-	msg := struct {
+	s.sendNotificationWithParams(method, nil)
+}
+
+// sendNotificationWithParams sends a JSON-RPC notification with optional
+// params (pass nil to omit the field entirely).
+func (s *Server) sendNotificationWithParams(method string, params any) {
+	type notifMsg struct {
 		JSONRPC string `json:"jsonrpc"`
 		Method  string `json:"method"`
-	}{
+		Params  any    `json:"params,omitempty"`
+	}
+	s.send(notifMsg{
 		JSONRPC: "2.0",
 		Method:  method,
+		Params:  params,
+	})
+}
+
+// OnUpstreamNotification implements mcp.NotificationSink. It runs on the
+// upstream client's reader goroutine — must not block on stdout writes, so
+// any downstream emission happens in a goroutine.
+func (s *Server) OnUpstreamNotification(serverName, method string, params json.RawMessage) {
+	switch method {
+	case "notifications/resources/updated":
+		var p struct {
+			URI string `json:"uri"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.URI == "" {
+			if DebugLogging {
+				log.Printf("resources/updated: malformed params from %s: %v", serverName, err)
+			}
+			return
+		}
+		s.subMu.Lock()
+		owner, ok := s.subs[p.URI]
+		s.subMu.Unlock()
+		if !ok || owner != serverName {
+			if DebugLogging {
+				log.Printf("resources/updated: dropping stray notification for %q from %s (owner=%q, subscribed=%t)",
+					p.URI, serverName, owner, ok)
+			}
+			return
+		}
+		// Dispatch off the reader goroutine — writing to stdout blocks on
+		// writeMu and the reader must stay responsive. Tracked via
+		// handlersWG so Run() doesn't return with a notification write
+		// still in flight (otherwise callers reading the stdout buffer
+		// after Run exits would race with the write).
+		s.handlersWG.Go(func() {
+			s.sendNotificationWithParams("notifications/resources/updated", map[string]string{"uri": p.URI})
+		})
+	default:
+		if DebugLogging {
+			log.Printf("OnUpstreamNotification: dropping %s from %s (relay not implemented)", method, serverName)
+		}
 	}
-	s.send(msg)
 }
 
 // discoverAndNotify continues tool discovery for straggling servers in the background.
@@ -683,6 +758,125 @@ func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage
 	}{Contents: contents}, nil
 }
 
+// handleResourcesSubscribe handles the resources/subscribe request.
+func (s *Server) handleResourcesSubscribe(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	s.mu.RLock()
+	if !s.initialized {
+		s.mu.RUnlock()
+		return nil, ErrInvalidRequest("not initialized")
+	}
+	activeServerNames := s.activeServerNames
+	s.mu.RUnlock()
+
+	var req struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, ErrInvalidParams(err.Error())
+	}
+	if req.URI == "" {
+		return nil, ErrInvalidParams("missing uri")
+	}
+
+	val, ok := s.resourceMap.Load(req.URI)
+	if !ok {
+		return nil, ErrInvalidParams("unknown resource URI (has resources/list been called?): " + req.URI)
+	}
+	serverName := val.(string)
+
+	if !slices.Contains(activeServerNames, serverName) {
+		return nil, ErrServerNotFound(serverName)
+	}
+
+	sc, rpcErr := s.ensureServerClient(ctx, serverName)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	if sc.capabilities.Resources == nil || !sc.capabilities.Resources.Subscribe {
+		return nil, ErrMethodNotFound(fmt.Sprintf("upstream %s does not support resources/subscribe", serverName))
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, sc.timeout)
+	defer cancel()
+
+	if err := sc.client.SubscribeResource(callCtx, req.URI); err != nil {
+		return nil, ErrInternalError(fmt.Sprintf("resources/subscribe on %s: %v", serverName, err))
+	}
+
+	s.subMu.Lock()
+	s.subs[req.URI] = serverName
+	s.subMu.Unlock()
+
+	return struct{}{}, nil
+}
+
+// handleResourcesUnsubscribe handles the resources/unsubscribe request.
+// Unknown URIs are treated as idempotent success — clients often unsubscribe
+// defensively, and the URI may have been evicted by a concurrent resources/list.
+func (s *Server) handleResourcesUnsubscribe(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	s.mu.RLock()
+	if !s.initialized {
+		s.mu.RUnlock()
+		return nil, ErrInvalidRequest("not initialized")
+	}
+	activeServerNames := s.activeServerNames
+	s.mu.RUnlock()
+
+	var req struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, ErrInvalidParams(err.Error())
+	}
+	if req.URI == "" {
+		return nil, ErrInvalidParams("missing uri")
+	}
+
+	// Prefer s.subs for lookup (client may unsubscribe after a list refresh
+	// evicted resourceMap); fall back to resourceMap.
+	s.subMu.Lock()
+	serverName, known := s.subs[req.URI]
+	s.subMu.Unlock()
+	if !known {
+		if val, ok := s.resourceMap.Load(req.URI); ok {
+			serverName = val.(string)
+			known = true
+		}
+	}
+	if !known {
+		// Idempotent: client cleanup on an unknown URI is not an error.
+		return struct{}{}, nil
+	}
+
+	if !slices.Contains(activeServerNames, serverName) {
+		// Server no longer in the active namespace — clear local tracking
+		// and return success; there's no upstream to notify.
+		s.subMu.Lock()
+		delete(s.subs, req.URI)
+		s.subMu.Unlock()
+		return struct{}{}, nil
+	}
+
+	sc, rpcErr := s.ensureServerClient(ctx, serverName)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, sc.timeout)
+	defer cancel()
+
+	if err := sc.client.UnsubscribeResource(callCtx, req.URI); err != nil {
+		return nil, ErrInternalError(fmt.Sprintf("resources/unsubscribe on %s: %v", serverName, err))
+	}
+
+	s.subMu.Lock()
+	delete(s.subs, req.URI)
+	s.subMu.Unlock()
+
+	return struct{}{}, nil
+}
+
 // handlePromptsList handles the prompts/list request.
 func (s *Server) handlePromptsList(ctx context.Context) (any, *RPCError) {
 	s.mu.RLock()
@@ -800,10 +994,12 @@ func (s *Server) handlePromptsGet(ctx context.Context, params json.RawMessage) (
 	}{Messages: messages}, nil
 }
 
-// serverClient holds a client and its per-server timeout.
+// serverClient holds a client, its per-server timeout, and the upstream's
+// advertised capabilities (snapshot at acquisition time).
 type serverClient struct {
-	client  *mcp.Client
-	timeout time.Duration
+	client       *mcp.Client
+	timeout      time.Duration
+	capabilities mcp.ServerCapabilities
 }
 
 // ensureServerClient starts a server if needed and returns its MCP client
@@ -831,8 +1027,9 @@ func (s *Server) ensureServerClient(ctx context.Context, serverName string) (ser
 	}
 
 	return serverClient{
-		client:  handle.Client(),
-		timeout: time.Duration(srv.ToolTimeout()) * time.Second,
+		client:       handle.Client(),
+		timeout:      time.Duration(srv.ToolTimeout()) * time.Second,
+		capabilities: handle.Capabilities(),
 	}, nil
 }
 
@@ -1013,6 +1210,14 @@ func (s *Server) watchConfig(ctx context.Context, configPath string) {
 func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 	log.Printf("Applying config reload: %d servers, %d namespaces",
 		len(newCfg.Servers), len(newCfg.Namespaces))
+
+	// Clear subscription tracking before StopAll: closing the upstream
+	// transport ends the upstream-side subscription cleanly, so we only
+	// need to drop our local bookkeeping. No per-URI unsubscribe RPC is
+	// attempted — it would race with shutdown.
+	s.subMu.Lock()
+	clear(s.subs)
+	s.subMu.Unlock()
 
 	// Stop all running servers
 	s.supervisor.StopAll()
@@ -1199,6 +1404,7 @@ type toolsCapability struct {
 
 type resourcesCapability struct {
 	ListChanged bool `json:"listChanged,omitempty"`
+	Subscribe   bool `json:"subscribe,omitempty"`
 }
 
 type promptsCapability struct {

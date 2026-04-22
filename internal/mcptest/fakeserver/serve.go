@@ -7,8 +7,24 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"sync"
 	"time"
 )
+
+// logRequest appends method to the configured request log path if set. Used
+// by integration tests that need to assert which upstream methods were
+// actually invoked.
+func logRequest(path, method string) {
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.WriteString(method + "\n")
+}
 
 // Serve runs the fake MCP server, reading requests from in and writing responses to out.
 // It handles initialize and tools/list methods, with configurable delays, errors, and crashes.
@@ -16,6 +32,31 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 	reader := bufio.NewReader(in)
 	requestCount := 0
 	methodAttempts := make(map[string]int) // track attempts per method for FailOnAttempt
+
+	// Serializes concurrent writes between the main request loop and any
+	// out-of-band notification emitted by a SetUpdateHook caller.
+	var writeMu sync.Mutex
+	syncedOut := &syncedWriter{w: out, mu: &writeMu}
+
+	// Track subscribed URIs so the fake can validate and optionally confirm.
+	var subMu sync.Mutex
+	subscribed := make(map[string]bool)
+
+	// All subsequent response writes go through the synchronized wrapper so
+	// they can't interleave with an emit() frame.
+	out = syncedOut
+
+	emitUpdate := func(uri string) {
+		_ = writeFrame(syncedOut, rpcNotification{
+			JSONRPC: "2.0",
+			Method:  "notifications/resources/updated",
+			Params:  map[string]string{"uri": uri},
+		})
+	}
+
+	if cfg.SetUpdateHook != nil {
+		cfg.SetUpdateHook(emitUpdate)
+	}
 
 	for {
 		select {
@@ -40,6 +81,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 
 		requestCount++
 		methodAttempts[req.Method]++
+		logRequest(cfg.RequestLogPath, req.Method)
 
 		// Check crash conditions
 		if cfg.CrashOnNthRequest > 0 && requestCount >= cfg.CrashOnNthRequest {
@@ -80,8 +122,8 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		switch req.Method {
 		case "initialize":
 			caps := Capabilities{Tools: &ToolsCapability{}}
-			if len(cfg.Resources) > 0 || cfg.ResourceContents != nil {
-				caps.Resources = &ResourcesCapability{}
+			if len(cfg.Resources) > 0 || cfg.ResourceContents != nil || cfg.ResourcesSubscribe {
+				caps.Resources = &ResourcesCapability{Subscribe: cfg.ResourcesSubscribe}
 			}
 			if len(cfg.Prompts) > 0 || cfg.PromptMessages != nil {
 				caps.Prompts = &PromptsCapability{}
@@ -191,8 +233,69 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				Code: -32002, Message: "Prompt not found: " + params.Name,
 			}, cfg)
 
+		case "resources/subscribe":
+			if !cfg.ResourcesSubscribe {
+				_ = writeErrorResponse(out, req.ID, JSONRPCError{
+					Code: -32601, Message: "Method not found",
+				}, cfg)
+				continue
+			}
+			var params ResourceReadParams
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				_ = writeErrorResponse(out, req.ID, JSONRPCError{
+					Code: -32602, Message: "Invalid params: " + err.Error(),
+				}, cfg)
+				continue
+			}
+			subMu.Lock()
+			subscribed[params.URI] = true
+			subMu.Unlock()
+			_ = writeResponse(out, req.ID, struct{}{}, cfg)
+			if cfg.EmitUpdateAfterSubscribe {
+				if cfg.PostSubscribeEmitDelayMs > 0 {
+					time.Sleep(time.Duration(cfg.PostSubscribeEmitDelayMs) * time.Millisecond)
+				}
+				emitUpdate(params.URI)
+			}
+			if cfg.OnSubscribe != nil {
+				cfg.OnSubscribe(params.URI)
+			}
+
+		case "resources/unsubscribe":
+			if !cfg.ResourcesSubscribe {
+				_ = writeErrorResponse(out, req.ID, JSONRPCError{
+					Code: -32601, Message: "Method not found",
+				}, cfg)
+				continue
+			}
+			var params ResourceReadParams
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				_ = writeErrorResponse(out, req.ID, JSONRPCError{
+					Code: -32602, Message: "Invalid params: " + err.Error(),
+				}, cfg)
+				continue
+			}
+			subMu.Lock()
+			delete(subscribed, params.URI)
+			subMu.Unlock()
+			_ = writeResponse(out, req.ID, struct{}{}, cfg)
+			if cfg.EmitUpdateAfterUnsubscribe {
+				if cfg.PostUnsubscribeEmitDelayMs > 0 {
+					time.Sleep(time.Duration(cfg.PostUnsubscribeEmitDelayMs) * time.Millisecond)
+				}
+				emitUpdate(params.URI)
+			}
+			if cfg.OnUnsubscribe != nil {
+				cfg.OnUnsubscribe(params.URI)
+			}
+
 		case "notifications/initialized":
-			// No response needed for notifications
+			// Startup-update emission: emit configured URIs after the client
+			// signals it has finished initializing. Tests that exercise stray
+			// or early notifications rely on this ordering.
+			for _, uri := range cfg.EmitStartupUpdates {
+				emitUpdate(uri)
+			}
 
 		default:
 			_ = writeErrorResponse(out, req.ID, JSONRPCError{
@@ -200,4 +303,17 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			}, cfg)
 		}
 	}
+}
+
+// syncedWriter serializes writes from multiple goroutines (main request loop
+// and the out-of-band update emitter) so NDJSON frames don't interleave.
+type syncedWriter struct {
+	w  io.Writer
+	mu *sync.Mutex
+}
+
+func (s *syncedWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }

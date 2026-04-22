@@ -44,11 +44,39 @@ type Supervisor struct {
 	toolCache               *config.ToolCache
 	globalOAuthCallbackPort *int
 	mu                      sync.RWMutex
+
+	// notificationSink receives upstream notifications. Set once via
+	// SetNotificationSink before any client is started; read under sinkMu.
+	sinkMu           sync.RWMutex
+	notificationSink mcp.NotificationSink
 }
 
 // SetToolCache sets the tool cache for token counting.
 func (s *Supervisor) SetToolCache(tc *config.ToolCache) {
 	s.toolCache = tc
+}
+
+// SetNotificationSink installs a sink that receives notifications from every
+// upstream client. Must be called before Start() so that all clients have the
+// handler wired immediately after Initialize.
+func (s *Supervisor) SetNotificationSink(sink mcp.NotificationSink) {
+	s.sinkMu.Lock()
+	s.notificationSink = sink
+	s.sinkMu.Unlock()
+}
+
+// installNotificationHandler wires the sink (if any) into a client so that
+// upstream notifications are forwarded with the server name attached.
+func (s *Supervisor) installNotificationHandler(name string, client *mcp.Client) {
+	s.sinkMu.RLock()
+	sink := s.notificationSink
+	s.sinkMu.RUnlock()
+	if sink == nil {
+		return
+	}
+	client.SetNotificationHandler(func(method string, params json.RawMessage) {
+		sink.OnUpstreamNotification(name, method, params)
+	})
 }
 
 // SupervisorOptions configures a Supervisor.
@@ -303,6 +331,9 @@ initLoop:
 		return
 	}
 
+	// Install notification handler now that initialization succeeded.
+	s.installNotificationHandler(name, client)
+
 	// Emit running event
 	s.emitStatus(name, events.StateRunning, handle.PID(), nil, "")
 
@@ -494,6 +525,9 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
 		return nil, fmt.Errorf("initialize mcp: %w", err)
 	}
+
+	// Install notification handler now that initialization succeeded.
+	s.installNotificationHandler(name, client)
 
 	// Emit running event immediately (tool discovery happens in background)
 	s.emitStatus(name, events.StateRunning, 0, nil, "")
@@ -735,6 +769,16 @@ func (h *Handle) ID() string {
 // Client returns the MCP client.
 func (h *Handle) Client() *mcp.Client {
 	return h.client
+}
+
+// Capabilities returns the capabilities advertised by the upstream server at
+// initialize time. Returns the zero value if the handle has no client yet
+// (e.g., before initialization completes or for needs-auth HTTP handles).
+func (h *Handle) Capabilities() mcp.ServerCapabilities {
+	if h.client == nil {
+		return mcp.ServerCapabilities{}
+	}
+	return h.client.Capabilities()
 }
 
 // Tools returns the discovered tools.
@@ -1128,6 +1172,9 @@ func (s *Supervisor) retryHTTPConnection(ctx context.Context, name string) error
 		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
 		return fmt.Errorf("initialize: %w", err)
 	}
+
+	// Install notification handler now that initialization succeeded.
+	s.installNotificationHandler(name, client)
 
 	// Update handle
 	handle.ctx, handle.ctxCancel = context.WithCancel(context.Background())

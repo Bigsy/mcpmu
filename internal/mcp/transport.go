@@ -35,6 +35,41 @@ type McpClient interface {
 	Close() error
 }
 
+// ServerCapabilities is the typed form of the `capabilities` object returned
+// by an MCP server during initialization. Nil pointer fields indicate the
+// corresponding capability was not advertised by the server.
+type ServerCapabilities struct {
+	Resources *ResourcesCapability `json:"resources,omitempty"`
+	Tools     *ToolsCapability     `json:"tools,omitempty"`
+	Prompts   *PromptsCapability   `json:"prompts,omitempty"`
+	Logging   map[string]any       `json:"logging,omitempty"`
+}
+
+// ResourcesCapability describes the resources-related features a server
+// supports.
+type ResourcesCapability struct {
+	Subscribe   bool `json:"subscribe,omitempty"`
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+// ToolsCapability describes the tools-related features a server supports.
+type ToolsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+// PromptsCapability describes the prompts-related features a server supports.
+type PromptsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+// NotificationSink receives notifications from upstream MCP clients. The
+// supervisor wires a sink into each client after initialization, so the
+// server-level aggregator can relay notifications such as
+// `notifications/resources/updated` back to the downstream client.
+type NotificationSink interface {
+	OnUpstreamNotification(serverName, method string, params json.RawMessage)
+}
+
 // Tool represents an MCP tool definition.
 type Tool struct {
 	Name        string `json:"name"`

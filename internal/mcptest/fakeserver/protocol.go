@@ -48,6 +48,58 @@ type Config struct {
 	// Tool call handling
 	ToolHandler   ToolHandler `json:"-"`             // Custom handler for tools/call (not JSON-serializable)
 	EchoToolCalls bool        `json:"echoToolCalls"` // If true, tools/call returns the tool name and arguments as text
+
+	// Resource subscription support (tests for resources/subscribe passthrough).
+	// If true, the server advertises resources.subscribe: true and accepts
+	// resources/subscribe and resources/unsubscribe requests.
+	ResourcesSubscribe bool `json:"resourcesSubscribe"`
+
+	// EmitUpdateAfterSubscribe emits a notifications/resources/updated frame
+	// for the subscribed URI after responding to a successful
+	// resources/subscribe. JSON-serializable trigger for integration tests.
+	EmitUpdateAfterSubscribe bool `json:"emitUpdateAfterSubscribe"`
+
+	// EmitUpdateAfterUnsubscribe emits a notifications/resources/updated frame
+	// for the URI after responding to resources/unsubscribe. Used to verify
+	// downstream clients don't receive updates for unsubscribed URIs.
+	EmitUpdateAfterUnsubscribe bool `json:"emitUpdateAfterUnsubscribe"`
+
+	// PostSubscribeEmitDelayMs is how long the server waits between writing
+	// the subscribe response and emitting the update when
+	// EmitUpdateAfterSubscribe is set. Models realistic upstream timing — a
+	// real server emits updates on actual resource changes, not before the
+	// client has even processed the subscribe response. Tests should set a
+	// non-zero value so downstream handlers have time to register the
+	// subscription mapping.
+	PostSubscribeEmitDelayMs int `json:"postSubscribeEmitDelayMs,omitempty"`
+
+	// PostUnsubscribeEmitDelayMs is the symmetric delay for
+	// EmitUpdateAfterUnsubscribe — gives the downstream server time to
+	// remove its local mapping after the unsubscribe RPC returns.
+	PostUnsubscribeEmitDelayMs int `json:"postUnsubscribeEmitDelayMs,omitempty"`
+
+	// RequestLogPath is a file path the server appends every handled JSON-RPC
+	// method name to, one per line. Tests use this to assert whether a
+	// particular method (e.g., resources/unsubscribe) was invoked upstream.
+	// Writes are best-effort and guarded against concurrent callers.
+	RequestLogPath string `json:"requestLogPath,omitempty"`
+
+	// EmitStartupUpdates lists URIs for which the server emits
+	// notifications/resources/updated frames shortly after initialize. Used
+	// to test stray-notification filtering in downstream code.
+	EmitStartupUpdates []string `json:"emitStartupUpdates,omitempty"`
+
+	// UpdateHook receives a function the test can call to emit an out-of-band
+	// notifications/resources/updated{uri} frame on this server's output. The
+	// hook is wired when Serve starts; the test should capture it via the
+	// SetUpdateHook field. Only available when running in-process (not via
+	// the subprocess helper pattern, since it isn't JSON-serializable).
+	SetUpdateHook func(emit func(uri string)) `json:"-"`
+
+	// OnSubscribe / OnUnsubscribe are optional test hooks invoked after the
+	// server processes a subscribe/unsubscribe request (post-response).
+	OnSubscribe   func(uri string) `json:"-"`
+	OnUnsubscribe func(uri string) `json:"-"`
 }
 
 // Tool represents an MCP tool definition.
@@ -110,6 +162,7 @@ type Capabilities struct {
 // ResourcesCapability indicates the server supports resources.
 type ResourcesCapability struct {
 	ListChanged bool `json:"listChanged,omitempty"`
+	Subscribe   bool `json:"subscribe,omitempty"`
 }
 
 // PromptsCapability indicates the server supports prompts.
@@ -204,23 +257,28 @@ type PromptGetResult struct {
 // ToolHandler is a function that handles a tool call.
 type ToolHandler func(name string, arguments json.RawMessage) ([]ContentBlock, bool, error)
 
+// writeFrame writes a single JSON value followed by a newline as one Write
+// call so that a synchronized writer can treat the frame atomically.
+func writeFrame(out io.Writer, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	_, err = out.Write(data)
+	return err
+}
+
 // writeResponse writes a JSON-RPC response with NDJSON framing.
 func writeResponse(out io.Writer, id json.RawMessage, result any, cfg Config) error {
 	// Stream realism: send notification before response if configured
 	if cfg.SendNotificationBeforeResponse {
-		notification := rpcNotification{JSONRPC: "2.0", Method: "test/noise"}
-		data, _ := json.Marshal(notification)
-		_, _ = out.Write(data)
-		_, _ = out.Write([]byte("\n"))
+		_ = writeFrame(out, rpcNotification{JSONRPC: "2.0", Method: "test/noise"})
 	}
 
 	// Stream realism: send mismatched ID first if configured
 	if cfg.SendMismatchedIDFirst {
-		// Create a fake ID by appending "999" to simulate wrong ID
-		fakeResp := rpcResponse{JSONRPC: "2.0", ID: json.RawMessage(`99999`), Result: json.RawMessage(`{}`)}
-		data, _ := json.Marshal(fakeResp)
-		_, _ = out.Write(data)
-		_, _ = out.Write([]byte("\n"))
+		_ = writeFrame(out, rpcResponse{JSONRPC: "2.0", ID: json.RawMessage(`99999`), Result: json.RawMessage(`{}`)})
 	}
 
 	// Actual response (NDJSON)
@@ -228,40 +286,19 @@ func writeResponse(out io.Writer, id json.RawMessage, result any, cfg Config) er
 	if err != nil {
 		return err
 	}
-
-	resp := rpcResponse{JSONRPC: "2.0", ID: id, Result: resultJSON}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return err
-	}
-	_, _ = out.Write(data)
-	_, _ = out.Write([]byte("\n"))
-	return nil
+	return writeFrame(out, rpcResponse{JSONRPC: "2.0", ID: id, Result: resultJSON})
 }
 
 // writeErrorResponse writes a JSON-RPC error response with NDJSON framing.
 func writeErrorResponse(out io.Writer, id json.RawMessage, rpcErr JSONRPCError, cfg Config) error {
 	// Stream realism options apply here too
 	if cfg.SendNotificationBeforeResponse {
-		notification := rpcNotification{JSONRPC: "2.0", Method: "test/noise"}
-		data, _ := json.Marshal(notification)
-		_, _ = out.Write(data)
-		_, _ = out.Write([]byte("\n"))
+		_ = writeFrame(out, rpcNotification{JSONRPC: "2.0", Method: "test/noise"})
 	}
 
 	if cfg.SendMismatchedIDFirst {
-		fakeResp := rpcResponse{JSONRPC: "2.0", ID: json.RawMessage(`99999`), Error: &JSONRPCError{Code: -1, Message: "wrong"}}
-		data, _ := json.Marshal(fakeResp)
-		_, _ = out.Write(data)
-		_, _ = out.Write([]byte("\n"))
+		_ = writeFrame(out, rpcResponse{JSONRPC: "2.0", ID: json.RawMessage(`99999`), Error: &JSONRPCError{Code: -1, Message: "wrong"}})
 	}
 
-	resp := rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcErr}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return err
-	}
-	_, _ = out.Write(data)
-	_, _ = out.Write([]byte("\n"))
-	return nil
+	return writeFrame(out, rpcResponse{JSONRPC: "2.0", ID: id, Error: &rpcErr})
 }

@@ -50,8 +50,8 @@ type Client struct {
 	// Server info from initialization
 	serverName      string
 	serverVersion   string
-	protocolVersion string // Negotiated protocol version
-	capabilities    any    // Raw capabilities from initialize; Stage 2 narrows this to a typed ServerCapabilities.
+	protocolVersion string             // Negotiated protocol version
+	capabilities    ServerCapabilities // Typed capabilities from initialize.
 }
 
 // rpcRequest is a JSON-RPC 2.0 request.
@@ -108,9 +108,9 @@ type clientInfo struct {
 
 // initializeResult is the result of the initialize request.
 type initializeResult struct {
-	ProtocolVersion string     `json:"protocolVersion"`
-	Capabilities    any        `json:"capabilities"`
-	ServerInfo      serverInfo `json:"serverInfo"`
+	ProtocolVersion string             `json:"protocolVersion"`
+	Capabilities    ServerCapabilities `json:"capabilities"`
+	ServerInfo      serverInfo         `json:"serverInfo"`
 }
 
 type serverInfo struct {
@@ -296,10 +296,8 @@ func (c *Client) ProtocolVersion() string {
 }
 
 // Capabilities returns the capabilities advertised by the server during
-// initialize, or nil if Initialize has not completed. Stage 1 returns the
-// raw decoded value (typically map[string]any) as a stub; Stage 2 narrows
-// this to a typed ServerCapabilities struct.
-func (c *Client) Capabilities() any {
+// initialize, or the zero value if Initialize has not completed.
+func (c *Client) Capabilities() ServerCapabilities {
 	return c.capabilities
 }
 
@@ -329,6 +327,26 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (json.RawMessage,
 		return nil, fmt.Errorf("resources/read: %w", err)
 	}
 	return result.Contents, nil
+}
+
+// SubscribeResource subscribes the client to update notifications for the
+// given resource URI. The server must advertise resources.subscribe: true.
+func (c *Client) SubscribeResource(ctx context.Context, uri string) error {
+	params := resourceReadParams{URI: uri}
+	if err := c.call(ctx, "resources/subscribe", params, nil); err != nil {
+		return fmt.Errorf("resources/subscribe: %w", err)
+	}
+	return nil
+}
+
+// UnsubscribeResource removes a previously-registered subscription for the
+// given resource URI.
+func (c *Client) UnsubscribeResource(ctx context.Context, uri string) error {
+	params := resourceReadParams{URI: uri}
+	if err := c.call(ctx, "resources/unsubscribe", params, nil); err != nil {
+		return fmt.Errorf("resources/unsubscribe: %w", err)
+	}
+	return nil
 }
 
 // ListPrompts retrieves the list of prompts from the server.
