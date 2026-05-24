@@ -117,6 +117,18 @@
               <p class="hint">Comma-separated. Leave empty to auto-discover from server metadata.</p>
             </div>
           </div>
+
+          <!-- Custom headers (orthogonal to auth mode — Cloudflare Access etc. stacks on top) -->
+          <div class="form-group">
+            <label for="http_headers">Custom Headers</label>
+            <textarea id="http_headers" name="http_headers" rows="3" class="mono" placeholder="X-Foo: bar&#10;Authorization: Bearer ...">{{.Form.HTTPHeaders}}</textarea>
+            <p class="hint">One <code>Name: Value</code> per line. Applied to every request. Use the field below for secrets.</p>
+          </div>
+          <div class="form-group">
+            <label for="env_http_headers">Headers from Env Vars</label>
+            <textarea id="env_http_headers" name="env_http_headers" rows="3" class="mono" placeholder="CF-Access-Client-Secret: CF_ACCESS_CLIENT_SECRET">{{.Form.EnvHTTPHeaders}}</textarea>
+            <p class="hint">One <code>Name: ENV_VAR</code> per line. Header value is read from the named env var at request time.</p>
+          </div>
         </div>
 
         <hr style="border: none; border-top: 1px solid var(--border); margin: 20px 0;">

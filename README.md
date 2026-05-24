@@ -90,6 +90,11 @@ mcpmu add context7 -- npx -y @upstash/context7-mcp
 
 # Add an HTTP server
 mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
+
+# Add an HTTP server fronted by Cloudflare Access (custom headers on every request)
+mcpmu add searxng https://searxng-mcp.example.com/mcp \
+  --header "CF-Access-Client-Id: <id>" \
+  --env-header "CF-Access-Client-Secret: CF_ACCESS_CLIENT_SECRET"
 ```
 
 **2. Register mcpmu with your agent:**

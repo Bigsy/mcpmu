@@ -44,6 +44,8 @@ type ServerFormModel struct {
 	cwd               string
 	env               string
 	bearerTokenEnvVar string // Only used for HTTP
+	httpHeaders       string // Only used for HTTP — multi-line "Name: Value"
+	envHTTPHeaders    string // Only used for HTTP — multi-line "Name: ENV_VAR"
 	oauthClientID     string // Only used for HTTP
 	oauthCallbackPort string // Only used for HTTP (string for form input)
 	autostart         bool
@@ -58,6 +60,8 @@ type ServerFormModel struct {
 	initialCwd               string
 	initialEnv               string
 	initialBearerTokenEnvVar string
+	initialHTTPHeaders       string
+	initialEnvHTTPHeaders    string
 	initialOAuthClientID     string
 	initialOAuthCallbackPort string
 	initialAutostart         bool
@@ -97,6 +101,8 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.cwd = ""
 	m.env = ""
 	m.bearerTokenEnvVar = ""
+	m.httpHeaders = ""
+	m.envHTTPHeaders = ""
 	m.oauthClientID = ""
 	m.oauthCallbackPort = ""
 	m.autostart = false
@@ -110,6 +116,8 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.initialCwd = ""
 	m.initialEnv = ""
 	m.initialBearerTokenEnvVar = ""
+	m.initialHTTPHeaders = ""
+	m.initialEnvHTTPHeaders = ""
 	m.initialOAuthClientID = ""
 	m.initialOAuthCallbackPort = ""
 	m.initialAutostart = false
@@ -135,6 +143,8 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.cwd = ""
 	m.env = env
 	m.bearerTokenEnvVar = bearerTokenEnvVar
+	m.httpHeaders = ""
+	m.envHTTPHeaders = ""
 	m.oauthClientID = oauthClientID
 	m.oauthCallbackPort = oauthCallbackPort
 	m.autostart = false
@@ -148,6 +158,8 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.initialCwd = ""
 	m.initialEnv = env
 	m.initialBearerTokenEnvVar = bearerTokenEnvVar
+	m.initialHTTPHeaders = ""
+	m.initialEnvHTTPHeaders = ""
 	m.initialOAuthClientID = oauthClientID
 	m.initialOAuthCallbackPort = oauthCallbackPort
 	m.initialAutostart = false
@@ -173,6 +185,8 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 		m.commandOrURL = srv.URL
 		m.args = ""
 		m.bearerTokenEnvVar = srv.BearerTokenEnvVar
+		m.httpHeaders = config.FormatHeaderLines(srv.HTTPHeaders)
+		m.envHTTPHeaders = config.FormatHeaderLines(srv.EnvHTTPHeaders)
 		if srv.OAuth != nil {
 			m.oauthClientID = srv.OAuth.ClientID
 			if srv.OAuth.CallbackPort != nil {
@@ -190,6 +204,8 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 		m.commandOrURL = srv.Command
 		m.args = formatArgs(srv.Args) // Properly quote args with spaces
 		m.bearerTokenEnvVar = ""
+		m.httpHeaders = ""
+		m.envHTTPHeaders = ""
 		m.oauthClientID = ""
 		m.oauthCallbackPort = ""
 		m.oauthScopes = ""
@@ -215,6 +231,8 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	m.initialCwd = m.cwd
 	m.initialEnv = m.env
 	m.initialBearerTokenEnvVar = m.bearerTokenEnvVar
+	m.initialHTTPHeaders = m.httpHeaders
+	m.initialEnvHTTPHeaders = m.envHTTPHeaders
 	m.initialOAuthClientID = m.oauthClientID
 	m.initialOAuthCallbackPort = m.oauthCallbackPort
 	m.initialAutostart = m.autostart
@@ -285,6 +303,26 @@ func (m *ServerFormModel) buildForm() {
 				Title("Bearer Token Env Var").
 				Description("Env var name for bearer auth (HTTP only, optional)").
 				Value(&m.bearerTokenEnvVar),
+
+			huh.NewText().
+				Title("Custom HTTP Headers").
+				Description("One per line: Name: Value (HTTP only, optional)").
+				Value(&m.httpHeaders).
+				CharLimit(2000).
+				Lines(2).
+				Validate(func(s string) error {
+					return validateHeaderTextareaCross(s, m.envHTTPHeaders, "Headers from Env Vars")
+				}),
+
+			huh.NewText().
+				Title("HTTP Headers from Env Vars").
+				Description("One per line: Name: ENV_VAR (HTTP only, optional)").
+				Value(&m.envHTTPHeaders).
+				CharLimit(2000).
+				Lines(2).
+				Validate(func(s string) error {
+					return validateHeaderTextareaCross(s, m.httpHeaders, "Custom Headers")
+				}),
 
 			huh.NewInput().
 				Title("OAuth Client ID").
@@ -361,6 +399,8 @@ func (m *ServerFormModel) isDirty() bool {
 		m.cwd != m.initialCwd ||
 		m.env != m.initialEnv ||
 		m.bearerTokenEnvVar != m.initialBearerTokenEnvVar ||
+		m.httpHeaders != m.initialHTTPHeaders ||
+		m.envHTTPHeaders != m.initialEnvHTTPHeaders ||
 		m.oauthClientID != m.initialOAuthClientID ||
 		m.oauthCallbackPort != m.initialOAuthCallbackPort ||
 		m.autostart != m.initialAutostart ||
@@ -484,6 +524,37 @@ func (m *ServerFormModel) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+// validateHeaderTextarea is the inline huh validator for the header textareas.
+// Empty input is allowed; otherwise the input must parse as Name: Value lines.
+func validateHeaderTextarea(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	_, err := config.ParseHeaderLines(s)
+	return err
+}
+
+// validateHeaderTextareaCross extends validateHeaderTextarea with a check for
+// header names that also appear in the sibling field. Both fields write to the
+// same wire-level header namespace, so a name in both would silently lose one
+// when supervisor.go merges the maps. otherFieldName is the user-facing label
+// of the sibling field (used in the error message).
+func validateHeaderTextareaCross(s, otherRaw, otherFieldName string) error {
+	if err := validateHeaderTextarea(s); err != nil {
+		return err
+	}
+	mine, _ := config.ParseHeaderLines(s)
+	// Ignore parse errors in the sibling — that field shows its own inline
+	// error; we just need its set of well-formed names to detect collisions.
+	other, _ := config.ParseHeaderLines(otherRaw)
+	for name := range mine {
+		if _, dup := other[name]; dup {
+			return fmt.Errorf("header %q is also set in %s", name, otherFieldName)
+		}
+	}
+	return nil
+}
+
 // isHTTPURL returns true if the string looks like an HTTP(S) URL.
 func isHTTPURL(s string) bool {
 	s = strings.TrimSpace(strings.ToLower(s))
@@ -509,6 +580,21 @@ func (m ServerFormModel) buildServerConfig() config.ServerConfig {
 		srv.Args = nil
 		srv.BearerTokenEnvVar = strings.TrimSpace(m.bearerTokenEnvVar)
 		srv.Kind = config.ServerKindStreamableHTTP
+
+		// Headers — the textarea Validate has already accepted these, so a
+		// parse error here means the user bypassed validation (or we have a
+		// bug). In that case, fall back to nil rather than silently keeping
+		// stale headers from the original config.
+		if headers, err := config.ParseHeaderLines(m.httpHeaders); err == nil {
+			srv.HTTPHeaders = headers
+		} else {
+			srv.HTTPHeaders = nil
+		}
+		if envHeaders, err := config.ParseHeaderLines(m.envHTTPHeaders); err == nil {
+			srv.EnvHTTPHeaders = envHeaders
+		} else {
+			srv.EnvHTTPHeaders = nil
+		}
 
 		// Build OAuth config from form fields.
 		// Bearer token and OAuth are mutually exclusive — if bearer is set, clear OAuth.
@@ -552,6 +638,8 @@ func (m ServerFormModel) buildServerConfig() config.ServerConfig {
 		srv.Args = parseArgs(m.args)
 		srv.URL = ""
 		srv.BearerTokenEnvVar = ""
+		srv.HTTPHeaders = nil
+		srv.EnvHTTPHeaders = nil
 		srv.OAuth = nil
 		srv.Kind = config.ServerKindStdio
 	}

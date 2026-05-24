@@ -28,6 +28,8 @@ type serverFormData struct {
 	URL               string
 	AuthMode          string // "none", "bearer", "oauth"
 	BearerEnv         string
+	HTTPHeaders       string // textarea, one "Name: Value" per line
+	EnvHTTPHeaders    string // textarea, one "Name: ENV_VAR" per line
 	OAuthClientID     string
 	OAuthCallbackPort string
 	OAuthScopes       string
@@ -69,6 +71,8 @@ func serverFormDataFromConfig(name string, srv config.ServerConfig) serverFormDa
 		Args:           strings.Join(srv.Args, " "),
 		Cwd:            srv.Cwd,
 		URL:            srv.URL,
+		HTTPHeaders:    config.FormatHeaderLines(srv.HTTPHeaders),
+		EnvHTTPHeaders: config.FormatHeaderLines(srv.EnvHTTPHeaders),
 		Enabled:        srv.IsEnabled(),
 		Autostart:      srv.Autostart,
 		StartupTimeout: srv.StartupTimeout(),
@@ -112,6 +116,8 @@ func parseServerForm(r *http.Request) serverFormData {
 		URL:               strings.TrimSpace(r.FormValue("url")),
 		AuthMode:          r.FormValue("auth_mode"),
 		BearerEnv:         strings.TrimSpace(r.FormValue("bearer_env")),
+		HTTPHeaders:       r.FormValue("http_headers"),
+		EnvHTTPHeaders:    r.FormValue("env_http_headers"),
 		OAuthClientID:     strings.TrimSpace(r.FormValue("oauth_client_id")),
 		OAuthCallbackPort: strings.TrimSpace(r.FormValue("oauth_callback_port")),
 		OAuthScopes:       strings.TrimSpace(r.FormValue("oauth_scopes")),
@@ -152,7 +158,8 @@ func parseEnvPairs(r *http.Request) []envPair {
 
 // buildServerConfig constructs a ServerConfig from form data.
 // For edit mode, it merges into the existing config to preserve fields not exposed in the form.
-func buildServerConfig(fd serverFormData, existing *config.ServerConfig) config.ServerConfig {
+// Returns an error if any input fails parse-level validation (currently: header maps).
+func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config.ServerConfig, error) {
 	var srv config.ServerConfig
 	if existing != nil {
 		srv = *existing // start from existing to preserve unexposed fields
@@ -180,6 +187,22 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) config.
 		srv.Cwd = ""
 		srv.URL = fd.URL
 
+		headers, err := config.ParseHeaderLines(fd.HTTPHeaders)
+		if err != nil {
+			return srv, fmt.Errorf("custom headers: %w", err)
+		}
+		envHeaders, err := config.ParseHeaderLines(fd.EnvHTTPHeaders)
+		if err != nil {
+			return srv, fmt.Errorf("headers from env vars: %w", err)
+		}
+		for name := range envHeaders {
+			if _, dup := headers[name]; dup {
+				return srv, fmt.Errorf("header %q is set by both custom headers and headers from env vars", name)
+			}
+		}
+		srv.HTTPHeaders = headers
+		srv.EnvHTTPHeaders = envHeaders
+
 		switch fd.AuthMode {
 		case "bearer":
 			srv.BearerTokenEnvVar = fd.BearerEnv
@@ -206,9 +229,12 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) config.
 			srv.OAuth = nil
 		}
 	} else {
-		// Stdio server
+		// Stdio server — header fields are silently dropped (consistent with
+		// bearer-env handling) since stdio rejects them at the config layer.
 		srv.URL = ""
 		srv.BearerTokenEnvVar = ""
+		srv.HTTPHeaders = nil
+		srv.EnvHTTPHeaders = nil
 		srv.OAuth = nil
 		srv.Command = fd.Command
 		srv.Cwd = fd.Cwd
@@ -219,7 +245,7 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) config.
 		}
 	}
 
-	return srv
+	return srv, nil
 }
 
 // handleServerAddPage renders the add server form.
@@ -255,6 +281,10 @@ func (s *Server) handleServerAddPage(w http.ResponseWriter, r *http.Request) {
 				fd.EnvPairs = append(fd.EnvPairs, envPair{Key: k, Val: v})
 			}
 		}
+		// TODO: surface http_headers / env_http_headers from registry install
+		// specs. The registry doesn't emit these today, so this is a deliberate
+		// no-op until a registry entry actually carries them. Wire it through
+		// `q["header"]` / `q["env_header"]` here when that lands.
 	}
 
 	data := serverFormPageData{
@@ -311,9 +341,13 @@ func (s *Server) handleServerCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srv := buildServerConfig(fd, nil)
+	srv, err := buildServerConfig(fd, nil)
+	if err != nil {
+		s.renderServerFormError(w, fd, false, "", err.Error())
+		return
+	}
 
-	err := s.mutateConfig(func(cfg *config.Config) error {
+	err = s.mutateConfig(func(cfg *config.Config) error {
 		return cfg.AddServer(name, srv)
 	})
 
@@ -341,7 +375,10 @@ func (s *Server) handleServerUpdate(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return fmt.Errorf("server %q not found", name)
 		}
-		srv := buildServerConfig(fd, &existing)
+		srv, err := buildServerConfig(fd, &existing)
+		if err != nil {
+			return err
+		}
 		return cfg.UpdateServer(name, srv)
 	})
 

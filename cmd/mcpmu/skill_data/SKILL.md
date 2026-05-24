@@ -150,6 +150,11 @@ Examples:
 mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
 mcpmu add figma https://mcp.figma.com/mcp --bearer-env FIGMA_TOKEN
 mcpmu add slack https://mcp.slack.com/mcp --oauth-client-id 1601185624273.8899143856786 --oauth-callback-port 3118  # scopes auto-discovered
+
+# HTTP server fronted by Cloudflare Access — custom headers stack on top of any auth mode
+mcpmu add searxng https://searxng-mcp.example.com/mcp \
+  --header "CF-Access-Client-Id: <id>" \
+  --env-header "CF-Access-Client-Secret: CF_ACCESS_CLIENT_SECRET"
 ```
 
 Flags for HTTP servers:
@@ -157,6 +162,8 @@ Flags for HTTP servers:
 - `--bearer-env` — env var containing bearer token
 - `--oauth-client-id` — pre-registered OAuth client ID (skips dynamic registration)
 - `--oauth-callback-port` — OAuth callback port (1-65535)
+- `--header` — custom HTTP header in `Name: Value` form, repeatable. Sent on every request. Stored verbatim in config.
+- `--env-header` — HTTP header sourced from an env var, `Name: ENV_VAR` form, repeatable. Value read at request time — use this for secrets so they stay out of the config file.
 
 General flags (stdio and HTTP):
 - `--autostart` — start server automatically on app launch
@@ -164,6 +171,7 @@ General flags (stdio and HTTP):
 - `--tool-timeout` — tool call timeout in seconds (default: 60)
 
 Note: `--bearer-env` and OAuth flags (`--oauth-client-id`, `--scopes`, `--oauth-callback-port`) are mutually exclusive.
+Note: `--header` / `--env-header` are orthogonal to auth mode — they stack on top of bearer or OAuth, useful for gateways like Cloudflare Access. A header name cannot appear in both flags.
 Note: Most OAuth servers advertise supported scopes via metadata — `--scopes` is only needed when the server doesn't or you want to restrict the requested set.
 
 ### OAuth login (for HTTP servers that need it)

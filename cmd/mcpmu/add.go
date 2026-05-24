@@ -10,6 +10,8 @@ import (
 
 var (
 	addEnvFlags          []string
+	addHeaders           []string
+	addEnvHeaders        []string
 	addCwd               string
 	addAutostart         bool
 	addConfigPath        string
@@ -43,7 +45,17 @@ Examples:
   mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
 
   # HTTP server with pre-registered OAuth client
-  mcpmu add slack https://mcp.slack.com/mcp --oauth-client-id 1601185624273.8899143856786 --oauth-callback-port 3118`,
+  mcpmu add slack https://mcp.slack.com/mcp --oauth-client-id 1601185624273.8899143856786 --oauth-callback-port 3118
+
+  # HTTP server with custom headers (Cloudflare Access, custom gateways, etc.)
+  mcpmu add searxng https://searxng-mcp.example.com/mcp \
+    --header "CF-Access-Client-Id: <id>" \
+    --header "CF-Access-Client-Secret: <secret>"
+
+  # Same, with the secret read from an env var instead of stored in config
+  mcpmu add searxng https://searxng-mcp.example.com/mcp \
+    --header "CF-Access-Client-Id: <id>" \
+    --env-header "CF-Access-Client-Secret: CF_ACCESS_CLIENT_SECRET"`,
 	RunE: runAdd,
 }
 
@@ -59,6 +71,10 @@ func init() {
 	addCmd.Flags().IntVar(&addOAuthCallbackPort, "oauth-callback-port", 0, "OAuth callback port (1-65535)")
 	addCmd.Flags().IntVar(&addStartupTimeout, "startup-timeout", 0, "Startup timeout in seconds (default: 10)")
 	addCmd.Flags().IntVar(&addToolTimeout, "tool-timeout", 0, "Tool call timeout in seconds (default: 60)")
+	addCmd.Flags().StringArrayVar(&addHeaders, "header", nil,
+		`Custom HTTP header in "Name: Value" form (HTTP only, repeatable). Use --env-header for secrets.`)
+	addCmd.Flags().StringArrayVar(&addEnvHeaders, "env-header", nil,
+		`HTTP header sourced from env var, "Name: ENV_VAR" form (HTTP only, repeatable)`)
 
 	rootCmd.AddCommand(addCmd)
 }
@@ -106,6 +122,9 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 	}
 	if addOAuthClientID != "" || addOAuthCallbackPort > 0 || len(addScopes) > 0 {
 		return fmt.Errorf("--oauth-client-id, --oauth-callback-port, and --scopes are only valid for HTTP servers")
+	}
+	if len(addHeaders) > 0 || len(addEnvHeaders) > 0 {
+		return fmt.Errorf("--header and --env-header are only valid for HTTP servers")
 	}
 
 	// Find the -- separator
@@ -185,6 +204,22 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Parse header flags. Both --header and --env-header share the wire-level
+	// header namespace, so a name appearing in both is rejected.
+	headers, err := parseHeaderFlags(addHeaders, "--header")
+	if err != nil {
+		return err
+	}
+	envHeaders, err := parseHeaderFlags(addEnvHeaders, "--env-header")
+	if err != nil {
+		return err
+	}
+	for name := range envHeaders {
+		if _, dup := headers[name]; dup {
+			return fmt.Errorf("header %q is set by both --header and --env-header", name)
+		}
+	}
+
 	// Load config
 	cfg, err := loadConfig(addConfigPath)
 	if err != nil {
@@ -195,6 +230,8 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 	srv := config.ServerConfig{
 		URL:               addURL,
 		BearerTokenEnvVar: addBearerEnv,
+		HTTPHeaders:       headers,
+		EnvHTTPHeaders:    envHeaders,
 		Env:               env,
 		Autostart:         addAutostart,
 		StartupTimeoutSec: addStartupTimeout,
@@ -225,6 +262,30 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Added HTTP server %q (%s)\n", name, addURL)
 	return nil
+}
+
+// parseHeaderFlags parses "Name: Value" pairs from repeated --header /
+// --env-header flags. Matches `claude mcp add --header` format and delegates
+// to config.ParseHeaderLines so CLI, TUI form, and web form share one validator.
+//
+// flagName is used in error messages to point at which flag was invalid.
+func parseHeaderFlags(flags []string, flagName string) (map[string]string, error) {
+	if len(flags) == 0 {
+		return nil, nil
+	}
+	// Trim each entry first so we can give a precise "empty" error before
+	// joining (joined-line errors point at line numbers, not flag invocations).
+	for _, entry := range flags {
+		if strings.TrimSpace(entry) == "" {
+			return nil, fmt.Errorf("invalid %s value: empty", flagName)
+		}
+	}
+	joined := strings.Join(flags, "\n")
+	m, err := config.ParseHeaderLines(joined)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", flagName, err)
+	}
+	return m, nil
 }
 
 // parseEnvFlags parses KEY=VALUE pairs from --env flags.

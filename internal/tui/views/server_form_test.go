@@ -1,6 +1,7 @@
 package views
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -271,6 +272,126 @@ func TestShowEdit_AutostartPrePopulated(t *testing.T) {
 	srv := form.buildServerConfig()
 	if !srv.Autostart {
 		t.Error("expected built config to have Autostart=true")
+	}
+}
+
+func TestShowEdit_HTTPHeadersRoundtrip(t *testing.T) {
+	th := theme.New()
+	form := NewServerForm(th)
+	_ = form.ShowEdit("searxng", config.ServerConfig{
+		URL: "https://searxng-mcp.example.com/mcp",
+		HTTPHeaders: map[string]string{
+			"CF-Access-Client-Id":     "id",
+			"CF-Access-Client-Secret": "secret",
+		},
+		EnvHTTPHeaders: map[string]string{
+			"X-Token": "MY_TOKEN_ENV",
+		},
+	})
+
+	if form.httpHeaders == "" {
+		t.Fatal("httpHeaders should be populated")
+	}
+	if form.envHTTPHeaders == "" {
+		t.Fatal("envHTTPHeaders should be populated")
+	}
+	if form.isDirty() {
+		t.Errorf("form should not be dirty immediately after ShowEdit (got httpHeaders=%q envHTTPHeaders=%q)", form.httpHeaders, form.envHTTPHeaders)
+	}
+
+	srv := form.buildServerConfig()
+	if got := srv.HTTPHeaders["CF-Access-Client-Id"]; got != "id" {
+		t.Errorf("HTTPHeaders[CF-Access-Client-Id] = %q, want %q", got, "id")
+	}
+	if got := srv.HTTPHeaders["CF-Access-Client-Secret"]; got != "secret" {
+		t.Errorf("HTTPHeaders[CF-Access-Client-Secret] = %q, want %q", got, "secret")
+	}
+	if got := srv.EnvHTTPHeaders["X-Token"]; got != "MY_TOKEN_ENV" {
+		t.Errorf("EnvHTTPHeaders[X-Token] = %q, want %q", got, "MY_TOKEN_ENV")
+	}
+}
+
+func TestShowEdit_StdioClearsHeadersOnSave(t *testing.T) {
+	th := theme.New()
+	form := NewServerForm(th)
+	// Edit a stdio server; even if the user somehow has header text in the
+	// field, buildServerConfig must drop it because stdio servers reject headers.
+	_ = form.ShowEdit("local", config.ServerConfig{
+		Command: "echo",
+	})
+	form.httpHeaders = "X-Foo: bar"
+
+	srv := form.buildServerConfig()
+	if len(srv.HTTPHeaders) != 0 {
+		t.Errorf("expected HTTPHeaders cleared on stdio, got %v", srv.HTTPHeaders)
+	}
+	if len(srv.EnvHTTPHeaders) != 0 {
+		t.Errorf("expected EnvHTTPHeaders cleared on stdio, got %v", srv.EnvHTTPHeaders)
+	}
+}
+
+func TestValidateHeaderTextarea(t *testing.T) {
+	if err := validateHeaderTextarea(""); err != nil {
+		t.Errorf("empty input should be valid: %v", err)
+	}
+	if err := validateHeaderTextarea("X-Foo: bar"); err != nil {
+		t.Errorf("valid input should pass: %v", err)
+	}
+	if err := validateHeaderTextarea("invalid line"); err == nil {
+		t.Error("expected error for missing colon")
+	}
+}
+
+func TestValidateHeaderTextareaCross(t *testing.T) {
+	// No collision
+	if err := validateHeaderTextareaCross("X-Foo: a", "X-Bar: b", "Other"); err != nil {
+		t.Errorf("non-overlapping fields should pass: %v", err)
+	}
+
+	// Cross-map duplicate
+	err := validateHeaderTextareaCross("X-Foo: a", "X-Foo: B", "Headers from Env Vars")
+	if err == nil {
+		t.Fatal("expected error for header name in both fields")
+	}
+	if !strings.Contains(err.Error(), "X-Foo") || !strings.Contains(err.Error(), "Headers from Env Vars") {
+		t.Errorf("error should mention the colliding header and the sibling field, got: %v", err)
+	}
+
+	// Parse error in sibling is tolerated — sibling shows its own error,
+	// and we don't want to double-report on the focused field.
+	if err := validateHeaderTextareaCross("X-Foo: a", "this is not parseable", "Other"); err != nil {
+		t.Errorf("sibling parse error should not bubble up: %v", err)
+	}
+
+	// Own parse error is reported regardless of sibling
+	if err := validateHeaderTextareaCross("not parseable", "X-Foo: a", "Other"); err == nil {
+		t.Error("expected error for own parse failure")
+	}
+}
+
+// Drives the form to a parse error and checks the textarea value is preserved
+// (huh keeps field state when Validate returns an error — we just exercise the
+// path to make sure nothing in our wiring clears the value behind huh's back).
+func TestServerForm_HeaderParseErrorPreservesValue(t *testing.T) {
+	th := theme.New()
+	form := NewServerForm(th)
+	_ = form.ShowEdit("s", config.ServerConfig{URL: "https://example.com/mcp"})
+
+	bad := "no-colon-here"
+	form.httpHeaders = bad
+	if err := validateHeaderTextarea(form.httpHeaders); err == nil {
+		t.Fatal("expected validator to reject bad input")
+	}
+	// The validator returns an error but does not mutate the form field.
+	if form.httpHeaders != bad {
+		t.Errorf("form.httpHeaders mutated by validator: got %q, want %q", form.httpHeaders, bad)
+	}
+
+	// And buildServerConfig in this state falls back to nil HTTPHeaders
+	// rather than silently writing the unparseable string anywhere.
+	srv := form.buildServerConfig()
+	if len(srv.HTTPHeaders) != 0 {
+		t.Errorf("expected HTTPHeaders nil when input fails to parse, got %v", srv.HTTPHeaders)
 	}
 }
 

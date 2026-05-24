@@ -121,6 +121,10 @@ Serve mode uses a two-phase `tools/list` flow so clients are not blocked behind 
 
 This keeps `tools/list` responsive for clients with tight request timeouts while still converging to the full aggregated tool set.
 
+## HTTP Server Custom Headers
+
+For `streamable_http` servers, two map fields on `ServerConfig` flow from the CLI (`--header`/`--env-header`), TUI form, and web form through `internal/config` (parsed and validated by `ParseHeaderLines`) into `supervisor.go`'s `StreamableHTTPConfig.HTTPHeaders` and out through `streamable_http_transport.Send` on every request. Static headers (`http_headers`) are stored verbatim in `~/.config/mcpmu/config.json`; env-backed headers (`env_http_headers`) are resolved from the named env var at request time so secrets stay out of the file. The two maps are merged at request build time with env-backed entries taking precedence on name collision; missing env vars are silently omitted (a no-op when the header is optional). Used in practice for Cloudflare Access (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) on top of any auth mode.
+
 ## Resource and Prompt Passthrough
 
 Serve mode passes through `resources/*` and `prompts/*` MCP methods from upstream servers (enabled by default, disable with `--resources=false` or `--prompts=false`).

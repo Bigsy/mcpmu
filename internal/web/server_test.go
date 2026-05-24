@@ -511,6 +511,124 @@ func TestServerDelete(t *testing.T) {
 	}
 }
 
+func TestServerCreate_WithHTTPHeaders(t *testing.T) {
+	srv := newTestServer(t)
+
+	body := url.Values{}
+	body.Set("name", "searxng")
+	body.Set("kind", "http")
+	body.Set("url", "https://searxng-mcp.example.com/mcp")
+	body.Set("auth_mode", "none")
+	body.Set("http_headers", "CF-Access-Client-Id: id\nCF-Access-Client-Secret: secret")
+	body.Set("env_http_headers", "X-Token: TOKEN_ENV")
+	body.Set("enabled", "true")
+	body.Set("startup_timeout", "10")
+	body.Set("tool_timeout", "60")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/servers", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusSeeOther {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 303, got %d: %s", resp.StatusCode, b)
+	}
+
+	got, ok := srv.cfg.GetServer("searxng")
+	if !ok {
+		t.Fatal("searxng not persisted")
+	}
+	if got.HTTPHeaders["CF-Access-Client-Id"] != "id" {
+		t.Errorf("HTTPHeaders[CF-Access-Client-Id] = %q, want id", got.HTTPHeaders["CF-Access-Client-Id"])
+	}
+	if got.HTTPHeaders["CF-Access-Client-Secret"] != "secret" {
+		t.Errorf("HTTPHeaders[CF-Access-Client-Secret] = %q, want secret", got.HTTPHeaders["CF-Access-Client-Secret"])
+	}
+	if got.EnvHTTPHeaders["X-Token"] != "TOKEN_ENV" {
+		t.Errorf("EnvHTTPHeaders[X-Token] = %q, want TOKEN_ENV", got.EnvHTTPHeaders["X-Token"])
+	}
+}
+
+func TestServerCreate_InvalidHeaderLine(t *testing.T) {
+	srv := newTestServer(t)
+
+	body := url.Values{}
+	body.Set("name", "bad")
+	body.Set("kind", "http")
+	body.Set("url", "https://example.com/mcp")
+	body.Set("auth_mode", "none")
+	body.Set("http_headers", "no-colon-here")
+	body.Set("enabled", "true")
+	body.Set("startup_timeout", "10")
+	body.Set("tool_timeout", "60")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/servers", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d", resp.StatusCode)
+	}
+
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), "missing") || !strings.Contains(string(b), "custom headers") {
+		t.Errorf("expected parse error in response, got: %s", string(b))
+	}
+
+	if _, ok := srv.cfg.GetServer("bad"); ok {
+		t.Error("server should not be persisted when header parsing fails")
+	}
+}
+
+func TestServerCreate_StdioDropsHeaderFields(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Even if http_headers is posted with stdio kind, it must be silently
+	// dropped — matches existing bearer-env handling.
+	body := url.Values{}
+	body.Set("name", "stdio-with-bogus-headers")
+	body.Set("kind", "stdio")
+	body.Set("command", "echo")
+	body.Set("http_headers", "X-Should-Not-Persist: 1")
+	body.Set("env_http_headers", "X-Also-No: ENV")
+	body.Set("auth_mode", "none")
+	body.Set("enabled", "true")
+	body.Set("startup_timeout", "10")
+	body.Set("tool_timeout", "60")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/servers", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusSeeOther {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 303, got %d: %s", resp.StatusCode, b)
+	}
+
+	got, ok := srv.cfg.GetServer("stdio-with-bogus-headers")
+	if !ok {
+		t.Fatal("server not persisted")
+	}
+	if len(got.HTTPHeaders) != 0 {
+		t.Errorf("expected HTTPHeaders empty on stdio, got %v", got.HTTPHeaders)
+	}
+	if len(got.EnvHTTPHeaders) != 0 {
+		t.Errorf("expected EnvHTTPHeaders empty on stdio, got %v", got.EnvHTTPHeaders)
+	}
+}
+
 func TestServerToggle(t *testing.T) {
 	srv := newTestServer(t)
 

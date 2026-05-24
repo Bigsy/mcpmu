@@ -259,6 +259,16 @@ func (s ServerConfig) Validate() error {
 				return fmt.Errorf("oauth callback_port must be 1-65535, got %d", port)
 			}
 		}
+
+		// Validate header maps: reject CRLF, invalid token names, and other
+		// control characters in values. Existing configs with well-formed
+		// header names (e.g. CF-Access-Client-Id) continue to load.
+		if err := ValidateHeaderMap(s.HTTPHeaders); err != nil {
+			return fmt.Errorf("http_headers: %w", err)
+		}
+		if err := ValidateHeaderMap(s.EnvHTTPHeaders); err != nil {
+			return fmt.Errorf("env_http_headers: %w", err)
+		}
 	}
 
 	return nil

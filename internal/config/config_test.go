@@ -1064,6 +1064,66 @@ func TestServerConfig_Validate_HTTPValid(t *testing.T) {
 	}
 }
 
+// Regression: the searxng prod config uses CF-Access-Client-Id /
+// CF-Access-Client-Secret. The §6 tightened Config.Validate must continue to
+// accept these (per the non-negotiable in PLAN-headers.md).
+func TestServerConfig_Validate_CFAccessHeadersAccepted(t *testing.T) {
+	srv := ServerConfig{
+		URL: "https://searxng-mcp.example.com/mcp",
+		HTTPHeaders: map[string]string{
+			"CF-Access-Client-Id":     "abc.access",
+			"CF-Access-Client-Secret": "supersecret",
+		},
+	}
+	if err := srv.Validate(); err != nil {
+		t.Errorf("CF-Access headers should validate, got: %v", err)
+	}
+
+	// Same headers via env-backed map
+	srv2 := ServerConfig{
+		URL: "https://searxng-mcp.example.com/mcp",
+		EnvHTTPHeaders: map[string]string{
+			"CF-Access-Client-Id":     "CF_ID_ENV",
+			"CF-Access-Client-Secret": "CF_SECRET_ENV",
+		},
+	}
+	if err := srv2.Validate(); err != nil {
+		t.Errorf("CF-Access env-backed headers should validate, got: %v", err)
+	}
+}
+
+func TestServerConfig_Validate_RejectsCRLFInHeaderValue(t *testing.T) {
+	srv := ServerConfig{
+		URL: "https://example.com/mcp",
+		HTTPHeaders: map[string]string{
+			"X-Foo": "bar\r\nX-Admin: 1",
+		},
+	}
+	err := srv.Validate()
+	if err == nil {
+		t.Fatal("expected error for CRLF in header value")
+	}
+	if !strings.Contains(err.Error(), "CR or LF") {
+		t.Errorf("expected CR/LF error, got: %v", err)
+	}
+}
+
+func TestServerConfig_Validate_RejectsInvalidHeaderName(t *testing.T) {
+	srv := ServerConfig{
+		URL: "https://example.com/mcp",
+		HTTPHeaders: map[string]string{
+			"X Foo": "bar", // space in name is not a valid token char
+		},
+	}
+	err := srv.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid header name")
+	}
+	if !strings.Contains(err.Error(), "invalid header name") {
+		t.Errorf("expected invalid-name error, got: %v", err)
+	}
+}
+
 func TestServerConfig_Validate_BothCommandAndURL(t *testing.T) {
 	srv := ServerConfig{
 		Command: "echo",

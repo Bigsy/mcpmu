@@ -450,6 +450,225 @@ func TestCLI_Add_HTTP_BearerAndOAuth_MutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestCLI_Add_HTTP_WithHeaders(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "add", "searxng",
+		"https://searxng-mcp.example.com/mcp",
+		"--header", "CF-Access-Client-Id: my-id",
+		"--header", "CF-Access-Client-Secret: my-secret",
+	)
+	if err != nil {
+		t.Fatalf("add failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	data, _ := os.ReadFile(configPath)
+	var cfg map[string]any
+	_ = json.Unmarshal(data, &cfg)
+	servers := cfg["servers"].(map[string]any)
+	srv := servers["searxng"].(map[string]any)
+
+	headers, ok := srv["http_headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected http_headers map, got %v", srv["http_headers"])
+	}
+	if headers["CF-Access-Client-Id"] != "my-id" {
+		t.Errorf("expected CF-Access-Client-Id=my-id, got %v", headers["CF-Access-Client-Id"])
+	}
+	if headers["CF-Access-Client-Secret"] != "my-secret" {
+		t.Errorf("expected CF-Access-Client-Secret=my-secret, got %v", headers["CF-Access-Client-Secret"])
+	}
+}
+
+func TestCLI_Add_HTTP_WithHeaders_NoSpaceAfterColon(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "add", "s",
+		"https://example.com/mcp",
+		"--header", "X-Foo:bar",
+	)
+	if err != nil {
+		t.Fatalf("add failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	data, _ := os.ReadFile(configPath)
+	var cfg map[string]any
+	_ = json.Unmarshal(data, &cfg)
+	srv := cfg["servers"].(map[string]any)["s"].(map[string]any)
+	headers := srv["http_headers"].(map[string]any)
+	if headers["X-Foo"] != "bar" {
+		t.Errorf("expected X-Foo=bar, got %v", headers["X-Foo"])
+	}
+}
+
+func TestCLI_Add_HTTP_WithHeaders_ColonInValue(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, stderr, err := runCLI(testBinary, configPath, "add", "s",
+		"https://example.com/mcp",
+		"--header", "Authorization: Bearer abc:def",
+	)
+	if err != nil {
+		t.Fatalf("add failed: %v\nstderr: %s", err, stderr)
+	}
+
+	data, _ := os.ReadFile(configPath)
+	var cfg map[string]any
+	_ = json.Unmarshal(data, &cfg)
+	srv := cfg["servers"].(map[string]any)["s"].(map[string]any)
+	headers := srv["http_headers"].(map[string]any)
+	if headers["Authorization"] != "Bearer abc:def" {
+		t.Errorf("expected Authorization='Bearer abc:def', got %v", headers["Authorization"])
+	}
+}
+
+func TestCLI_Add_HTTP_WithEnvHeader(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, stderr, err := runCLI(testBinary, configPath, "add", "s",
+		"https://example.com/mcp",
+		"--env-header", "CF-Access-Client-Secret: CF_SECRET",
+	)
+	if err != nil {
+		t.Fatalf("add failed: %v\nstderr: %s", err, stderr)
+	}
+
+	data, _ := os.ReadFile(configPath)
+	var cfg map[string]any
+	_ = json.Unmarshal(data, &cfg)
+	srv := cfg["servers"].(map[string]any)["s"].(map[string]any)
+
+	if _, set := srv["http_headers"]; set {
+		t.Error("--env-header should not populate http_headers")
+	}
+	envHeaders, ok := srv["env_http_headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected env_http_headers map, got %v", srv["env_http_headers"])
+	}
+	if envHeaders["CF-Access-Client-Secret"] != "CF_SECRET" {
+		t.Errorf("expected CF-Access-Client-Secret=CF_SECRET, got %v", envHeaders["CF-Access-Client-Secret"])
+	}
+}
+
+func TestCLI_Add_HTTP_DuplicateHeaderName(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, err := runCLI(testBinary, configPath, "add", "s",
+		"https://example.com/mcp",
+		"--header", "X-Foo: a",
+		"--header", "X-Foo: b",
+	)
+	if err == nil {
+		t.Fatal("expected error for duplicate header name")
+	}
+}
+
+func TestCLI_Add_HTTP_DuplicateAcrossHeaderFlags(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "add", "s",
+		"https://example.com/mcp",
+		"--header", "X-Foo: a",
+		"--env-header", "X-Foo: SOME_ENV",
+	)
+	if err == nil {
+		t.Fatalf("expected error for header set by both --header and --env-header\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+	output := stdout + stderr
+	if !strings.Contains(output, "both") && !strings.Contains(output, "X-Foo") {
+		t.Errorf("expected 'both' / 'X-Foo' in error, got: %s", output)
+	}
+}
+
+func TestCLI_Add_HTTP_EmptyHeader(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, err := runCLI(testBinary, configPath, "add", "s",
+		"https://example.com/mcp",
+		"--header", "",
+	)
+	if err == nil {
+		t.Fatal("expected error for empty --header")
+	}
+
+	_, _, err = runCLI(testBinary, configPath, "add", "s",
+		"https://example.com/mcp",
+		"--header", ":foo",
+	)
+	if err == nil {
+		t.Fatal("expected error for --header with empty name")
+	}
+}
+
+func TestCLI_Add_Stdio_RejectsHeaderFlags(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, err := runCLI(testBinary, configPath, "add", "bad-stdio",
+		"--header", "X-Foo: bar",
+		"--", "echo", "hello",
+	)
+	if err == nil {
+		t.Fatal("expected error for --header on stdio server")
+	}
+
+	_, _, err = runCLI(testBinary, configPath, "add", "bad-stdio",
+		"--env-header", "X-Foo: ENV",
+		"--", "echo", "hello",
+	)
+	if err == nil {
+		t.Fatal("expected error for --env-header on stdio server")
+	}
+}
+
+func TestParseHeaderFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		flags   []string
+		want    map[string]string
+		wantErr bool
+	}{
+		{name: "nil", flags: nil, want: nil},
+		{name: "single", flags: []string{"X-Foo: bar"}, want: map[string]string{"X-Foo": "bar"}},
+		{
+			name:  "multiple",
+			flags: []string{"X-Foo: a", "X-Bar: b"},
+			want:  map[string]string{"X-Foo": "a", "X-Bar": "b"},
+		},
+		{name: "empty entry", flags: []string{""}, wantErr: true},
+		{name: "whitespace entry", flags: []string{"   "}, wantErr: true},
+		{name: "duplicate within flag", flags: []string{"X-Foo: a", "X-Foo: b"}, wantErr: true},
+		{name: "invalid name", flags: []string{"X Foo: bar"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseHeaderFlags(tt.flags, "--header")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v want %v", got, tt.want)
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("got[%q]=%q want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
 func TestCLI_Add_Stdio_RejectsOAuthFlags(t *testing.T) {
 	t.Parallel()
 	configPath := setupTestConfig(t)

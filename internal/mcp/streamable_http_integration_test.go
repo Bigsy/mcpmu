@@ -268,6 +268,56 @@ func TestStreamableHTTPTransport_CustomHeaders(t *testing.T) {
 	}
 }
 
+// Regression for the Cloudflare Access trigger case in PLAN-headers.md:
+// CF-Access-* headers must be applied to *every* request the transport makes,
+// not just the first. Sends multiple requests and asserts the headers are
+// present on each one.
+func TestStreamableHTTPTransport_CFAccessHeadersOnEveryRequest(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		received []http.Header
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		received = append(received, r.Header.Clone())
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+	}))
+	defer server.Close()
+
+	transport := NewStreamableHTTPTransport(StreamableHTTPConfig{
+		URL: server.URL,
+		HTTPHeaders: map[string]string{
+			"CF-Access-Client-Id":     "access-id.access",
+			"CF-Access-Client-Secret": "access-secret",
+		},
+	})
+
+	ctx := context.Background()
+	for i := 1; i <= 3; i++ {
+		payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"test"}`, i)
+		if err := transport.Send(ctx, []byte(payload)); err != nil {
+			t.Fatalf("Send #%d failed: %v", i, err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 3 {
+		t.Fatalf("expected 3 requests, got %d", len(received))
+	}
+	for i, h := range received {
+		if got := h.Get("Cf-Access-Client-Id"); got != "access-id.access" {
+			t.Errorf("request #%d: CF-Access-Client-Id = %q, want %q", i+1, got, "access-id.access")
+		}
+		if got := h.Get("Cf-Access-Client-Secret"); got != "access-secret" {
+			t.Errorf("request #%d: CF-Access-Client-Secret = %q, want %q", i+1, got, "access-secret")
+		}
+	}
+}
+
 func TestStreamableHTTPTransport_MCPProtocolVersion(t *testing.T) {
 	var receivedVersion string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

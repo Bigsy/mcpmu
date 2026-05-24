@@ -16,6 +16,16 @@ mcpmu add atlassian https://mcp.atlassian.com/mcp --scopes read,write
 mcpmu add my-api https://example.com/mcp --bearer-env API_TOKEN
 mcpmu add slack https://mcp.slack.com/mcp --oauth-client-id 1601185624273.8899143856786 --oauth-callback-port 3118
 
+# Add HTTP server with custom headers (Cloudflare Access, custom gateways, etc.)
+mcpmu add searxng https://searxng-mcp.example.com/mcp \
+  --header "CF-Access-Client-Id: <id>" \
+  --header "CF-Access-Client-Secret: <secret>"
+
+# Same, with the secret read from an env var instead of stored in config
+mcpmu add searxng https://searxng-mcp.example.com/mcp \
+  --header "CF-Access-Client-Id: <id>" \
+  --env-header "CF-Access-Client-Secret: CF_ACCESS_CLIENT_SECRET"
+
 # List, remove, rename
 mcpmu list
 mcpmu list --json
@@ -30,8 +40,10 @@ mcpmu rename <old-name> <new-name>
 - `--scopes` — OAuth scopes (comma-separated; auto-discovered from server if omitted)
 - `--oauth-client-id` — pre-registered OAuth client ID (skips dynamic registration)
 - `--oauth-callback-port` — OAuth callback port (1-65535)
+- `--header` — custom HTTP header in `Name: Value` form, repeatable. Applied to every request. Stored verbatim in config.
+- `--env-header` — HTTP header sourced from an env var, `Name: ENV_VAR` form, repeatable. Value is read from the named env var at request time, so secrets stay out of the config file.
 
-Note: `--bearer-env` and OAuth flags are mutually exclusive.
+Note: `--bearer-env` and OAuth flags are mutually exclusive. `--header` and `--env-header` are orthogonal — they stack on top of any auth mode (useful for Cloudflare Access in front of an OAuth server). A header name cannot appear in both flags.
 
 **General (stdio and HTTP):**
 - `--autostart` — start server automatically on app launch
