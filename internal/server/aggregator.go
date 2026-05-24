@@ -26,6 +26,11 @@ const (
 )
 
 // AggregatedTool represents a tool with qualified name and server info.
+//
+// Storage shape: internally we keep the raw upstream values — `Name` is the
+// unqualified upstream tool name and `Description` is the upstream string with
+// no prefix. Qualified names (`{server}.{tool}`) and the `[server]` description
+// prefix are applied at the exposure boundary in `ListTools`/`GetTool`.
 type AggregatedTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
@@ -42,8 +47,10 @@ type Aggregator struct {
 	cfg        *config.Config
 	supervisor *process.Supervisor
 
-	// Tool cache
-	tools   map[string]AggregatedTool // qualified name -> tool
+	// Tool cache: serverName -> unqualified toolName -> tool (raw, no prefix).
+	// Per-server map so RefreshServerTools / DiscoverServer / partial-failure
+	// handling are O(1) per server rather than scanning a flat map.
+	tools   map[string]map[string]AggregatedTool
 	toolsMu sync.RWMutex
 
 	// Manager tools
@@ -56,7 +63,7 @@ func NewAggregator(cfg *config.Config, supervisor *process.Supervisor, exposeMan
 	a := &Aggregator{
 		cfg:                cfg,
 		supervisor:         supervisor,
-		tools:              make(map[string]AggregatedTool),
+		tools:              make(map[string]map[string]AggregatedTool),
 		exposeManagerTools: exposeManagerTools,
 	}
 	a.managerTools = a.buildManagerTools()
@@ -66,39 +73,58 @@ func NewAggregator(cfg *config.Config, supervisor *process.Supervisor, exposeMan
 // ListTools discovers and returns all tools from the specified servers.
 // This may start servers lazily if they're not running.
 // serverNames is a list of server names (map keys).
+//
+// Discovery is per-server: a failure for one server marks that server's cache
+// entry as empty (not poisoned with stale data) but does not affect entries
+// for other servers — including servers that were populated by an earlier
+// DiscoverServer / RefreshServerTools call and are not in serverNames now.
 func (a *Aggregator) ListTools(ctx context.Context, serverNames []string) ([]AggregatedTool, error) {
-	// Discover tools from servers concurrently with bounded parallelism
+	type discoveryResult struct {
+		serverName string
+		tools      []AggregatedTool
+		err        error
+	}
+
 	sem := make(chan struct{}, MaxConcurrentDiscovery)
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var allTools []AggregatedTool
+	results := make([]discoveryResult, len(serverNames))
 
-	for _, name := range serverNames {
+	for i, name := range serverNames {
 		wg.Add(1)
-		go func(serverName string) {
+		go func(idx int, serverName string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			tools, err := a.discoverServerTools(ctx, serverName)
-			if err != nil {
-				log.Printf("Failed to discover tools from %s: %v", serverName, err)
-				return
-			}
-
-			mu.Lock()
-			allTools = append(allTools, tools...)
-			mu.Unlock()
-		}(name)
+			results[idx] = discoveryResult{serverName: serverName, tools: tools, err: err}
+		}(i, name)
 	}
 
 	wg.Wait()
 
-	// Update cache
 	a.toolsMu.Lock()
-	a.tools = make(map[string]AggregatedTool)
-	for _, t := range allTools {
-		a.tools[t.Name] = t
+	for _, r := range results {
+		if r.err != nil {
+			log.Printf("Failed to discover tools from %s: %v", r.serverName, r.err)
+			// Empty entry — explicit "no tools" rather than stale data from
+			// a previous discovery.
+			a.tools[r.serverName] = map[string]AggregatedTool{}
+			continue
+		}
+		m := make(map[string]AggregatedTool, len(r.tools))
+		for _, t := range r.tools {
+			m[t.origName] = t
+		}
+		a.tools[r.serverName] = m
+	}
+
+	// Build the exposed list from cache for the requested servers only.
+	var allTools []AggregatedTool
+	for _, name := range serverNames {
+		for _, t := range a.tools[name] {
+			allTools = append(allTools, exposeTool(name, t))
+		}
 	}
 	a.toolsMu.Unlock()
 
@@ -129,7 +155,9 @@ func (a *Aggregator) PendingServers(serverNames []string) []string {
 	return pending
 }
 
-// GetTool returns a tool by its qualified name.
+// GetTool returns a tool by its qualified name (`{server}.{tool}`) or manager
+// tool name. The returned tool has the qualified name and `[server]` prefix
+// applied to the description.
 func (a *Aggregator) GetTool(name string) (AggregatedTool, bool) {
 	// Check manager tools first
 	for _, t := range a.managerTools {
@@ -138,14 +166,27 @@ func (a *Aggregator) GetTool(name string) (AggregatedTool, bool) {
 		}
 	}
 
+	serverName, toolName, isManager := ParseToolName(name)
+	if isManager {
+		return AggregatedTool{}, false
+	}
+
 	a.toolsMu.RLock()
 	defer a.toolsMu.RUnlock()
-	t, ok := a.tools[name]
-	return t, ok
+	m, ok := a.tools[serverName]
+	if !ok {
+		return AggregatedTool{}, false
+	}
+	t, ok := m[toolName]
+	if !ok {
+		return AggregatedTool{}, false
+	}
+	return exposeTool(serverName, t), true
 }
 
 // discoverServerTools starts a server (if needed) and retrieves its tools.
-// serverName is the server's map key (identifier).
+// Returns tools with raw (unqualified, unprefixed) values; the caller stores
+// them as-is and applies qualification/prefix at the exposure boundary.
 func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string) ([]AggregatedTool, error) {
 	srv, ok := a.cfg.GetServer(serverName)
 	if !ok {
@@ -178,17 +219,6 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string)
 
 	tools := make([]AggregatedTool, len(mcpTools))
 	for i, t := range mcpTools {
-		// Qualify tool name: serverName.toolName
-		qualifiedName := serverName + "." + t.Name
-
-		// Prefix description with server name
-		desc := t.Description
-		if desc != "" {
-			desc = fmt.Sprintf("[%s] %s", serverName, desc)
-		} else {
-			desc = fmt.Sprintf("[%s]", serverName)
-		}
-
 		// Convert InputSchema
 		var schemaJSON json.RawMessage
 		if t.InputSchema != nil {
@@ -198,8 +228,8 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string)
 		}
 
 		tools[i] = AggregatedTool{
-			Name:        qualifiedName,
-			Description: desc,
+			Name:        t.Name,        // unqualified, internal
+			Description: t.Description, // raw, internal
 			InputSchema: schemaJSON,
 			serverID:    serverName,
 			serverName:  serverName,
@@ -208,6 +238,19 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string)
 	}
 
 	return tools, nil
+}
+
+// exposeTool converts an internally-stored tool into its client-visible form:
+// qualified name and `[server]` description prefix.
+func exposeTool(serverName string, t AggregatedTool) AggregatedTool {
+	out := t
+	out.Name = serverName + "." + t.origName
+	if t.Description != "" {
+		out.Description = fmt.Sprintf("[%s] %s", serverName, t.Description)
+	} else {
+		out.Description = fmt.Sprintf("[%s]", serverName)
+	}
+	return out
 }
 
 // ParseToolName extracts serverID and tool name from a qualified tool name.
@@ -261,8 +304,11 @@ func (a *Aggregator) buildManagerTools() []AggregatedTool {
 	}
 }
 
-// DiscoverServer discovers tools from a single server and updates the cache.
-// Returns the tools found, or an error if discovery failed.
+// DiscoverServer discovers tools from a single server and merges them into
+// the cache. Existing entries for tools whose names appear in the new
+// discovery are overwritten; entries for other tools from this server are
+// left in place (per-server append semantics, kept for parity with prior
+// behavior).
 func (a *Aggregator) DiscoverServer(ctx context.Context, serverName string) ([]AggregatedTool, error) {
 	tools, err := a.discoverServerTools(ctx, serverName)
 	if err != nil {
@@ -270,45 +316,58 @@ func (a *Aggregator) DiscoverServer(ctx context.Context, serverName string) ([]A
 	}
 
 	a.toolsMu.Lock()
+	m, ok := a.tools[serverName]
+	if !ok {
+		m = make(map[string]AggregatedTool, len(tools))
+		a.tools[serverName] = m
+	}
 	for _, t := range tools {
-		a.tools[t.Name] = t
+		m[t.origName] = t
 	}
 	a.toolsMu.Unlock()
 
-	return tools, nil
+	// Return tools in their exposed form so callers see qualified names.
+	out := make([]AggregatedTool, len(tools))
+	for i, t := range tools {
+		out[i] = exposeTool(serverName, t)
+	}
+	return out, nil
 }
 
-// RefreshServerTools refreshes the tool cache for a specific server.
+// RefreshServerTools refreshes the tool cache for a specific server (full
+// per-server replace — old entries for that server are dropped).
 func (a *Aggregator) RefreshServerTools(ctx context.Context, serverName string) error {
 	tools, err := a.discoverServerTools(ctx, serverName)
 	if err != nil {
 		return err
 	}
 
-	a.toolsMu.Lock()
-	defer a.toolsMu.Unlock()
-
-	// Remove old tools from this server
-	for name, t := range a.tools {
-		if t.serverID == serverName {
-			delete(a.tools, name)
-		}
-	}
-
-	// Add new tools
+	m := make(map[string]AggregatedTool, len(tools))
 	for _, t := range tools {
-		a.tools[t.Name] = t
+		m[t.origName] = t
 	}
+
+	a.toolsMu.Lock()
+	a.tools[serverName] = m
+	a.toolsMu.Unlock()
 
 	return nil
 }
 
 // ToolForServer returns the original tool info for routing a call.
 func (a *Aggregator) ToolForServer(qualifiedName string) (serverID, origToolName string, ok bool) {
+	serverName, toolName, isManager := ParseToolName(qualifiedName)
+	if isManager {
+		return "", "", false
+	}
+
 	a.toolsMu.RLock()
 	defer a.toolsMu.RUnlock()
-
-	t, ok := a.tools[qualifiedName]
+	m, ok := a.tools[serverName]
+	if !ok {
+		return "", "", false
+	}
+	t, ok := m[toolName]
 	if !ok {
 		return "", "", false
 	}
