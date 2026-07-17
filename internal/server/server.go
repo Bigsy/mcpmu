@@ -16,9 +16,7 @@ import (
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
-	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/mcp"
-	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -55,14 +53,15 @@ const (
 	SelectionAll     SelectionMethod = "all"     // no namespaces, all servers exposed
 )
 
-// Server is an MCP server that aggregates tools from managed upstream servers.
-type Server struct {
-	opts       Options
-	cfg        *config.Config
-	bus        *events.Bus
-	supervisor *process.Supervisor
-	aggregator *Aggregator
-	router     *Router
+// Session is one downstream MCP connection. It owns negotiated protocol
+// state, namespace selection, resource routing/subscriptions, and its JSON-RPC
+// read/write loop while embedding the shared Core it operates against.
+type Session struct {
+	*Core
+	opts                     Options
+	router                   *Router
+	unsubscribeNotifications func()
+	ownsCore                 bool
 
 	// Active namespace (resolved at init)
 	activeNamespaceName string          // Name of the active namespace
@@ -87,9 +86,6 @@ type Server struct {
 	bgDiscovering        atomic.Bool
 	listToolsGracePeriod time.Duration // 0 means use ListToolsGracePeriod constant
 
-	// Hot-reload
-	reloadCh chan *config.Config // Serializes reload with request handling
-
 	// Resource routing: maps original URI → server name (populated by resources/list)
 	resourceMap sync.Map
 
@@ -100,54 +96,49 @@ type Server struct {
 	subs  map[string]string
 }
 
+// Server is retained as the embedded-serve API name. It is exactly one
+// Session attached to one in-process Core.
+type Server = Session
+
 // New creates a new MCP server.
 func New(opts Options) (*Server, error) {
-	// Create event bus
-	bus := events.NewBus()
-
-	// Derive PID tracker directory from config path to isolate instances
-	pidTrackerDir := opts.PIDTrackerDir
-	if pidTrackerDir == "" && opts.ConfigPath != "" {
-		pidTrackerDir = filepath.Dir(opts.ConfigPath)
+	core, err := NewCore(opts)
+	if err != nil {
+		return nil, err
 	}
-
-	// Create process supervisor with config-specified credential store
-	supervisor := process.NewSupervisorWithOptions(bus, process.SupervisorOptions{
-		CredentialStoreMode:     opts.Config.MCPOAuthCredentialStore,
-		PIDTrackerDir:           pidTrackerDir,
-		GlobalOAuthCallbackPort: opts.Config.MCPOAuthCallbackPort,
-	})
-
-	if opts.ConfigPath != "" {
-		toolCache, err := config.NewToolCache(opts.ConfigPath)
-		if err != nil {
-			log.Printf("Warning: failed to initialize tool cache: %v", err)
-		} else {
-			supervisor.SetToolCache(toolCache)
-		}
+	s, err := NewSession(core, opts)
+	if err != nil {
+		core.Close()
+		return nil, err
 	}
-
-	s := &Server{
-		opts:       opts,
-		cfg:        opts.Config,
-		bus:        bus,
-		supervisor: supervisor,
-		reader:     bufio.NewReader(opts.Stdin),
-		writer:     opts.Stdout,
-		reloadCh:   make(chan *config.Config, 1), // Buffered to avoid blocking watcher
-		subs:       make(map[string]string),
-	}
-
-	// Wire the server as the supervisor's notification sink before any
-	// upstream client is constructed so every handler is installed the
-	// moment Initialize completes.
-	supervisor.SetNotificationSink(s)
-
-	// Create aggregator and router (will be initialized after namespace selection)
-	s.aggregator = NewAggregator(s.cfg, supervisor, opts.ExposeManagerTools)
-	s.router = NewRouter(s.cfg, supervisor, s.aggregator)
-
+	s.ownsCore = true
 	return s, nil
+}
+
+// NewSession binds one downstream connection to an existing Core.
+func NewSession(core *Core, opts Options) (*Session, error) {
+	s := &Session{
+		Core:   core,
+		opts:   opts,
+		reader: bufio.NewReader(opts.Stdin),
+		writer: opts.Stdout,
+		subs:   make(map[string]string),
+	}
+	s.router = NewRouter(core)
+	unsubscribe, err := core.notifications.Subscribe(s)
+	if err != nil {
+		return nil, err
+	}
+	s.unsubscribeNotifications = unsubscribe
+	return s, nil
+}
+
+// Close detaches the Session from Core notifications. Core lifetime remains
+// independent unless the Session was created by New for embedded serve.
+func (s *Session) Close() {
+	if s.unsubscribeNotifications != nil {
+		s.unsubscribeNotifications()
+	}
 }
 
 // readResult holds a line read from stdin and any error.
@@ -165,9 +156,7 @@ func (s *Server) Run(ctx context.Context) error {
 	defer s.handlersWG.Wait()
 
 	// Start config file watcher if ConfigPath is set
-	if s.opts.ConfigPath != "" {
-		go s.watchConfig(ctx, s.opts.ConfigPath)
-	}
+	s.startWatching(ctx)
 
 	// Start a goroutine to read lines from stdin
 	lines := make(chan readResult)
@@ -424,7 +413,8 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	}
 	activeNamespaceName := s.activeNamespaceName
 	activeServerNames := s.activeServerNames
-	aggregator := s.aggregator
+	aggregator := s.currentAggregator()
+	cfg := s.currentConfig()
 	s.mu.RUnlock()
 
 	// Discover tools with a grace period. ListTools starts servers
@@ -437,6 +427,9 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	graceCtx, cancel := context.WithTimeout(context.Background(), gracePeriod)
 	defer cancel()
 	tools, _ := aggregator.ListTools(graceCtx, activeServerNames)
+	if s.opts.ExposeManagerTools {
+		tools = append(tools, aggregator.ManagerTools()...)
+	}
 
 	// If any servers didn't finish in time, continue in the background.
 	// Pass the caller's snapshot of activeServerNames so the goroutine
@@ -458,7 +451,7 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 			continue
 		}
 		// Check permission for regular tools
-		allowed, _ := IsToolAllowed(s.cfg, activeNamespaceName, serverName, toolName)
+		allowed, _ := IsToolAllowed(cfg, activeNamespaceName, serverName, toolName)
 		if allowed {
 			filtered = append(filtered, tool)
 		}
@@ -541,7 +534,7 @@ func (s *Server) discoverAndNotify(pendingNames []string) {
 	defer cancel()
 
 	s.mu.RLock()
-	aggregator := s.aggregator
+	aggregator := s.currentAggregator()
 	s.mu.RUnlock()
 
 	// Channel signals when any single server finishes discovery successfully.
@@ -617,7 +610,7 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 		}
 
 		// Check if server is enabled
-		srv, ok := s.cfg.GetServer(serverName)
+		srv, ok := s.currentConfig().GetServer(serverName)
 		if !ok {
 			return nil, ErrServerNotFound(serverName)
 		}
@@ -667,7 +660,7 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			sc, rpcErr := s.ensureServerClient(ctx, serverName)
+			sc, rpcErr := s.getOrStartServer(ctx, serverName)
 			if rpcErr != nil {
 				log.Printf("Failed to get client for %s (resources/list): %v", serverName, rpcErr)
 				return
@@ -740,7 +733,7 @@ func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage
 		return nil, ErrServerNotFound(serverName)
 	}
 
-	sc, rpcErr := s.ensureServerClient(ctx, serverName)
+	sc, rpcErr := s.getOrStartServer(ctx, serverName)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -788,7 +781,7 @@ func (s *Server) handleResourcesSubscribe(ctx context.Context, params json.RawMe
 		return nil, ErrServerNotFound(serverName)
 	}
 
-	sc, rpcErr := s.ensureServerClient(ctx, serverName)
+	sc, rpcErr := s.getOrStartServer(ctx, serverName)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -858,7 +851,7 @@ func (s *Server) handleResourcesUnsubscribe(ctx context.Context, params json.Raw
 		return struct{}{}, nil
 	}
 
-	sc, rpcErr := s.ensureServerClient(ctx, serverName)
+	sc, rpcErr := s.getOrStartServer(ctx, serverName)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -905,7 +898,7 @@ func (s *Server) handlePromptsList(ctx context.Context) (any, *RPCError) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			sc, rpcErr := s.ensureServerClient(ctx, serverName)
+			sc, rpcErr := s.getOrStartServer(ctx, serverName)
 			if rpcErr != nil {
 				log.Printf("Failed to get client for %s (prompts/list): %v", serverName, rpcErr)
 				return
@@ -976,7 +969,7 @@ func (s *Server) handlePromptsGet(ctx context.Context, params json.RawMessage) (
 		return nil, ErrServerNotFound(serverName)
 	}
 
-	sc, rpcErr := s.ensureServerClient(ctx, serverName)
+	sc, rpcErr := s.getOrStartServer(ctx, serverName)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -994,48 +987,9 @@ func (s *Server) handlePromptsGet(ctx context.Context, params json.RawMessage) (
 	}{Messages: messages}, nil
 }
 
-// serverClient holds a client, its per-server timeout, and the upstream's
-// advertised capabilities (snapshot at acquisition time).
-type serverClient struct {
-	client       *mcp.Client
-	timeout      time.Duration
-	capabilities mcp.ServerCapabilities
-}
-
-// ensureServerClient starts a server if needed and returns its MCP client
-// along with the per-server tool timeout for wrapping upstream calls.
-func (s *Server) ensureServerClient(ctx context.Context, serverName string) (serverClient, *RPCError) {
-	srv, ok := s.cfg.GetServer(serverName)
-	if !ok {
-		return serverClient{}, ErrServerNotFound(serverName)
-	}
-	if !srv.IsEnabled() {
-		return serverClient{}, NewRPCError(ErrCodeServerNotRunning, "server is disabled: "+serverName, nil)
-	}
-
-	handle := s.supervisor.Get(serverName)
-	if handle == nil || !handle.IsRunning() {
-		var err error
-		handle, err = s.supervisor.Start(ctx, serverName, srv)
-		if err != nil {
-			return serverClient{}, ErrServerFailedToStart(serverName, err.Error())
-		}
-	}
-
-	if err := handle.WaitForTools(ctx); err != nil {
-		return serverClient{}, ErrServerFailedToStart(serverName, err.Error())
-	}
-
-	return serverClient{
-		client:       handle.Client(),
-		timeout:      time.Duration(srv.ToolTimeout()) * time.Second,
-		capabilities: handle.Capabilities(),
-	}, nil
-}
-
 // resolveNamespace determines which namespace to use and which servers are active.
 func (s *Server) resolveNamespace() *RPCError {
-	cfg := s.cfg
+	cfg := s.currentConfig()
 	namespaceArg := s.opts.Namespace
 
 	// Rule 1: If --namespace provided, use it (lookup by name)
@@ -1097,7 +1051,7 @@ func (s *Server) resolveNamespace() *RPCError {
 func (s *Server) startEagerServers(ctx context.Context) {
 	log.Printf("Starting %d servers eagerly", len(s.activeServerNames))
 	for _, name := range s.activeServerNames {
-		srv, ok := s.cfg.GetServer(name)
+		srv, ok := s.currentConfig().GetServer(name)
 		if !ok {
 			continue
 		}
@@ -1110,13 +1064,15 @@ func (s *Server) startEagerServers(ctx context.Context) {
 // shutdown cleans up resources.
 func (s *Server) shutdown() {
 	log.Println("Shutting down server")
-	s.supervisor.StopAll()
-	s.bus.Close()
+	s.Close()
+	if s.ownsCore {
+		s.Core.Close()
+	}
 }
 
 // watchConfig watches the config file for changes and sends new config to reloadCh.
 // It watches the parent directory (not the file) to handle atomic renames.
-func (s *Server) watchConfig(ctx context.Context, configPath string) {
+func (c *Core) watchConfig(ctx context.Context, configPath string) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("Failed to create config watcher: %v", err)
@@ -1136,7 +1092,7 @@ func (s *Server) watchConfig(ctx context.Context, configPath string) {
 	log.Printf("Watching config file: %s", configPath)
 
 	// Debounce timer
-	debounceDelay := s.opts.DebounceDelay
+	debounceDelay := c.debounceDelay
 	if debounceDelay == 0 {
 		debounceDelay = 150 * time.Millisecond
 	}
@@ -1160,7 +1116,7 @@ func (s *Server) watchConfig(ctx context.Context, configPath string) {
 
 			// Send to reload channel (non-blocking with select to avoid deadlock if channel full)
 			select {
-			case s.reloadCh <- newCfg:
+			case c.reloadCh <- newCfg:
 				log.Printf("Config reload queued")
 			default:
 				log.Printf("Config reload already pending, skipping")
@@ -1226,8 +1182,8 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 	s.mu.Lock()
 	oldNamespaceName := s.activeNamespaceName
 	oldSelectionMethod := s.selectionMethod
-	s.cfg = newCfg
 	s.mu.Unlock()
+	s.replaceConfig(newCfg)
 
 	// Re-resolve namespace
 	// If namespace was selected by flag and still exists, keep it
@@ -1280,11 +1236,9 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 	// Rebuild aggregator and router with new config. Swap under the write
 	// lock so concurrently-running handlers see either the whole old pair or
 	// the whole new pair, never a torn read.
-	newAgg := NewAggregator(s.cfg, s.supervisor, s.opts.ExposeManagerTools)
-	newRouter := NewRouter(s.cfg, s.supervisor, newAgg)
+	newRouter := NewRouter(s.Core)
 
 	s.mu.Lock()
-	s.aggregator = newAgg
 	s.router = newRouter
 	activeNsName := s.activeNamespaceName
 	selMethod := s.selectionMethod

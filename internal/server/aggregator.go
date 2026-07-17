@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,7 @@ type AggregatedTool struct {
 type Aggregator struct {
 	cfg        *config.Config
 	supervisor *process.Supervisor
+	acquire    func(context.Context, string) (*process.Handle, config.ServerConfig, error)
 
 	// Tool cache: serverName -> unqualified toolName -> tool (raw, no prefix).
 	// Per-server map so RefreshServerTools / DiscoverServer / partial-failure
@@ -66,6 +68,7 @@ func NewAggregator(cfg *config.Config, supervisor *process.Supervisor, exposeMan
 		tools:              make(map[string]map[string]AggregatedTool),
 		exposeManagerTools: exposeManagerTools,
 	}
+	a.acquire = a.getOrStartHandle
 	a.managerTools = a.buildManagerTools()
 	return a
 }
@@ -184,7 +187,14 @@ func (a *Aggregator) GetTool(name string) (AggregatedTool, bool) {
 	return exposeTool(serverName, t), true
 }
 
-// discoverServerTools starts a server (if needed) and retrieves its tools.
+// ManagerTools returns the built-in management tools. Exposure is a Session
+// choice, so Core-backed sessions append these at their tools/list boundary.
+func (a *Aggregator) ManagerTools() []AggregatedTool {
+	return slices.Clone(a.managerTools)
+}
+
+// discoverServerTools acquires a ready server through the Core-provided
+// get-or-start helper and retrieves its tools.
 // Returns tools with raw (unqualified, unprefixed) values; the caller stores
 // them as-is and applies qualification/prefix at the exposure boundary.
 func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string) ([]AggregatedTool, error) {
@@ -198,20 +208,9 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string)
 		return nil, nil
 	}
 
-	// Check if server is already running (or starting — async init may be in progress)
-	handle := a.supervisor.Get(serverName)
-	if handle == nil || !handle.IsRunning() {
-		// Start the server (returns immediately — init + tool discovery happen async)
-		var err error
-		handle, err = a.supervisor.Start(ctx, serverName, srv)
-		if err != nil {
-			return nil, fmt.Errorf("start server: %w", err)
-		}
-	}
-
-	// Wait for init + tool discovery to complete (respects caller's context)
-	if err := handle.WaitForTools(ctx); err != nil {
-		return nil, fmt.Errorf("wait for tools: %w", err)
+	handle, _, err := a.acquire(ctx, serverName)
+	if err != nil {
+		return nil, err
 	}
 
 	// Get tools from the running server
@@ -238,6 +237,12 @@ func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string)
 	}
 
 	return tools, nil
+}
+
+// getOrStartHandle preserves NewAggregator's standalone test/API behavior.
+// Core replaces acquire with its config-snapshotting helper in production.
+func (a *Aggregator) getOrStartHandle(ctx context.Context, serverName string) (*process.Handle, config.ServerConfig, error) {
+	return getOrStartHandle(ctx, a.cfg, a.supervisor, serverName)
 }
 
 // exposeTool converts an internally-stored tool into its client-visible form:

@@ -61,6 +61,27 @@ Claude Code/Codex spawns mcpmu as a subprocess. No daemons, no manual startup.
 }
 ```
 
+### Serve Core and Session Layers
+
+Serve mode is split into two layers inside `internal/server`:
+
+- `Core` owns the configuration, hot-reload watcher, process supervisor,
+  upstream tool aggregator, the common lazy-start/readiness path, and the
+  upstream notification broadcaster.
+- `Session` owns one downstream MCP connection: initialize state and
+  negotiated capabilities, namespace selection, permission context, resource
+  routing and subscriptions, and the JSON-RPC read/write loop.
+
+The current stdio entry point is embedded mode: `server.New` constructs one
+`Core` and attaches exactly one stdio `Session` in the same process. Upstream
+notifications enter through a Core-owned broadcaster with one subscriber, so
+the Supervisor does not depend on a particular client connection. All lazy
+tool, resource, prompt, and discovery acquisition uses the same Core helper;
+it retains the fixed 10-second startup/readiness window.
+
+This is an internal layering boundary only. It does not change the stdio wire
+protocol, process ownership, or user-facing lifecycle described above.
+
 ### Config Compatibility (mcpServers-style)
 
 The mcpmu config is designed so server entries remain compatible with the common `mcpServers` object shape used by MCP clients. In practice that means the server config uses the familiar field names:
