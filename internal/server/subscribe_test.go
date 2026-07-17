@@ -389,6 +389,10 @@ func TestServer_ResourcesSubscribe_MixedCapability(t *testing.T) {
 				"resources":                []any{map[string]any{"uri": "file:///good.txt", "name": "good"}},
 				"resourcesSubscribe":       true,
 				"emitUpdateAfterSubscribe": true,
+				// Subscription intent is recorded after the upstream RPC returns
+				// until Phase 2C; avoid racing that known ordering in this
+				// mixed-capability test (the happy-path test does the same).
+				"postSubscribeEmitDelayMs": 50,
 			}),
 			"bad": fakeServerConfig(t, map[string]any{
 				"tools":              []any{},

@@ -72,21 +72,23 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 
 	// Get or start the server
 	handle := r.supervisor.Get(serverName)
+	startCtx, cancel := context.WithTimeout(ctx, LazyStartTimeout)
+	defer cancel()
 	if handle == nil || !handle.IsRunning() {
 		// Lazy start the server
 		var err error
-		startCtx, cancel := context.WithTimeout(ctx, LazyStartTimeout)
-		defer cancel()
-
 		handle, err = r.supervisor.Start(startCtx, serverName, srv)
 		if err != nil {
 			return nil, ErrServerFailedToStart(serverName, err.Error())
 		}
 
-		// Wait for init + tool discovery to complete
-		if err := handle.WaitForTools(startCtx); err != nil {
-			return nil, ErrServerFailedToStart(serverName, err.Error())
-		}
+	}
+
+	// A concurrent caller may observe a handle while initialization is still
+	// in progress. Always join readiness before using its client; needs-login
+	// handles complete this promptly with process.ErrNeedsLogin.
+	if err := handle.WaitForTools(startCtx); err != nil {
+		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}
 
 	// Call the tool on the upstream server

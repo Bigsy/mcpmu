@@ -34,6 +34,17 @@ const (
 	InitRetryBaseDelay = 500 * time.Millisecond
 )
 
+// ErrNeedsLogin indicates that an HTTP MCP server supports OAuth but no usable
+// credentials are available. The handle remains available for OAuth metadata,
+// but it is not a running MCP connection and may be replaced by the next use.
+var ErrNeedsLogin = errors.New("oauth login required")
+
+type authRetry struct {
+	done   chan struct{}
+	handle *Handle
+	err    error
+}
+
 // Supervisor manages MCP server process lifecycles.
 type Supervisor struct {
 	bus                     *events.Bus
@@ -44,6 +55,7 @@ type Supervisor struct {
 	toolCache               *config.ToolCache
 	globalOAuthCallbackPort *int
 	mu                      sync.RWMutex
+	authRetries             map[string]*authRetry
 
 	// notificationSink receives upstream notifications. Set once via
 	// SetNotificationSink before any client is started; read under sinkMu.
@@ -152,6 +164,7 @@ func NewSupervisorWithOptions(bus *events.Bus, opts SupervisorOptions) *Supervis
 		credStore:               credStore,
 		tokenManager:            tokenManager,
 		globalOAuthCallbackPort: opts.GlobalOAuthCallbackPort,
+		authRetries:             make(map[string]*authRetry),
 	}
 }
 
@@ -164,14 +177,56 @@ func (s *Supervisor) CredentialStore() oauth.CredentialStore {
 // The name parameter is used as the identifier for the server.
 func (s *Supervisor) Start(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
 	s.mu.Lock()
+	if retry, ok := s.authRetries[name]; ok {
+		s.mu.Unlock()
+		return waitForAuthRetry(ctx, retry)
+	}
 
 	// Check if already running
-	if h, exists := s.handles[name]; exists && h.IsRunning() {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("server %s is already running", name)
+	if h, exists := s.handles[name]; exists {
+		if h.NeedsLogin() {
+			retry := &authRetry{done: make(chan struct{})}
+			s.authRetries[name] = retry
+			s.mu.Unlock()
+
+			retry.handle, retry.err = s.retryAfterLogin(ctx, name, srv, h)
+			close(retry.done)
+
+			s.mu.Lock()
+			delete(s.authRetries, name)
+			s.mu.Unlock()
+			return retry.handle, retry.err
+		}
+		if h.IsRunning() {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("server %s is already running", name)
+		}
 	}
 	s.mu.Unlock()
 
+	return s.start(ctx, name, srv)
+}
+
+func waitForAuthRetry(ctx context.Context, retry *authRetry) (*Handle, error) {
+	select {
+	case <-retry.done:
+		return retry.handle, retry.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// retryAfterLogin replaces a needs-login handle and re-runs authentication
+// from the current server config and credential store. Start registers one
+// authRetry per server, so concurrent callers join the same replacement.
+func (s *Supervisor) retryAfterLogin(ctx context.Context, name string, srv config.ServerConfig, failed *Handle) (*Handle, error) {
+	if err := failed.Stop(); err != nil {
+		return nil, fmt.Errorf("stop needs-login handle: %w", err)
+	}
+	return s.start(ctx, name, srv)
+}
+
+func (s *Supervisor) start(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
 	// Dispatch based on server type — initialization runs without the
 	// global lock so that multiple servers can start concurrently.
 	var (
@@ -514,6 +569,8 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 				handle.client = nil // No client until authenticated
 				_ = httpTransport.Close()
 				handle.httpTransport = nil
+				handle.setInitError(fmt.Errorf("%w for server %s", ErrNeedsLogin, name))
+				handle.signalToolsReady()
 
 				s.emitStatus(name, events.StateNeedsAuth, 0, nil, "OAuth login required")
 				log.Printf("Server %s requires OAuth login", name)
@@ -889,6 +946,10 @@ func (h *Handle) Uptime() time.Duration {
 
 // IsRunning returns true if the process is still running.
 func (h *Handle) IsRunning() bool {
+	if h.NeedsLogin() {
+		return false
+	}
+
 	h.stopMu.Lock()
 	stopped := h.stopped
 	h.stopMu.Unlock()
@@ -904,6 +965,11 @@ func (h *Handle) IsRunning() bool {
 	default:
 		return true
 	}
+}
+
+// NeedsLogin reports whether initialization stopped at the OAuth login gate.
+func (h *Handle) NeedsLogin() bool {
+	return errors.Is(h.InitError(), ErrNeedsLogin)
 }
 
 // Stop gracefully stops the server (process or HTTP connection).
@@ -1114,80 +1180,14 @@ func resolveOAuthFlowConfig(
 
 // retryHTTPConnection attempts to reconnect an HTTP server after OAuth completes.
 func (s *Supervisor) retryHTTPConnection(ctx context.Context, name string) error {
-	s.mu.Lock()
+	s.mu.RLock()
 	handle, exists := s.handles[name]
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	if !exists {
 		return fmt.Errorf("server %s not found", name)
 	}
 
-	// Use cached server config from handle
-	cfg := handle.serverConfig
-
-	// Emit starting event
-	s.emitStatus(name, events.StateStarting, 0, nil, "")
-
-	// Get OAuth token
-	token, err := s.tokenManager.GetAccessToken(ctx, handle.serverURL)
-	if err != nil {
-		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("Failed to get OAuth token: %v", err))
-		return fmt.Errorf("get oauth token: %w", err)
-	}
-
-	// Build HTTP headers
-	headers := make(map[string]string)
-	maps.Copy(headers, cfg.HTTPHeaders)
-	for headerName, envVarName := range cfg.EnvHTTPHeaders {
-		if value := os.Getenv(envVarName); value != "" {
-			headers[headerName] = value
-		}
-	}
-
-	// Create transport with token
-	transportConfig := mcp.StreamableHTTPConfig{
-		URL:         handle.serverURL,
-		BearerToken: token,
-		BearerTokenProvider: func(callCtx context.Context) (string, error) {
-			return s.tokenManager.GetAccessToken(callCtx, handle.serverURL)
-		},
-		HTTPHeaders: headers,
-	}
-	httpTransport := mcp.NewStreamableHTTPTransport(transportConfig)
-
-	// Connect
-	if err := httpTransport.Connect(ctx); err != nil {
-		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("Connect failed: %v", err))
-		return fmt.Errorf("connect: %w", err)
-	}
-
-	// Create client and initialize
-	client := mcp.NewClient(httpTransport)
-
-	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if err := client.Initialize(initCtx); err != nil {
-		_ = httpTransport.Close()
-		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
-		return fmt.Errorf("initialize: %w", err)
-	}
-
-	// Install notification handler now that initialization succeeded.
-	s.installNotificationHandler(name, client)
-
-	// Update handle
-	handle.ctx, handle.ctxCancel = context.WithCancel(context.Background())
-	handle.client = client
-	handle.httpTransport = httpTransport
-	handle.authStatus = mcp.AuthStatusOAuthOK
-	handle.done = make(chan struct{}) // Reset done channel
-	handle.startedAt = time.Now()
-
-	s.emitStatus(name, events.StateRunning, 0, nil, "")
-
-	// Discover tools in background
-	go s.discoverToolsAsync(handle, client, name)
-
-	return nil
+	_, err := s.Start(ctx, name, handle.serverConfig)
+	return err
 }
