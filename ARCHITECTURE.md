@@ -49,11 +49,12 @@ mcpmu is an MCP server aggregator that manages multiple MCP servers and exposes 
 
 ## Primary Usage: stdio Mode
 
-Claude Code/Codex spawns mcpmu as a subprocess. The shipped `serve` path is
-still embedded at this phase: one process owns one Core and one stdio Session.
-The Unix shared-daemon runtime and its hidden control commands now exist for
-integration testing, but `serve` does not connect to or auto-spawn it until the
-next rollout phase.
+Claude Code/Codex spawns mcpmu as a subprocess. During rollout the shipped
+`serve` path is embedded by default: one process owns one Core and one stdio
+Session. Setting top-level `daemonMode` to true on Unix changes that process
+into a stdio-to-Unix-socket shim connected to a shared per-config daemon.
+`--isolated` forces embedded behavior for one process, and every daemon setup
+failure falls back to embedded serve.
 
 ```json
 // ~/.claude/mcp_servers.json
@@ -77,7 +78,7 @@ Serve mode is split into two layers inside `internal/server`:
   URI routing and its local subscription view, and the JSON-RPC read/write
   loop.
 
-The current stdio entry point is embedded mode: `server.New` constructs one
+The embedded stdio path uses `server.New` to construct one
 `Core` and attaches exactly one stdio `Session` in the same process. Upstream
 notifications enter through a Core-owned worker-backed broadcaster, so the
 Supervisor does not depend on a particular client connection and never runs a
@@ -92,11 +93,13 @@ Embedded serve keeps the same stdio wire protocol and process ownership. The
 same boundary also lets the internal daemon attach multiple Sessions to one
 Core without duplicating upstream processes.
 
-### Shared Daemon Foundation (opt-in/internal)
+### Shared Daemon and Shim (opt-in)
 
-`internal/daemon` provides the Unix listener and control plane used by the
-planned shared serve path. It is deliberately not selected by `mcpmu serve`
-yet. The hidden commands are available for development and diagnostics:
+`internal/daemon` provides the Unix listener and shared Core;
+`internal/shim` implements the stdio bridge and connect-or-spawn protocol.
+Top-level `daemonMode: true` selects it, while absent/false remains embedded
+until the final rollout gate. The hidden commands are available for development
+and diagnostics:
 
 ```bash
 mcpmu --config /absolute/or/relative/config.json daemon run --foreground
@@ -126,6 +129,25 @@ subscriptions and URI maps are cleared, upstreams are stopped, every attached
 Session re-resolves its namespace and permissions, the union of eager Sessions
 is restarted, and capability-scoped list-change notifications are sent to each
 Session. Embedded serve retains its single-Session reload consumer.
+
+A spawn lock serializes concurrent cold starts. The winning shim rechecks the
+socket, proves staleness only when the daemon run lock is free, removes a stale
+socket, and starts the current executable in a detached session with the full
+canonical config path on its command line. All contenders then perform the
+normal build/protocol/config handshake. Rejection or any setup timeout returns
+that serve process to embedded mode without stopping a daemon that may still be
+serving compatible clients.
+
+Once connected, the shim copies MCP bytes without interpreting them. Daemon
+EOF ends the shim even while client stdin is open; client stdin EOF half-closes
+the socket so queued responses can drain. The daemon writer uses an ordered
+flush marker before closing such a completed Session.
+
+The daemon inherits the environment and working directory of the shim that won
+the spawn race. Server configs should therefore use absolute `cwd` values and
+explicit `env` entries; `env_http_headers` also resolve in that inherited daemon
+environment. Environment is deliberately not part of daemon identity because
+that would fragment sharing per caller.
 
 A run lock serializes daemon ownership. The first and last Session transitions
 control a 60-second linger timer; `daemon stop` rejects new Sessions, drains

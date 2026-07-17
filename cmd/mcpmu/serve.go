@@ -7,13 +7,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/daemon"
 	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/server"
+	"github.com/Bigsy/mcpmu/internal/shim"
 	"github.com/spf13/cobra"
 )
 
@@ -25,6 +25,7 @@ var (
 	serveExposeManagerTools bool
 	serveResources          bool
 	servePrompts            bool
+	serveIsolated           bool
 )
 
 var serveCmd = &cobra.Command{
@@ -60,6 +61,7 @@ func init() {
 	serveCmd.Flags().BoolVar(&serveExposeManagerTools, "expose-manager-tools", false, "Include mcpmu.* tools in tools/list (default: hidden)")
 	serveCmd.Flags().BoolVar(&serveResources, "resources", true, "Passthrough resources/* from upstream servers")
 	serveCmd.Flags().BoolVar(&servePrompts, "prompts", true, "Passthrough prompts/* from upstream servers")
+	serveCmd.Flags().BoolVar(&serveIsolated, "isolated", false, "Run embedded with private upstream server instances")
 
 	rootCmd.AddCommand(serveCmd)
 }
@@ -84,19 +86,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	log.Printf("mcpmu serve starting (version=%s)", version)
 
-	// Resolve config path for hot-reload watching
+	// Resolve and canonicalize the config path once for embedded watching and
+	// daemon rendezvous identity.
 	var resolvedConfigPath string
 	if serveConfigPath != "" {
-		// Expand ~ in user-provided path
-		if strings.HasPrefix(serveConfigPath, "~/") {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return fmt.Errorf("failed to get home dir: %w", err)
-			}
-			resolvedConfigPath = filepath.Join(home, serveConfigPath[2:])
-		} else {
-			resolvedConfigPath = serveConfigPath
-		}
+		resolvedConfigPath = serveConfigPath
+	} else if configPath != "" {
+		resolvedConfigPath = configPath
 	} else {
 		// Use default config path
 		var err error
@@ -104,6 +100,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to get config path: %w", err)
 		}
+	}
+	resolvedConfigPath, err := daemon.CanonicalConfigPath(resolvedConfigPath)
+	if err != nil {
+		return fmt.Errorf("resolve config path: %w", err)
 	}
 
 	// Load configuration
@@ -114,6 +114,41 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	log.Printf("Loaded config with %d servers, %d namespaces", len(cfg.Servers), len(cfg.Namespaces))
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		select {
+		case sig := <-sigCh:
+			log.Printf("Received signal %v, shutting down", sig)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	if cfg.IsDaemonModeEnabled() && !serveIsolated {
+		connection, connectErr := shim.ConnectOrSpawn(ctx, shim.Options{
+			ConfigPath: resolvedConfigPath, Namespace: serveNamespace,
+			LogLevel: serveLogLevel, Eager: serveEager,
+			ExposeManagerTools: serveExposeManagerTools,
+			Resources:          serveResources, Prompts: servePrompts,
+		})
+		if connectErr == nil {
+			if err := shim.Pump(ctx, connection, os.Stdin, os.Stdout); err != nil && err != context.Canceled {
+				return fmt.Errorf("daemon shim error: %w", err)
+			}
+			log.Println("mcpmu serve shim exiting")
+			return nil
+		}
+		_, _ = fmt.Fprintf(os.Stderr, "mcpmu: shared daemon unavailable; falling back to embedded serve: %v\n", connectErr)
+	}
+
+	return runEmbeddedServe(ctx, cfg, resolvedConfigPath)
+}
+
+func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string) error {
 	// Create server options
 	opts := server.Options{
 		Config:             cfg,
@@ -137,19 +172,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create server: %w", err)
 	}
-
-	// Set up signal handling
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigCh
-		log.Printf("Received signal %v, shutting down", sig)
-		cancel()
-	}()
 
 	// Run the server
 	if err := srv.Run(ctx); err != nil && err != context.Canceled {

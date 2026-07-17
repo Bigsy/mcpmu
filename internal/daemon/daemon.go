@@ -264,6 +264,9 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 	if err := session.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("daemon session ended with error: %v", err)
 	}
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), time.Second)
+	_ = writer.Flush(flushCtx)
+	flushCancel()
 	cancel()
 	_ = conn.Close()
 	select {

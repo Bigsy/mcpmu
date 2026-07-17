@@ -66,6 +66,7 @@ mcpmu serve --stdio --namespace default
 mcpmu serve --stdio -n work --log-level debug --eager
 mcpmu serve --stdio --expose-manager-tools
 mcpmu serve --stdio --resources --prompts
+mcpmu serve --stdio --isolated
 ```
 
 ### Serve flags
@@ -76,14 +77,40 @@ mcpmu serve --stdio --resources --prompts
 - `--expose-manager-tools` — include mcpmu.* tools in tools/list (default: hidden)
 - `--resources` — passthrough resources/* from upstream servers (default: on)
 - `--prompts` — passthrough prompts/* from upstream servers (default: on)
+- `--isolated` — bypass shared-daemon mode for this process and run embedded
 
 Resource URIs are passed through unmodified from upstream servers. Prompt names are qualified as `serverName.promptName`.
 
-## Shared daemon diagnostics (experimental)
+## Shared daemon mode (opt-in)
 
-The daemon control surface is hidden from casual command help while shared
-serve mode is being rolled out. At this phase `mcpmu serve` remains embedded;
-these commands are for testing and diagnostics:
+Shared serve remains opt-in during rollout. Enable it at the top level of the
+config; the pointer-shaped setting preserves absent versus explicit false:
+
+```json
+{
+  "daemonMode": true,
+  "servers": {},
+  "namespaces": {}
+}
+```
+
+On Unix, the first `mcpmu serve` for a canonical config path starts a detached
+daemon and connects its stdio through a Unix-socket shim. Later serves for that
+config share the daemon's Core and upstream processes. `daemonMode` absent or
+false keeps embedded behavior in this release. `--isolated` always runs the
+calling serve embedded. Windows also remains embedded.
+
+The connect protocol verifies the executable content hash, protocol version,
+and full canonical config path. Any connect, spawn, startup, or handshake
+failure prints one warning and falls back to a working embedded serve. Relative,
+symlinked, and not-yet-created config paths use the same canonicalization.
+
+The daemon inherits the first spawner's working directory and environment.
+Use absolute upstream `cwd` values and explicit `env` config; environment-backed
+HTTP headers are likewise resolved from the daemon environment.
+
+The control surface remains hidden from casual command help while rollout is
+in progress:
 
 ```bash
 mcpmu --config /path/to/config.json daemon run --foreground
@@ -230,5 +257,6 @@ With bearer token auth:
 
 | Field | Description |
 |-------|-------------|
+| `daemonMode` | Unix shared-daemon serve mode; absent/false is embedded during rollout, true opts in |
 | `mcp_oauth_credentials_store` | Where to store OAuth tokens: `"auto"`, `"keyring"`, or `"file"` (default: auto) |
 | `mcp_oauth_callback_port` | Port for the OAuth callback server (default: auto-assigned) |

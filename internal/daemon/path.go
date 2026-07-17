@@ -16,6 +16,7 @@ const maxUnixSocketPath = 103
 type Paths struct {
 	RuntimeDir string
 	Socket     string
+	SpawnLock  string
 	RunLock    string
 	PIDFile    string
 	LogFile    string
@@ -99,6 +100,7 @@ func RuntimePaths(canonicalConfigPath string) (Paths, error) {
 	paths := Paths{
 		RuntimeDir: dir,
 		Socket:     filepath.Join(dir, name+".sock"),
+		SpawnLock:  filepath.Join(dir, name+".spawn.lock"),
 		RunLock:    filepath.Join(dir, name+".run.lock"),
 		PIDFile:    filepath.Join(dir, name+".pid"),
 		LogFile:    filepath.Join(dir, name+".log"),

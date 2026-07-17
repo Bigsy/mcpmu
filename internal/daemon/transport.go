@@ -11,10 +11,15 @@ var errOutboundQueueFull = errors.New("daemon session outbound queue is full")
 
 type queuedWriter struct {
 	conn   net.Conn
-	queue  chan []byte
+	queue  chan queuedWrite
 	done   <-chan struct{}
 	cancel context.CancelFunc
 	exited chan struct{}
+}
+
+type queuedWrite struct {
+	data    []byte
+	flushed chan struct{}
 }
 
 func newQueuedWriter(conn net.Conn, size int, done <-chan struct{}, cancel context.CancelFunc) *queuedWriter {
@@ -22,7 +27,7 @@ func newQueuedWriter(conn net.Conn, size int, done <-chan struct{}, cancel conte
 		size = 64
 	}
 	writer := &queuedWriter{
-		conn: conn, queue: make(chan []byte, size), done: done,
+		conn: conn, queue: make(chan queuedWrite, size), done: done,
 		cancel: cancel, exited: make(chan struct{}),
 	}
 	go writer.run()
@@ -37,7 +42,7 @@ func (writer *queuedWriter) Write(data []byte) (int, error) {
 	default:
 	}
 	select {
-	case writer.queue <- copyOfData:
+	case writer.queue <- queuedWrite{data: copyOfData}:
 		return len(data), nil
 	case <-writer.done:
 		return 0, io.ErrClosedPipe
@@ -48,12 +53,38 @@ func (writer *queuedWriter) Write(data []byte) (int, error) {
 	}
 }
 
+// Flush waits until every write queued before the marker has reached the
+// socket. It is used when a half-closed shim input lets a Session finish while
+// its final responses are still buffered in the daemon writer.
+func (writer *queuedWriter) Flush(ctx context.Context) error {
+	flushed := make(chan struct{})
+	select {
+	case writer.queue <- queuedWrite{flushed: flushed}:
+	case <-writer.exited:
+		return io.ErrClosedPipe
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-flushed:
+		return nil
+	case <-writer.exited:
+		return io.ErrClosedPipe
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (writer *queuedWriter) run() {
 	defer close(writer.exited)
 	for {
 		select {
-		case data := <-writer.queue:
-			if err := writeAll(writer.conn, data); err != nil {
+		case item := <-writer.queue:
+			if item.flushed != nil {
+				close(item.flushed)
+				continue
+			}
+			if err := writeAll(writer.conn, item.data); err != nil {
 				writer.cancel()
 				_ = writer.conn.Close()
 				return

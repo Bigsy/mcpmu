@@ -126,6 +126,7 @@ type ToolPermission struct {
 // Config is the root configuration structure.
 type Config struct {
 	SchemaVersion    int                        `json:"schemaVersion"`
+	DaemonMode       *bool                      `json:"daemonMode,omitempty"`
 	DefaultNamespace string                     `json:"defaultNamespace,omitempty"`
 	Servers          map[string]ServerConfig    `json:"servers"`
 	Namespaces       map[string]NamespaceConfig `json:"namespaces,omitempty"`
@@ -135,6 +136,19 @@ type Config struct {
 	// OAuth settings (Codex-compatible)
 	MCPOAuthCredentialStore string `json:"mcp_oauth_credentials_store,omitempty"` // "auto", "keyring", "file"
 	MCPOAuthCallbackPort    *int   `json:"mcp_oauth_callback_port,omitempty"`     // nil = random, 0 invalid
+}
+
+// DefaultDaemonMode controls the behavior when daemonMode is absent. Shared
+// serve remains opt-in until the final daemon rollout phase.
+const DefaultDaemonMode = false
+
+// IsDaemonModeEnabled returns the configured daemon-mode setting, preserving
+// the distinction between an absent field and an explicit false value.
+func (c Config) IsDaemonModeEnabled() bool {
+	if c.DaemonMode == nil {
+		return DefaultDaemonMode
+	}
+	return *c.DaemonMode
 }
 
 // NewConfig creates a new empty configuration with default values.

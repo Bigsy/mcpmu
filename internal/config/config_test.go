@@ -230,6 +230,35 @@ func TestServerConfig_SetEnabled(t *testing.T) {
 	}
 }
 
+func TestConfig_DaemonModeTriState(t *testing.T) {
+	var absent Config
+	if absent.DaemonMode != nil {
+		t.Fatal("absent daemonMode decoded as present")
+	}
+	if absent.IsDaemonModeEnabled() != DefaultDaemonMode {
+		t.Fatalf("absent daemonMode = %t, want compiled default %t", absent.IsDaemonModeEnabled(), DefaultDaemonMode)
+	}
+
+	for _, test := range []struct {
+		name string
+		json string
+		want bool
+	}{
+		{name: "explicit true", json: `{"daemonMode":true}`, want: true},
+		{name: "explicit false", json: `{"daemonMode":false}`, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var cfg Config
+			if err := json.Unmarshal([]byte(test.json), &cfg); err != nil {
+				t.Fatal(err)
+			}
+			if cfg.DaemonMode == nil || cfg.IsDaemonModeEnabled() != test.want {
+				t.Fatalf("daemonMode = %v (effective %t), want %t", cfg.DaemonMode, cfg.IsDaemonModeEnabled(), test.want)
+			}
+		})
+	}
+}
+
 func TestValidateName(t *testing.T) {
 	tests := []struct {
 		name    string

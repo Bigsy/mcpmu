@@ -245,11 +245,61 @@ smoke_daemon_control() {
   return "$rc"
 }
 
+# Verifies real-binary shim auto-spawn, absent-config canonicalization, and
+# embedded fallback without touching the user's config or runtime directory.
+smoke_daemon_shim_fallback() {
+  local tmp runtime cfg missing long_runtime stderr_file response status rc=0
+  tmp=$(mktemp -d -t mcpmu-smoke-shim.XXXXXX)
+  runtime=$(mktemp -d /tmp/mu-shim.XXXXXX)
+  chmod 0700 "$runtime"
+  cfg="$tmp/config.json"
+  missing="$tmp/not-created/config.json"
+  stderr_file="$tmp/serve.stderr"
+  echo '{"schemaVersion":1,"daemonMode":true,"servers":{},"namespaces":{}}' > "$cfg"
+
+  response=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}' |
+    XDG_RUNTIME_DIR="$runtime" ./mcpmu serve --stdio --config "$cfg" 2>"$stderr_file")
+  if ! printf '%s\n' "$response" | jq -e 'select(.id == 1 and .result)' >/dev/null; then
+    echo "FAIL: daemon shim did not return initialize"
+    rc=1
+  fi
+  status=$(XDG_RUNTIME_DIR="$runtime" ./mcpmu --config "$cfg" daemon status --json 2>/dev/null || true)
+  if [[ -z "$status" ]] || ! printf '%s' "$status" | jq -e '.pidfileFallback == false' >/dev/null 2>&1; then
+    echo "FAIL: shim did not auto-spawn a live daemon"
+    rc=1
+  fi
+  XDG_RUNTIME_DIR="$runtime" ./mcpmu --config "$cfg" daemon stop >/dev/null 2>&1 || true
+
+  response=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}' |
+    XDG_RUNTIME_DIR="$runtime" ./mcpmu serve --stdio --isolated --config "$missing" 2>"$stderr_file")
+  if ! printf '%s\n' "$response" | jq -e 'select(.id == 1 and .result)' >/dev/null; then
+    echo "FAIL: absent config with absent parent did not serve embedded"
+    rc=1
+  fi
+
+  long_runtime="$tmp/$(printf 'long-runtime-%.0s' {1..10})"
+  mkdir -p "$long_runtime"
+  response=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}' |
+    XDG_RUNTIME_DIR="$long_runtime" ./mcpmu serve --stdio --config "$cfg" 2>"$stderr_file")
+  if ! printf '%s\n' "$response" | jq -e 'select(.id == 1 and .result)' >/dev/null; then
+    echo "FAIL: daemon-path failure did not fall back to embedded serve"
+    rc=1
+  elif [[ $(grep -c 'shared daemon unavailable; falling back to embedded serve' "$stderr_file") -ne 1 ]]; then
+    echo "FAIL: fallback did not emit exactly one warning"
+    rc=1
+  fi
+
+  rm -rf "$runtime"
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # Register new smoke checks here.
 SMOKE_CHECKS=(
   smoke_cf_access_headers
   smoke_process_group_cleanup
   smoke_daemon_control
+  smoke_daemon_shim_fallback
 )
 
 # --- Runner ---------------------------------------------------------------

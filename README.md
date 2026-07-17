@@ -186,6 +186,7 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 - **Process-tree cleanup** — Stop wrapper-launched workers with their parent and retain identity-validated crash recovery records
 - **Streamable HTTP/SSE** — Connect to remote MCP endpoints with full SSE support
 - **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`
+- **Optional shared daemon** — Let concurrent `serve` clients share one set of upstream processes on Unix
 - **OAuth support** — Full OAuth 2.1 with PKCE, dynamic client registration, token management, and automatic scope discovery
 - **Hot-reload** — Serve mode watches the config file and automatically applies changes without restart
 - **Lazy or eager startup** — Start servers on-demand or pre-start everything with `--eager`
@@ -206,11 +207,17 @@ mcpmu serve --stdio --expose-manager-tools   # include mcpmu.* management tools
 mcpmu serve --stdio --log-level debug        # verbose logging
 ```
 
-Serve currently runs an embedded Core and owns its upstream processes. An
-experimental Unix shared-daemon foundation is available through hidden
-`mcpmu daemon run|status|stop` diagnostics, but `serve` does not connect to or
-auto-spawn it yet. See [docs/CLI.md](docs/CLI.md#shared-daemon-diagnostics-experimental)
-for the opt-in development commands.
+Serve remains embedded by default during the shared-daemon rollout. To opt in
+on Unix, set `"daemonMode": true` at the top level of the mcpmu config. The
+first `serve` process starts a detached per-config daemon and becomes a stdio
+shim; concurrent clients then share the daemon's upstream processes. Any
+connect, spawn, or identity-handshake failure emits one warning and falls back
+to embedded serve. Use `--isolated` to bypass an enabled daemon for one client.
+
+The daemon inherits the environment and working directory of its first
+spawner. Prefer absolute server `cwd` values and explicit config `env` entries.
+See [docs/CLI.md](docs/CLI.md#shared-daemon-mode-opt-in) for configuration and
+diagnostic commands.
 
 ## Shell Completions
 
