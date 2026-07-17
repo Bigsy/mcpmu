@@ -67,10 +67,11 @@ Serve mode is split into two layers inside `internal/server`:
 
 - `Core` owns the configuration, hot-reload watcher, process supervisor,
   upstream tool aggregator, the common lazy-start/readiness path, and the
-  upstream notification broadcaster.
+  upstream notification broadcaster and resource-subscription refcounter.
 - `Session` owns one downstream MCP connection: initialize state and
   negotiated capabilities, namespace selection, permission context, resource
-  routing and subscriptions, and the JSON-RPC read/write loop.
+  URI routing and its local subscription view, and the JSON-RPC read/write
+  loop.
 
 The current stdio entry point is embedded mode: `server.New` constructs one
 `Core` and attaches exactly one stdio `Session` in the same process. Upstream
@@ -108,6 +109,32 @@ fanning the notification out to Sessions, avoiding the reader-goroutine
 request/response deadlock. Resources and prompts list fan-out uses recorded
 capabilities to skip verified, stopped upstreams that lack the relevant
 capability while still probing unknown entries.
+
+### Resource Subscription Ownership
+
+Resource subscription intent is owned by Core and keyed by `(InstanceID,
+URI)`, not by URI alone. Each entry contains the set of subscribed Sessions.
+Only the 0→1 transition calls upstream `resources/subscribe`, and only 1→0
+calls upstream `resources/unsubscribe`; repeated subscribe requests from one
+Session and subscriptions from additional Sessions change local membership
+without duplicating the upstream request. Session shutdown walks its local
+view through the same transition logic. An upstream unsubscribe failure is
+logged but never prevents local client cleanup, while a failed subscribe does
+not create a phantom refcount.
+
+Intent remains after an upstream process stops. Discovery of a newer process
+generation replays each retained upstream subscription once. Replay failure
+drops the entry from every affected Session and sends those Sessions
+`notifications/resources/list_changed` so they can rebuild URI ownership and
+subscribe again. Config reload is deliberately different: it clears all
+subscription intent and every attached Session's URI map before stopping the
+old transports.
+
+Subscribe, unsubscribe, replay, and `resources/updated` dispatch are
+serialized per `(InstanceID, URI)` across the upstream response and local
+state transition. This ensures an update emitted immediately after a
+successful subscribe is not lost, while the upstream client's response-reader
+goroutine still only enqueues notifications and never waits on Core work.
 
 ### Process Lifecycle Foundations
 
@@ -210,7 +237,7 @@ For `streamable_http` servers, two map fields on `ServerConfig` flow from the CL
 
 Serve mode passes through `resources/*` and `prompts/*` MCP methods from upstream servers (enabled by default, disable with `--resources=false` or `--prompts=false`).
 
-- **Resources**: URIs are passed through unmodified from upstream servers. A reverse map (URI → server name) is rebuilt atomically during `resources/list` and used to route `resources/read` calls to the correct upstream server. Results are merged in stable namespace server order; if two upstreams expose the same raw URI, the first owner wins and later duplicates are omitted and logged. All MCP resource fields are preserved, including `annotations`, `title`, and `size`. `resources/templates/list` is also supported (returns an empty list if no upstream servers provide templates).
+- **Resources**: URIs are passed through unmodified from upstream servers. A per-Session reverse map (URI → `InstanceID`) is rebuilt atomically during `resources/list` and used to route `resources/read`, subscribe, and unsubscribe calls to the correct upstream instance. Results are merged in stable namespace server order; if two upstreams expose the same raw URI, the first owner wins and later duplicates are omitted and logged. Different Sessions may therefore resolve the same URI to different upstreams without sharing subscription state. All MCP resource fields are preserved, including `annotations`, `title`, and `size`. `resources/templates/list` is also supported (returns an empty list if no upstream servers provide templates).
 - **Prompts**: Names are qualified as `serverName.promptName` (same as tools). Descriptions are prefixed with `[serverName]`. On `prompts/get`, the prefix is stripped before forwarding upstream.
 - **No caching**: Resource and prompt payloads are fetched on demand. Their fan-out consults initialize-time catalog capabilities so a verified stopped server that lacks the relevant capability can be skipped without starting it.
 - **No permissions**: Unlike tools, resources and prompts have no permission layer — they are read-only and user-initiated.

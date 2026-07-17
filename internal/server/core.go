@@ -23,6 +23,10 @@ type Core struct {
 	coreMu           sync.RWMutex
 	cfg              *config.Config
 	configGeneration uint64
+	resourceStateMu  sync.RWMutex
+	sessionsMu       sync.RWMutex
+	sessions         map[*Session]struct{}
+	subscriptions    *resourceSubscriptions
 
 	bus        *events.Bus
 	supervisor *process.Supervisor
@@ -64,6 +68,8 @@ func NewCore(opts Options) (*Core, error) {
 	c := &Core{
 		cfg:              opts.Config,
 		configGeneration: 1,
+		sessions:         make(map[*Session]struct{}),
+		subscriptions:    newResourceSubscriptions(),
 		bus:              bus,
 		supervisor:       supervisor,
 		reloadCh:         make(chan *config.Config, 1),
@@ -235,10 +241,38 @@ func (c *Core) startWatching(ctx context.Context) {
 	})
 }
 
+func (c *Core) registerSession(session *Session) {
+	c.sessionsMu.Lock()
+	c.sessions[session] = struct{}{}
+	c.sessionsMu.Unlock()
+}
+
+func (c *Core) unregisterSession(session *Session) {
+	c.sessionsMu.Lock()
+	delete(c.sessions, session)
+	c.sessionsMu.Unlock()
+}
+
+func (c *Core) sessionSnapshot() []*Session {
+	c.sessionsMu.RLock()
+	defer c.sessionsMu.RUnlock()
+	sessions := make([]*Session, 0, len(c.sessions))
+	for session := range c.sessions {
+		sessions = append(sessions, session)
+	}
+	return sessions
+}
+
 // Close stops all upstreams and releases Core-owned resources. It is safe to
 // call more than once.
 func (c *Core) Close() {
 	c.closeOnce.Do(func() {
+		c.resourceStateMu.Lock()
+		c.subscriptions.clear()
+		for _, session := range c.sessionSnapshot() {
+			session.clearResourceState()
+		}
+		c.resourceStateMu.Unlock()
 		c.supervisor.StopAll()
 		c.notifications.Close()
 		c.bus.Close()
@@ -253,6 +287,9 @@ func (c *Core) OnDiscoveryResult(result process.DiscoveryResult) {
 			Instance: result.Instance, Generation: result.Generation,
 			Method: "notifications/tools/list_changed",
 		})
+	}
+	if result.Initialized {
+		go c.replaySubscriptions(result.Instance, result.Generation)
 	}
 }
 
@@ -281,7 +318,105 @@ func (c *Core) processNotification(notification process.UpstreamNotification) bo
 			log.Printf("Failed to refresh tools after upstream list_changed from %s: %v", notification.Instance, err)
 		}
 	}
+	if notification.Method == "notifications/resources/updated" {
+		var params struct {
+			URI string `json:"uri"`
+		}
+		if err := json.Unmarshal(notification.Params, &params); err != nil || params.URI == "" {
+			return false
+		}
+		return c.subscriptions.hasSubscribers(resourceSubscriptionKey{
+			Instance: notification.Instance,
+			URI:      params.URI,
+		})
+	}
 	return true
+}
+
+func (c *Core) subscribeResource(
+	ctx context.Context,
+	session *Session,
+	key resourceSubscriptionKey,
+	server serverClient,
+) error {
+	dropped, err := c.subscriptions.subscribe(session, key, server.handle.Generation(), func() error {
+		callCtx, cancel := context.WithTimeout(ctx, server.timeout)
+		defer cancel()
+		return server.client.SubscribeResource(callCtx, key.URI)
+	})
+	c.notifyDroppedSubscriptions(dropped)
+	return err
+}
+
+func (c *Core) unsubscribeResource(ctx context.Context, session *Session, key resourceSubscriptionKey) {
+	err := c.subscriptions.unsubscribe(session, key, func(generation uint64) error {
+		return c.unsubscribeUpstream(ctx, key, generation)
+	})
+	if err != nil {
+		log.Printf("resources/unsubscribe on %s for %q failed after local cleanup: %v", key.Instance, key.URI, err)
+	}
+}
+
+func (c *Core) unsubscribeUpstream(ctx context.Context, key resourceSubscriptionKey, generation uint64) error {
+	handle := c.supervisor.GetInstance(key.Instance)
+	if handle == nil || !handle.IsRunning() || handle.Generation() != generation || handle.Client() == nil {
+		return nil
+	}
+	srv, ok := c.currentConfig().GetServer(key.Instance.Server)
+	if !ok {
+		return nil
+	}
+	callCtx, cancel := context.WithTimeout(ctx, time.Duration(srv.ToolTimeout())*time.Second)
+	defer cancel()
+	return handle.Client().UnsubscribeResource(callCtx, key.URI)
+}
+
+func (c *Core) cleanupSessionSubscriptions(session *Session) {
+	for uri, instance := range session.subscriptionSnapshot() {
+		key := resourceSubscriptionKey{Instance: instance, URI: uri}
+		c.unsubscribeResource(context.Background(), session, key)
+	}
+}
+
+func (c *Core) replaySubscriptions(id process.InstanceID, generation uint64) {
+	for _, key := range c.subscriptions.keysForInstance(id) {
+		handle := c.supervisor.GetInstance(id)
+		if handle == nil || !handle.IsRunning() || handle.Generation() != generation || handle.Client() == nil {
+			return
+		}
+		capabilities := handle.Capabilities()
+		dropped, err := c.subscriptions.replay(key, generation, func() error {
+			if capabilities.Resources == nil || !capabilities.Resources.Subscribe {
+				return fmt.Errorf("upstream %s no longer supports resources/subscribe", id)
+			}
+			srv, ok := c.currentConfig().GetServer(id.Server)
+			if !ok {
+				return fmt.Errorf("server no longer exists: %s", id.Server)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(srv.ToolTimeout())*time.Second)
+			defer cancel()
+			return handle.Client().SubscribeResource(ctx, key.URI)
+		})
+		if err != nil {
+			log.Printf("Failed to replay resources/subscribe on %s for %q: %v", id, key.URI, err)
+		}
+		c.notifyDroppedSubscriptions(dropped)
+	}
+}
+
+func (c *Core) notifyDroppedSubscriptions(sessions []*Session) {
+	for _, session := range sessions {
+		if session.opts.ExposeResources {
+			session.sendNotification("notifications/resources/list_changed")
+		}
+	}
+}
+
+func (c *Core) clearResourceStateForReload() {
+	c.subscriptions.clear()
+	for _, session := range c.sessionSnapshot() {
+		session.clearResourceState()
+	}
 }
 
 var _ process.Observer = (*Core)(nil)

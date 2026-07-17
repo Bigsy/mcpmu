@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/process"
 )
 
 // subscribeTestServer wires srv.Run over an io.Pipe so tests can write requests
@@ -221,10 +222,6 @@ func TestServer_ResourcesSubscribe_HappyPath(t *testing.T) {
 				"resources":                []any{map[string]any{"uri": "file:///a.txt", "name": "a"}},
 				"resourcesSubscribe":       true,
 				"emitUpdateAfterSubscribe": true,
-				// Give mcpmu time to register s.subs[uri] after the subscribe
-				// RPC returns — the plan ordering (call → set) is otherwise
-				// racy against an immediately-emitted update.
-				"postSubscribeEmitDelayMs": 50,
 			}),
 		},
 	}
@@ -389,10 +386,6 @@ func TestServer_ResourcesSubscribe_MixedCapability(t *testing.T) {
 				"resources":                []any{map[string]any{"uri": "file:///good.txt", "name": "good"}},
 				"resourcesSubscribe":       true,
 				"emitUpdateAfterSubscribe": true,
-				// Subscription intent is recorded after the upstream RPC returns
-				// until Phase 2C; avoid racing that known ordering in this
-				// mixed-capability test (the happy-path test does the same).
-				"postSubscribeEmitDelayMs": 50,
 			}),
 			"bad": fakeServerConfig(t, map[string]any{
 				"tools":              []any{},
@@ -488,8 +481,8 @@ func TestServer_ResourcesSubscribe_StrayNotificationDropped(t *testing.T) {
 // TestServer_ResourcesSubscribe_PostUnsubscribeUpdateDropped: after
 // unsubscribe, an upstream update for the same URI must not be forwarded
 // downstream. The fake emits an update right after responding to
-// unsubscribe; since the plan's ordering deletes s.subs after the RPC
-// succeeds, the subsequent update is dropped as stray.
+// unsubscribe; per-key transition serialization ensures local removal wins
+// before the queued update is dispatched downstream.
 func TestServer_ResourcesSubscribe_PostUnsubscribeUpdateDropped(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -504,10 +497,6 @@ func TestServer_ResourcesSubscribe_PostUnsubscribeUpdateDropped(t *testing.T) {
 				"resources":                  []any{map[string]any{"uri": "file:///a.txt", "name": "a"}},
 				"resourcesSubscribe":         true,
 				"emitUpdateAfterUnsubscribe": true,
-				// Give mcpmu time to delete s.subs[uri] after unsubscribe
-				// RPC returns before the fake emits the post-unsubscribe
-				// update (symmetric to the subscribe delay).
-				"postUnsubscribeEmitDelayMs": 50,
 			}),
 		},
 	}
@@ -619,7 +608,6 @@ func TestServer_ResourcesSubscribe_DuplicateURI(t *testing.T) {
 				"resourcesSubscribe":       true,
 				"requestLogPath":           logA,
 				"emitUpdateAfterSubscribe": true,
-				"postSubscribeEmitDelayMs": 50,
 			}),
 			"srv_b": fakeServerConfig(t, map[string]any{
 				"tools":              []any{},
@@ -650,7 +638,7 @@ func TestServer_ResourcesSubscribe_DuplicateURI(t *testing.T) {
 	h.srv.resourceMapMu.RUnlock()
 	if !ok {
 		t.Fatal("expected shared URI in resourceMap after list, missing")
-	} else if owner != "srv_a" {
+	} else if owner != process.SharedInstanceID("srv_a") {
 		t.Fatalf("namespace-order routing: expected srv_a to own shared URI, got %q", owner)
 	}
 

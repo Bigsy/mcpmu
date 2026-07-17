@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -63,6 +64,7 @@ type Session struct {
 	router                   *Router
 	unsubscribeNotifications func()
 	ownsCore                 bool
+	closeOnce                sync.Once
 
 	// Active namespace (resolved at init)
 	activeNamespaceName string          // Name of the active namespace
@@ -90,13 +92,13 @@ type Session struct {
 	// Resource routing is rebuilt atomically from each deterministic
 	// resources/list merge: original URI → first server in namespace order.
 	resourceMapMu sync.RWMutex
-	resourceMap   map[string]string
+	resourceMap   map[string]process.InstanceID
 
-	// Active resource subscriptions: URI → upstream server name. Populated
-	// by successful resources/subscribe calls; cleared on unsubscribe and on
-	// config reload. Guarded by subMu.
+	// Active resource subscriptions: URI → upstream instance. The Core owns
+	// daemon-wide refcounts; this per-session view filters notifications and
+	// drives disconnect cleanup. Guarded by subMu.
 	subMu sync.Mutex
-	subs  map[string]string
+	subs  map[string]process.InstanceID
 }
 
 // Server is retained as the embedded-serve API name. It is exactly one
@@ -125,8 +127,8 @@ func NewSession(core *Core, opts Options) (*Session, error) {
 		opts:        opts,
 		reader:      bufio.NewReader(opts.Stdin),
 		writer:      opts.Stdout,
-		subs:        make(map[string]string),
-		resourceMap: make(map[string]string),
+		subs:        make(map[string]process.InstanceID),
+		resourceMap: make(map[string]process.InstanceID),
 	}
 	s.router = NewRouter(core)
 	unsubscribe, err := core.notifications.Subscribe(s)
@@ -134,15 +136,51 @@ func NewSession(core *Core, opts Options) (*Session, error) {
 		return nil, err
 	}
 	s.unsubscribeNotifications = unsubscribe
+	core.registerSession(s)
 	return s, nil
 }
 
 // Close detaches the Session from Core notifications. Core lifetime remains
 // independent unless the Session was created by New for embedded serve.
 func (s *Session) Close() {
-	if s.unsubscribeNotifications != nil {
-		s.unsubscribeNotifications()
+	s.closeOnce.Do(func() {
+		s.resourceStateMu.RLock()
+		s.cleanupSessionSubscriptions(s)
+		s.resourceStateMu.RUnlock()
+		if s.unsubscribeNotifications != nil {
+			s.unsubscribeNotifications()
+		}
+		s.unregisterSession(s)
+	})
+}
+
+func (s *Session) setSubscription(key resourceSubscriptionKey) {
+	s.subMu.Lock()
+	s.subs[key.URI] = key.Instance
+	s.subMu.Unlock()
+}
+
+func (s *Session) deleteSubscription(key resourceSubscriptionKey) {
+	s.subMu.Lock()
+	if s.subs[key.URI] == key.Instance {
+		delete(s.subs, key.URI)
 	}
+	s.subMu.Unlock()
+}
+
+func (s *Session) subscriptionSnapshot() map[string]process.InstanceID {
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	return maps.Clone(s.subs)
+}
+
+func (s *Session) clearResourceState() {
+	s.subMu.Lock()
+	clear(s.subs)
+	s.subMu.Unlock()
+	s.resourceMapMu.Lock()
+	clear(s.resourceMap)
+	s.resourceMapMu.Unlock()
 }
 
 // readResult holds a line read from stdin and any error.
@@ -504,7 +542,7 @@ func (s *Server) OnUpstreamNotification(notification process.UpstreamNotificatio
 		s.subMu.Lock()
 		owner, ok := s.subs[p.URI]
 		s.subMu.Unlock()
-		if !ok || owner != serverName {
+		if !ok || owner != notification.Instance {
 			if DebugLogging {
 				log.Printf("resources/updated: dropping stray notification for %q from %s (owner=%q, subscribed=%t)",
 					p.URI, serverName, owner, ok)
@@ -641,6 +679,9 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 
 // handleResourcesList handles the resources/list request.
 func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
+	s.resourceStateMu.RLock()
+	defer s.resourceStateMu.RUnlock()
+
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -699,15 +740,16 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 	wg.Wait()
 
 	allResources := make([]listedResource, 0)
-	owners := make(map[string]string)
+	owners := make(map[string]process.InstanceID)
 	for index, result := range results {
 		serverName := activeServerNames[index]
+		instance := process.SharedInstanceID(serverName)
 		for _, r := range result.resources {
 			if firstOwner, exists := owners[r.URI]; exists {
 				log.Printf("resources/list URI collision for %q: keeping %s, omitting %s", r.URI, firstOwner, serverName)
 				continue
 			}
-			owners[r.URI] = serverName
+			owners[r.URI] = instance
 			allResources = append(allResources, listedResource{
 				URI:         r.URI,
 				Name:        r.Name,
@@ -729,6 +771,9 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 
 // handleResourcesRead handles the resources/read request.
 func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	s.resourceStateMu.RLock()
+	defer s.resourceStateMu.RUnlock()
+
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -746,16 +791,16 @@ func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage
 
 	// Look up which server owns this URI (populated by resources/list)
 	s.resourceMapMu.RLock()
-	serverName, ok := s.resourceMap[req.URI]
+	instance, ok := s.resourceMap[req.URI]
 	s.resourceMapMu.RUnlock()
 	if !ok {
 		return nil, ErrInvalidParams("unknown resource URI (has resources/list been called?): " + req.URI)
 	}
-	if !slices.Contains(activeServerNames, serverName) {
-		return nil, ErrServerNotFound(serverName)
+	if !slices.Contains(activeServerNames, instance.Server) {
+		return nil, ErrServerNotFound(instance.Server)
 	}
 
-	sc, rpcErr := s.getOrStartServer(ctx, serverName)
+	sc, rpcErr := s.getOrStartServer(ctx, instance.Server)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -765,7 +810,7 @@ func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage
 
 	contents, err := sc.client.ReadResource(callCtx, req.URI)
 	if err != nil {
-		return nil, ErrInternalError(fmt.Sprintf("resources/read from %s: %v", serverName, err))
+		return nil, ErrInternalError(fmt.Sprintf("resources/read from %s: %v", instance, err))
 	}
 
 	return struct {
@@ -775,6 +820,9 @@ func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage
 
 // handleResourcesSubscribe handles the resources/subscribe request.
 func (s *Server) handleResourcesSubscribe(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	s.resourceStateMu.RLock()
+	defer s.resourceStateMu.RUnlock()
+
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -794,34 +842,28 @@ func (s *Server) handleResourcesSubscribe(ctx context.Context, params json.RawMe
 	}
 
 	s.resourceMapMu.RLock()
-	serverName, ok := s.resourceMap[req.URI]
+	instance, ok := s.resourceMap[req.URI]
 	s.resourceMapMu.RUnlock()
 	if !ok {
 		return nil, ErrInvalidParams("unknown resource URI (has resources/list been called?): " + req.URI)
 	}
-	if !slices.Contains(activeServerNames, serverName) {
-		return nil, ErrServerNotFound(serverName)
+	if !slices.Contains(activeServerNames, instance.Server) {
+		return nil, ErrServerNotFound(instance.Server)
 	}
 
-	sc, rpcErr := s.getOrStartServer(ctx, serverName)
+	sc, rpcErr := s.getOrStartServer(ctx, instance.Server)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
 
 	if sc.capabilities.Resources == nil || !sc.capabilities.Resources.Subscribe {
-		return nil, ErrMethodNotFound(fmt.Sprintf("upstream %s does not support resources/subscribe", serverName))
+		return nil, ErrMethodNotFound(fmt.Sprintf("upstream %s does not support resources/subscribe", instance))
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, sc.timeout)
-	defer cancel()
-
-	if err := sc.client.SubscribeResource(callCtx, req.URI); err != nil {
-		return nil, ErrInternalError(fmt.Sprintf("resources/subscribe on %s: %v", serverName, err))
+	key := resourceSubscriptionKey{Instance: instance, URI: req.URI}
+	if err := s.subscribeResource(ctx, s, key, sc); err != nil {
+		return nil, ErrInternalError(fmt.Sprintf("resources/subscribe on %s: %v", instance, err))
 	}
-
-	s.subMu.Lock()
-	s.subs[req.URI] = serverName
-	s.subMu.Unlock()
 
 	return struct{}{}, nil
 }
@@ -830,12 +872,14 @@ func (s *Server) handleResourcesSubscribe(ctx context.Context, params json.RawMe
 // Unknown URIs are treated as idempotent success — clients often unsubscribe
 // defensively, and the URI may have been evicted by a concurrent resources/list.
 func (s *Server) handleResourcesUnsubscribe(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	s.resourceStateMu.RLock()
+	defer s.resourceStateMu.RUnlock()
+
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
 		return nil, ErrInvalidRequest("not initialized")
 	}
-	activeServerNames := s.activeServerNames
 	s.mu.RUnlock()
 
 	var req struct {
@@ -851,14 +895,14 @@ func (s *Server) handleResourcesUnsubscribe(ctx context.Context, params json.Raw
 	// Prefer s.subs for lookup (client may unsubscribe after a list refresh
 	// evicted resourceMap); fall back to resourceMap.
 	s.subMu.Lock()
-	serverName, known := s.subs[req.URI]
+	instance, known := s.subs[req.URI]
 	s.subMu.Unlock()
 	if !known {
 		s.resourceMapMu.RLock()
-		mappedServer, ok := s.resourceMap[req.URI]
+		mappedInstance, ok := s.resourceMap[req.URI]
 		s.resourceMapMu.RUnlock()
 		if ok {
-			serverName = mappedServer
+			instance = mappedInstance
 			known = true
 		}
 	}
@@ -867,30 +911,11 @@ func (s *Server) handleResourcesUnsubscribe(ctx context.Context, params json.Raw
 		return struct{}{}, nil
 	}
 
-	if !slices.Contains(activeServerNames, serverName) {
-		// Server no longer in the active namespace — clear local tracking
-		// and return success; there's no upstream to notify.
-		s.subMu.Lock()
-		delete(s.subs, req.URI)
-		s.subMu.Unlock()
-		return struct{}{}, nil
-	}
-
-	sc, rpcErr := s.getOrStartServer(ctx, serverName)
-	if rpcErr != nil {
-		return nil, rpcErr
-	}
-
-	callCtx, cancel := context.WithTimeout(ctx, sc.timeout)
-	defer cancel()
-
-	if err := sc.client.UnsubscribeResource(callCtx, req.URI); err != nil {
-		return nil, ErrInternalError(fmt.Sprintf("resources/unsubscribe on %s: %v", serverName, err))
-	}
-
-	s.subMu.Lock()
-	delete(s.subs, req.URI)
-	s.subMu.Unlock()
+	// Unsubscribe is always a local success. The Core sends an upstream RPC
+	// only for the 1→0 transition and logs (rather than surfacing) any failure.
+	// If the namespace changed, the same removal path skips a dead/missing
+	// upstream while still clearing retained intent.
+	s.unsubscribeResource(ctx, s, resourceSubscriptionKey{Instance: instance, URI: req.URI})
 
 	return struct{}{}, nil
 }
@@ -1193,6 +1218,9 @@ func (c *Core) watchConfig(ctx context.Context, configPath string) {
 // applyReload applies a new configuration, rebuilding all components.
 // Must be called from the Run() goroutine to serialize with request handling.
 func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
+	s.resourceStateMu.Lock()
+	defer s.resourceStateMu.Unlock()
+
 	log.Printf("Applying config reload: %d servers, %d namespaces",
 		len(newCfg.Servers), len(newCfg.Namespaces))
 
@@ -1200,12 +1228,7 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 	// transport ends the upstream-side subscription cleanly, so we only
 	// need to drop our local bookkeeping. No per-URI unsubscribe RPC is
 	// attempted — it would race with shutdown.
-	s.subMu.Lock()
-	clear(s.subs)
-	s.subMu.Unlock()
-	s.resourceMapMu.Lock()
-	clear(s.resourceMap)
-	s.resourceMapMu.Unlock()
+	s.clearResourceStateForReload()
 
 	// Advance the config generation before stopping instances. Any stale
 	// get-or-start path must revalidate under its instance lifecycle lock.

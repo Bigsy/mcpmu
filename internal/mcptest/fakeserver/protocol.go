@@ -67,7 +67,8 @@ type Config struct {
 
 	// EmitUpdateAfterSubscribe emits a notifications/resources/updated frame
 	// for the subscribed URI after responding to a successful
-	// resources/subscribe. JSON-serializable trigger for integration tests.
+	// resources/subscribe. JSON-serializable trigger for integration tests;
+	// zero delay intentionally stresses response/notification ordering.
 	EmitUpdateAfterSubscribe bool `json:"emitUpdateAfterSubscribe"`
 
 	// EmitUpdateAfterUnsubscribe emits a notifications/resources/updated frame
@@ -75,18 +76,12 @@ type Config struct {
 	// downstream clients don't receive updates for unsubscribed URIs.
 	EmitUpdateAfterUnsubscribe bool `json:"emitUpdateAfterUnsubscribe"`
 
-	// PostSubscribeEmitDelayMs is how long the server waits between writing
-	// the subscribe response and emitting the update when
-	// EmitUpdateAfterSubscribe is set. Models realistic upstream timing — a
-	// real server emits updates on actual resource changes, not before the
-	// client has even processed the subscribe response. Tests should set a
-	// non-zero value so downstream handlers have time to register the
-	// subscription mapping.
+	// PostSubscribeEmitDelayMs optionally waits between writing the subscribe
+	// response and emitting the update when EmitUpdateAfterSubscribe is set.
 	PostSubscribeEmitDelayMs int `json:"postSubscribeEmitDelayMs,omitempty"`
 
-	// PostUnsubscribeEmitDelayMs is the symmetric delay for
-	// EmitUpdateAfterUnsubscribe — gives the downstream server time to
-	// remove its local mapping after the unsubscribe RPC returns.
+	// PostUnsubscribeEmitDelayMs is the symmetric optional delay for
+	// EmitUpdateAfterUnsubscribe.
 	PostUnsubscribeEmitDelayMs int `json:"postUnsubscribeEmitDelayMs,omitempty"`
 
 	// RequestLogPath is a file path the server appends every handled JSON-RPC
