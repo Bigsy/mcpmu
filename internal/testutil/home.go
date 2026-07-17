@@ -9,7 +9,7 @@ import (
 
 // SetupTestHome creates an isolated $HOME directory for tests.
 // This is critical because:
-// - PIDTracker reads/writes ~/.config/mcpmu/pids.json
+// - PIDTracker reads/writes per-owner registries under ~/.config/mcpmu/
 // - Config reads/writes ~/.config/mcpmu/config.json
 // - Orphan cleanup runs on NewSupervisor() and could kill real processes
 //

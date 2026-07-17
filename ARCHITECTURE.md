@@ -76,11 +76,41 @@ The current stdio entry point is embedded mode: `server.New` constructs one
 `Core` and attaches exactly one stdio `Session` in the same process. Upstream
 notifications enter through a Core-owned broadcaster with one subscriber, so
 the Supervisor does not depend on a particular client connection. All lazy
-tool, resource, prompt, and discovery acquisition uses the same Core helper;
-it retains the fixed 10-second startup/readiness window.
+tool, resource, prompt, and discovery acquisition uses the same Core helper.
+That helper enforces each server's `startup_timeout_sec` (10 seconds by
+default) across startup, initialization, and initial tool discovery.
 
 This is an internal layering boundary only. It does not change the stdio wire
 protocol, process ownership, or user-facing lifecycle described above.
+
+### Process Lifecycle Foundations
+
+Every upstream is keyed internally by a stable `InstanceID`; current embedded
+mode constructs the shared identity from the server name, while the type can
+also carry the session discriminator needed by future private instances.
+Start, stop, and restart use one lock per instance. The enforced lock order is
+`instance lifecycle lock → Supervisor map lock → Handle lock`, and process
+exit is never awaited while holding the map lock. A config reload advances a
+Core generation before stopping upstreams. A get-or-start operation holding an
+older snapshot must revalidate the canonical JSON encoding of the complete
+`ServerConfig` under the lifecycle lock, so a removed or changed definition
+cannot be started after the reload barrier.
+
+Stdio servers run in their own Unix process group. Normal stop sends SIGTERM
+to the group, escalates to SIGKILL after five seconds, and does not retire the
+group identity until the leader is reaped and the group is empty. The leader
+watcher performs the same cleanup immediately when a wrapper exits before its
+workers, preventing a later restart from leaking those workers. Windows keeps
+the direct-child behavior; shared-daemon transport remains Unix-only.
+
+Crash recovery uses one atomic PID registry file per owner process rather than
+one shared read-modify-write file. Owner identity is PID + OS process-start
+identity + a random nonce; each entry records `InstanceID`, leader PID/start
+identity, PGID, and command metadata. Live-owner files are skipped. Dead-owner
+groups are signalled only while the recorded leader identity still matches;
+reused leaders are never signalled, and an unverifiable leaderless group is
+retained with a warning for manual cleanup. A newly spawned stdio process is
+stopped and its start fails if its identity cannot be persisted atomically.
 
 ### Config Compatibility (mcpServers-style)
 

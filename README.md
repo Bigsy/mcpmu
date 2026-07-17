@@ -183,11 +183,13 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 ## Features
 
 - **Stdio process management** — Spawn and supervise local MCP servers (npx, binaries, scripts)
+- **Process-tree cleanup** — Stop wrapper-launched workers with their parent and retain identity-validated crash recovery records
 - **Streamable HTTP/SSE** — Connect to remote MCP endpoints with full SSE support
 - **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`
 - **OAuth support** — Full OAuth 2.1 with PKCE, dynamic client registration, token management, and automatic scope discovery
 - **Hot-reload** — Serve mode watches the config file and automatically applies changes without restart
 - **Lazy or eager startup** — Start servers on-demand or pre-start everything with `--eager`
+- **Per-server startup bounds** — Apply `startup_timeout_sec` to connection, initialization, and initial discovery
 - **Registry browser** — Search the official MCP server registry from the TUI and install with pre-populated config (`a` → Official Registry)
 - **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
 - **Web UI** — Browser-based management via `mcpmu web` with live log streaming, CRUD operations, and registry browser

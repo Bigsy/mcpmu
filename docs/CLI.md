@@ -47,7 +47,7 @@ Note: `--bearer-env` and OAuth flags are mutually exclusive. `--header` and `--e
 
 **General (stdio and HTTP):**
 - `--autostart` — start server automatically on app launch
-- `--startup-timeout` — startup timeout in seconds (default: 10)
+- `--startup-timeout` — connection, initialization, and initial-discovery timeout in seconds (default: 10)
 - `--tool-timeout` — tool call timeout in seconds (default: 60)
 
 ## OAuth authentication
@@ -206,7 +206,7 @@ With bearer token auth:
 | `oauth.client_secret` | OAuth client secret (for confidential clients) |
 | `oauth.callback_port` | Per-server OAuth callback port (overrides global) |
 | `oauth.scopes` | OAuth scopes to request (auto-discovered from server if omitted) |
-| `startup_timeout_sec` | Connection timeout (default: 10) |
+| `startup_timeout_sec` | Connection, initialization, and initial-discovery timeout (default: 10) |
 | `tool_timeout_sec` | Tool call timeout (default: 60) |
 
 ### Global config fields

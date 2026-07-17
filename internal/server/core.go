@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -18,8 +20,9 @@ import (
 // processes, tool aggregation, configuration, hot-reload input, and the
 // upstream notification entry point.
 type Core struct {
-	coreMu sync.RWMutex
-	cfg    *config.Config
+	coreMu           sync.RWMutex
+	cfg              *config.Config
+	configGeneration uint64
 
 	bus        *events.Bus
 	supervisor *process.Supervisor
@@ -60,13 +63,14 @@ func NewCore(opts Options) (*Core, error) {
 
 	broadcaster := &singleSubscriberBroadcaster{}
 	c := &Core{
-		cfg:           opts.Config,
-		bus:           bus,
-		supervisor:    supervisor,
-		notifications: broadcaster,
-		reloadCh:      make(chan *config.Config, 1),
-		configPath:    opts.ConfigPath,
-		debounceDelay: opts.DebounceDelay,
+		cfg:              opts.Config,
+		configGeneration: 1,
+		bus:              bus,
+		supervisor:       supervisor,
+		notifications:    broadcaster,
+		reloadCh:         make(chan *config.Config, 1),
+		configPath:       opts.ConfigPath,
+		debounceDelay:    opts.DebounceDelay,
 	}
 	c.aggregator = NewAggregator(c.cfg, supervisor, false)
 	c.aggregator.acquire = c.getOrStartHandle
@@ -95,6 +99,7 @@ func (c *Core) replaceConfig(cfg *config.Config) *Aggregator {
 	c.coreMu.Lock()
 	c.cfg = cfg
 	c.aggregator = aggregator
+	c.configGeneration++
 	c.coreMu.Unlock()
 	return aggregator
 }
@@ -109,10 +114,66 @@ type serverClient struct {
 }
 
 // getOrStartHandle is the one lazy-start/readiness path used by tools,
-// resources, prompts, and discovery. The fixed ten-second lazy-start window
-// is intentionally retained; per-server startup timeouts land in Phase 2A.
+// resources, prompts, and discovery. It snapshots the complete server config,
+// then revalidates it under the instance lifecycle lock before a start.
 func (c *Core) getOrStartHandle(ctx context.Context, serverName string) (*process.Handle, config.ServerConfig, error) {
-	return getOrStartHandle(ctx, c.currentConfig(), c.supervisor, serverName)
+	c.coreMu.RLock()
+	snapshotGeneration := c.configGeneration
+	srv, ok := c.cfg.GetServer(serverName)
+	c.coreMu.RUnlock()
+	if !ok {
+		return nil, config.ServerConfig{}, fmt.Errorf("server not found: %s", serverName)
+	}
+	if !srv.IsEnabled() {
+		return nil, config.ServerConfig{}, fmt.Errorf("server is disabled: %s", serverName)
+	}
+	snapshot, err := normalizedServerConfig(srv)
+	if err != nil {
+		return nil, config.ServerConfig{}, err
+	}
+
+	startCtx, cancel := context.WithTimeout(ctx, time.Duration(srv.StartupTimeout())*time.Second)
+	defer cancel()
+
+	handle, err := c.supervisor.StartInstance(
+		startCtx,
+		process.SharedInstanceID(serverName),
+		srv,
+		func() error {
+			c.coreMu.RLock()
+			defer c.coreMu.RUnlock()
+			if c.configGeneration == snapshotGeneration {
+				return nil
+			}
+			current, exists := c.cfg.GetServer(serverName)
+			if !exists {
+				return fmt.Errorf("server removed during config reload: %s", serverName)
+			}
+			currentNormalized, normalizeErr := normalizedServerConfig(current)
+			if normalizeErr != nil {
+				return normalizeErr
+			}
+			if !bytes.Equal(snapshot, currentNormalized) {
+				return fmt.Errorf("server config changed during reload: %s", serverName)
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, config.ServerConfig{}, fmt.Errorf("start server: %w", err)
+	}
+	if err := handle.WaitForTools(startCtx); err != nil {
+		return nil, config.ServerConfig{}, fmt.Errorf("wait for tools: %w", err)
+	}
+	return handle, srv, nil
+}
+
+func normalizedServerConfig(srv config.ServerConfig) ([]byte, error) {
+	encoded, err := json.Marshal(srv)
+	if err != nil {
+		return nil, fmt.Errorf("normalize server config: %w", err)
+	}
+	return encoded, nil
 }
 
 func getOrStartHandle(
@@ -129,16 +190,12 @@ func getOrStartHandle(
 		return nil, config.ServerConfig{}, fmt.Errorf("server is disabled: %s", serverName)
 	}
 
-	startCtx, cancel := context.WithTimeout(ctx, LazyStartTimeout)
+	startCtx, cancel := context.WithTimeout(ctx, time.Duration(srv.StartupTimeout())*time.Second)
 	defer cancel()
 
-	handle := supervisor.Get(serverName)
-	if handle == nil || !handle.IsRunning() {
-		var err error
-		handle, err = supervisor.Start(startCtx, serverName, srv)
-		if err != nil {
-			return nil, config.ServerConfig{}, fmt.Errorf("start server: %w", err)
-		}
+	handle, err := supervisor.Start(startCtx, serverName, srv)
+	if err != nil {
+		return nil, config.ServerConfig{}, fmt.Errorf("start server: %w", err)
 	}
 	if err := handle.WaitForTools(startCtx); err != nil {
 		return nil, config.ServerConfig{}, fmt.Errorf("wait for tools: %w", err)

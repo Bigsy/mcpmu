@@ -2,23 +2,23 @@
 package process
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
 const (
-	pidsFile = "pids.json"
+	legacyPIDsFile = "pids.json"
+	pidFileVersion = 2
 
 	// MaxRetryCount is the maximum number of cleanup attempts before giving up.
 	// This prevents the PID file from growing unbounded with unverifiable entries.
@@ -27,19 +27,35 @@ const (
 
 // pidEntry stores PID and metadata for orphan detection.
 type pidEntry struct {
-	PID               int       `json:"pid"`
-	Command           string    `json:"command"`                     // Command used to start the process
-	Args              []string  `json:"args,omitempty"`              // Arguments for better matching
-	StartedAt         time.Time `json:"startedAt"`                   // Wall clock time when we started it
-	ProcessStartTicks int64     `json:"processStartTicks,omitempty"` // OS-level process start time (for PID reuse detection)
-	RetryCount        int       `json:"retryCount,omitempty"`        // Number of failed verification attempts
+	Instance          InstanceID `json:"instance"`
+	PID               int        `json:"pid"`
+	PGID              int        `json:"pgid,omitempty"`
+	Command           string     `json:"command"`                     // Command used to start the process
+	Args              []string   `json:"args,omitempty"`              // Arguments for better matching
+	StartedAt         time.Time  `json:"startedAt"`                   // Wall clock time when we started it
+	ProcessStartTicks int64      `json:"processStartTicks,omitempty"` // OS-level process start time (for PID reuse detection)
+	RetryCount        int        `json:"retryCount,omitempty"`        // Number of failed verification attempts
+}
+
+type ownerIdentity struct {
+	PID               int    `json:"pid"`
+	ProcessStartTicks int64  `json:"processStartTicks"`
+	Nonce             string `json:"nonce"`
+}
+
+type pidRegistry struct {
+	Version int           `json:"version"`
+	Owner   ownerIdentity `json:"owner"`
+	Entries []pidEntry    `json:"entries"`
 }
 
 // PIDTracker tracks running server PIDs to detect and clean up orphans.
 type PIDTracker struct {
-	path string
-	pids map[string]pidEntry // serverID -> entry
-	mu   sync.Mutex
+	dir   string
+	path  string
+	owner ownerIdentity
+	pids  map[InstanceID]pidEntry
+	mu    sync.Mutex
 }
 
 // NewPIDTracker creates a new PID tracker using the default directory.
@@ -52,10 +68,10 @@ func NewPIDTrackerWithDir(dir string) (*PIDTracker, error) {
 	return NewPIDTrackerInDir(dir, "")
 }
 
-// NewPIDTrackerInDir creates a PID tracker in the given directory with an optional file prefix.
+// NewPIDTrackerInDir creates a per-owner PID tracker in the given directory.
 // If dir is empty, uses the default ~/.config/mcpmu/ directory.
-// If prefix is non-empty (e.g. "web"), the file becomes "pids-web.json" instead of "pids.json",
-// isolating different manager modes so they don't kill each other's tracked processes.
+// The optional prefix is retained for operator readability; owner identity,
+// rather than manager mode, provides concurrency-safe isolation.
 func NewPIDTrackerInDir(dir, prefix string) (*PIDTracker, error) {
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -65,82 +81,121 @@ func NewPIDTrackerInDir(dir, prefix string) (*PIDTracker, error) {
 		dir = filepath.Join(home, ".config", "mcpmu")
 	}
 
-	fileName := pidsFile
-	if prefix != "" {
-		fileName = "pids-" + prefix + ".json"
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("create PID registry directory: %w", err)
 	}
+
+	startTicks, err := getProcessStartTicks(os.Getpid())
+	if err != nil {
+		return nil, fmt.Errorf("identify PID registry owner: %w", err)
+	}
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return nil, fmt.Errorf("create PID registry owner nonce: %w", err)
+	}
+	owner := ownerIdentity{
+		PID:               os.Getpid(),
+		ProcessStartTicks: startTicks,
+		Nonce:             hex.EncodeToString(nonceBytes),
+	}
+
+	filePrefix := "pids"
+	if prefix != "" {
+		filePrefix += "-" + prefix
+	}
+	fileName := fmt.Sprintf("%s-owner-%d-%s.json", filePrefix, owner.PID, owner.Nonce)
 
 	pt := &PIDTracker{
-		path: filepath.Join(dir, fileName),
-		pids: make(map[string]pidEntry),
+		dir:   dir,
+		path:  filepath.Join(dir, fileName),
+		owner: owner,
+		pids:  make(map[InstanceID]pidEntry),
 	}
-
-	// Load existing PIDs
-	pt.load()
 
 	return pt, nil
 }
 
-// load reads PIDs from the tracking file (caller must hold lock or be in constructor).
-func (pt *PIDTracker) load() {
-	data, err := os.ReadFile(pt.path)
-	if err != nil {
-		// File doesn't exist or can't be read, start fresh
-		return
-	}
-
-	if err := json.Unmarshal(data, &pt.pids); err != nil {
-		log.Printf("Failed to parse PID file, starting fresh")
-		pt.pids = make(map[string]pidEntry)
-	}
-}
-
-// save writes PIDs to the tracking file (caller must hold lock).
+// save writes only this owner's registry using temp-file + atomic rename.
 func (pt *PIDTracker) save() error {
-	// Ensure directory exists
-	dir := filepath.Dir(pt.path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
+	if len(pt.pids) == 0 {
+		if err := os.Remove(pt.path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
 	}
 
-	data, err := json.MarshalIndent(pt.pids, "", "  ")
-	if err != nil {
-		return err
+	entries := make([]pidEntry, 0, len(pt.pids))
+	for _, entry := range pt.pids {
+		entries = append(entries, entry)
 	}
-
-	return os.WriteFile(pt.path, data, 0600)
+	record := pidRegistry{Version: pidFileVersion, Owner: pt.owner, Entries: entries}
+	return writeRegistryAtomic(pt.path, record)
 }
 
 // Add tracks a new PID for a server.
 func (pt *PIDTracker) Add(serverID string, pid int, command string, args []string) error {
+	return pt.AddInstance(SharedInstanceID(serverID), pid, pid, command, args)
+}
+
+// AddInstance tracks a process leader and its process group for one instance.
+func (pt *PIDTracker) AddInstance(instance InstanceID, pid, pgid int, command string, args []string) error {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
 	entry := pidEntry{
+		Instance:  instance,
 		PID:       pid,
+		PGID:      pgid,
 		Command:   command,
-		Args:      args,
+		Args:      append([]string(nil), args...),
 		StartedAt: time.Now(),
 	}
 
-	// Capture process start time for PID reuse detection
-	if startTicks, err := getProcessStartTicks(pid); err == nil {
-		entry.ProcessStartTicks = startTicks
-	} else {
-		log.Printf("Warning: could not get start ticks for PID %d: %v", pid, err)
+	startTicks, err := getProcessStartTicks(pid)
+	if err != nil {
+		return fmt.Errorf("identify process leader %d: %w", pid, err)
 	}
+	entry.ProcessStartTicks = startTicks
 
-	pt.pids[serverID] = entry
-	return pt.save()
+	previous, hadPrevious := pt.pids[instance]
+	pt.pids[instance] = entry
+	if err := pt.save(); err != nil {
+		if hadPrevious {
+			pt.pids[instance] = previous
+		} else {
+			delete(pt.pids, instance)
+		}
+		return err
+	}
+	return nil
 }
 
 // Remove stops tracking a PID.
 func (pt *PIDTracker) Remove(serverID string) error {
+	return pt.RemoveInstance(SharedInstanceID(serverID))
+}
+
+// RemoveInstance stops tracking an instance in this owner's registry.
+func (pt *PIDTracker) RemoveInstance(instance InstanceID) error {
+	return pt.RemoveInstancePID(instance, 0)
+}
+
+// RemoveInstancePID removes an entry only if it still refers to the expected
+// leader PID. A zero PID requests unconditional removal for compatibility.
+func (pt *PIDTracker) RemoveInstancePID(instance InstanceID, expectedPID int) error {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
-	delete(pt.pids, serverID)
-	return pt.save()
+	previous, exists := pt.pids[instance]
+	if !exists || expectedPID != 0 && previous.PID != expectedPID {
+		return nil
+	}
+	delete(pt.pids, instance)
+	if err := pt.save(); err != nil {
+		pt.pids[instance] = previous
+		return err
+	}
+	return nil
 }
 
 // verifyResult represents the outcome of process ownership verification.
@@ -153,68 +208,209 @@ const (
 	verifyUncertain                           // Can't verify ownership - keep entry and retry later
 )
 
-// CleanupOrphans checks for and terminates orphaned processes.
-// Returns the number of orphans killed.
+// CleanupOrphans scans other owners' registry files. Live, identity-matching
+// owners are skipped; dead owners are cleaned conservatively.
 func (pt *PIDTracker) CleanupOrphans() int {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
+	paths, err := filepath.Glob(filepath.Join(pt.dir, "pids*.json"))
+	if err != nil {
+		log.Printf("Failed to scan PID registries: %v", err)
+		return 0
+	}
+
 	killed := 0
-	toDelete := make([]string, 0)
-	toUpdate := make(map[string]pidEntry)
+	for _, path := range paths {
+		if path == pt.path {
+			continue
+		}
+		count, err := pt.cleanupRegistry(path)
+		if err != nil {
+			log.Printf("Failed to clean PID registry %s: %v", path, err)
+			continue
+		}
+		killed += count
+	}
+	return killed
+}
 
-	for serverID, entry := range pt.pids {
-		result := pt.verifyProcessOwnership(entry)
+func (pt *PIDTracker) cleanupRegistry(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
 
-		switch result {
-		case verifyProcessGone:
-			log.Printf("Process %d (server=%s) no longer running, removing from tracking",
-				entry.PID, serverID)
-			toDelete = append(toDelete, serverID)
+	var record pidRegistry
+	if err := json.Unmarshal(data, &record); err != nil || record.Version != pidFileVersion {
+		return pt.cleanupLegacyRegistry(path, data)
+	}
 
-		case verifyConfirmedReused:
-			log.Printf("PID %d was reused by different process (server=%s), removing from tracking",
-				entry.PID, serverID)
-			toDelete = append(toDelete, serverID)
+	ownerResult := verifyIdentity(record.Owner.PID, record.Owner.ProcessStartTicks)
+	if ownerResult == verifyConfirmedOwned {
+		return 0, nil
+	}
+	if ownerResult == verifyUncertain {
+		return 0, fmt.Errorf("cannot verify registry owner pid=%d", record.Owner.PID)
+	}
 
+	killed := 0
+	remaining := record.Entries[:0]
+	for _, entry := range record.Entries {
+		resolved, terminated := pt.cleanupDeadOwnerEntry(entry)
+		if terminated {
+			killed++
+		}
+		if !resolved {
+			remaining = append(remaining, entry)
+		}
+	}
+	record.Entries = remaining
+	if len(record.Entries) == 0 {
+		return killed, removeRegistry(path)
+	}
+	return killed, writeRegistryAtomic(path, record)
+}
+
+func (pt *PIDTracker) cleanupDeadOwnerEntry(entry pidEntry) (resolved, terminated bool) {
+	identity := pt.verifyProcessOwnership(entry)
+	switch identity {
+	case verifyConfirmedOwned:
+		log.Printf("Found orphan process group: instance=%s pid=%d pgid=%d, terminating",
+			entry.Instance, entry.PID, entry.PGID)
+		if err := terminateTrackedProcess(entry); err != nil {
+			log.Printf("Failed to terminate orphan instance=%s: %v", entry.Instance, err)
+			return false, false
+		}
+		return true, true
+	case verifyConfirmedReused:
+		log.Printf("PID %d was reused; refusing to signal recorded group for instance=%s",
+			entry.PID, entry.Instance)
+		return true, false
+	case verifyProcessGone:
+		alive, err := processGroupAlive(entry.PGID)
+		if err != nil {
+			log.Printf("Cannot inspect leaderless group %d for instance=%s: %v",
+				entry.PGID, entry.Instance, err)
+			return false, false
+		}
+		if alive {
+			log.Printf("Retaining unverifiable leaderless group %d for instance=%s; manual cleanup required",
+				entry.PGID, entry.Instance)
+			return false, false
+		}
+		return true, false
+	case verifyUncertain:
+		return false, false
+	default:
+		return false, false
+	}
+}
+
+func terminateTrackedProcess(entry pidEntry) error {
+	if entry.PGID > 0 {
+		return terminateProcessGroup(entry.PGID, GracefulShutdownTimeout)
+	}
+	return killProcess(entry.PID)
+}
+
+func (pt *PIDTracker) cleanupLegacyRegistry(path string, data []byte) (int, error) {
+	var entries map[string]pidEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return 0, fmt.Errorf("parse PID registry: %w", err)
+	}
+
+	killed := 0
+	for serverName, entry := range entries {
+		entry.Instance = SharedInstanceID(serverName)
+		switch pt.verifyProcessOwnership(entry) {
 		case verifyConfirmedOwned:
-			log.Printf("Found orphan process: server=%s pid=%d cmd=%s, terminating",
-				serverID, entry.PID, entry.Command)
 			if err := killProcess(entry.PID); err != nil {
-				log.Printf("Failed to kill orphan pid=%d: %v", entry.PID, err)
-			} else {
-				killed++
+				entry.RetryCount++
+				entries[serverName] = entry
+				continue
 			}
-			toDelete = append(toDelete, serverID)
-
+			killed++
+			delete(entries, serverName)
+		case verifyConfirmedReused, verifyProcessGone:
+			delete(entries, serverName)
 		case verifyUncertain:
 			entry.RetryCount++
 			if entry.RetryCount >= MaxRetryCount {
-				log.Printf("Max retries (%d) reached for PID %d (server=%s), giving up",
-					MaxRetryCount, entry.PID, serverID)
-				toDelete = append(toDelete, serverID)
+				delete(entries, serverName)
 			} else {
-				log.Printf("Cannot verify ownership of PID %d (server=%s), will retry (attempt %d/%d)",
-					entry.PID, serverID, entry.RetryCount, MaxRetryCount)
-				toUpdate[serverID] = entry
+				entries[serverName] = entry
 			}
 		}
 	}
-
-	// Apply deletions
-	for _, serverID := range toDelete {
-		delete(pt.pids, serverID)
+	if len(entries) == 0 {
+		return killed, removeRegistry(path)
 	}
-
-	// Apply updates (retry count increments)
-	maps.Copy(pt.pids, toUpdate)
-
-	// Save the updated state
-	if err := pt.save(); err != nil {
-		log.Printf("Failed to save PID file after cleanup: %v", err)
+	updated, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return killed, err
 	}
+	return killed, writeBytesAtomic(path, updated)
+}
 
-	return killed
+func writeRegistryAtomic(path string, record pidRegistry) error {
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeBytesAtomic(path, data)
+}
+
+func writeBytesAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".pids-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func removeRegistry(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func verifyIdentity(pid int, startTicks int64) verifyResult {
+	if !isProcessRunning(pid) {
+		return verifyProcessGone
+	}
+	if startTicks <= 0 {
+		return verifyUncertain
+	}
+	current, err := getProcessStartTicks(pid)
+	if err != nil {
+		return verifyUncertain
+	}
+	if current != startTicks {
+		return verifyConfirmedReused
+	}
+	return verifyConfirmedOwned
 }
 
 // verifyProcessOwnership determines if we still own the process at the given PID.
@@ -259,92 +455,14 @@ func (pt *PIDTracker) verifyProcessOwnership(entry pidEntry) verifyResult {
 
 // isProcessRunning checks if a process with the given PID exists.
 func isProcessRunning(pid int) bool {
-	// Signal 0 doesn't send a signal but checks if the process exists
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = process.Signal(syscall.Signal(0))
-	return err == nil
+	return processRunning(pid)
 }
 
 // getProcessStartTicks returns the OS-level process start time.
 // On Linux: clock ticks since boot from /proc/<pid>/stat field 22
-// On macOS: process start time as Unix timestamp from ps
+// On macOS: native kernel process start time from sysctl.
 func getProcessStartTicks(pid int) (int64, error) {
-	switch runtime.GOOS {
-	case "linux":
-		return getProcessStartTicksLinux(pid)
-	case "darwin", "freebsd":
-		return getProcessStartTicksDarwin(pid)
-	default:
-		return 0, fmt.Errorf("unsupported OS: %s", runtime.GOOS)
-	}
-}
-
-// getProcessStartTicksLinux reads starttime from /proc/<pid>/stat (field 22).
-func getProcessStartTicksLinux(pid int) (int64, error) {
-	statPath := fmt.Sprintf("/proc/%d/stat", pid)
-	data, err := os.ReadFile(statPath)
-	if err != nil {
-		return 0, err
-	}
-
-	// Format: pid (comm) state ppid ... starttime ...
-	// Field 22 is starttime (0-indexed from after the comm field)
-	// The comm field can contain spaces and parens, so find the last ')' first
-	content := string(data)
-	lastParen := strings.LastIndex(content, ")")
-	if lastParen == -1 {
-		return 0, fmt.Errorf("malformed /proc/%d/stat", pid)
-	}
-
-	// Fields after the comm field
-	fields := strings.Fields(content[lastParen+1:])
-	// starttime is field 22 overall, which is index 19 after comm (fields 1-2 are pid and comm)
-	// After ')', we have: state(3) ppid(4) pgrp(5) session(6) tty_nr(7) tpgid(8) flags(9)
-	// minflt(10) cminflt(11) majflt(12) cmajflt(13) utime(14) stime(15) cutime(16) cstime(17)
-	// priority(18) nice(19) num_threads(20) itrealvalue(21) starttime(22)
-	// So starttime is at index 19 (0-based) in the fields after ')'
-	if len(fields) < 20 {
-		return 0, fmt.Errorf("not enough fields in /proc/%d/stat", pid)
-	}
-
-	starttime, err := strconv.ParseInt(fields[19], 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse starttime: %w", err)
-	}
-
-	return starttime, nil
-}
-
-// getProcessStartTicksDarwin uses ps to get process start time as Unix epoch.
-func getProcessStartTicksDarwin(pid int) (int64, error) {
-	// ps -p <pid> -o lstart= gives something like "Sat Jan 25 19:00:00 2026"
-	cmd := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "lstart=")
-	// Force a stable locale so month/day names stay parseable on non-English systems.
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
-	out, err := cmd.Output()
-	if err != nil {
-		return 0, err
-	}
-
-	timeStr := strings.TrimSpace(string(out))
-	if timeStr == "" {
-		return 0, fmt.Errorf("empty lstart for PID %d", pid)
-	}
-
-	// Parse the time format: "Mon Jan  2 15:04:05 2006"
-	t, err := time.Parse("Mon Jan  2 15:04:05 2006", timeStr)
-	if err != nil {
-		// Try alternate format with single-digit day
-		t, err = time.Parse("Mon Jan 2 15:04:05 2006", timeStr)
-		if err != nil {
-			return 0, fmt.Errorf("parse lstart %q: %w", timeStr, err)
-		}
-	}
-
-	return t.Unix(), nil
+	return getProcessStartTicksPlatform(pid)
 }
 
 // getProcessCmdline returns the full command line of a process.
@@ -438,20 +556,7 @@ func matchesCmdline(pid int, expectedCmd string, expectedArgs []string) bool {
 
 // killProcess terminates a process gracefully.
 func killProcess(pid int) error {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-
-	// Try SIGTERM first
-	if err := process.Signal(syscall.SIGTERM); err != nil {
-		// Process might already be gone
-		return nil
-	}
-
-	// We don't wait here since we're cleaning up orphans on startup
-	// and don't want to block. The process will be cleaned up by the OS.
-	return nil
+	return terminateProcess(pid)
 }
 
 // Legacy compatibility: Add with old signature (for existing callers)

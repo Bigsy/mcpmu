@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-const (
-	// LazyStartTimeout is the max time to wait for a lazy server start
-	LazyStartTimeout = 10 * time.Second
-)
-
 // Router routes tool calls to the appropriate upstream server.
 type Router struct {
 	core *Core
@@ -254,16 +249,8 @@ func (r *Router) handleServersRestart(ctx context.Context, arguments json.RawMes
 		return nil, ErrServerNotFound(serverName)
 	}
 
-	// Stop if running
-	handle := r.core.supervisor.Get(serverName)
-	if handle != nil && handle.IsRunning() {
-		if err := r.core.supervisor.Stop(serverName); err != nil {
-			return nil, ErrInternalError(fmt.Sprintf("failed to stop server: %v", err))
-		}
-	}
-
-	// Start the server
-	handle, err := r.core.supervisor.Start(ctx, serverName, srv)
+	// Stop and start under one per-instance lifecycle lock.
+	handle, err := r.core.supervisor.Restart(ctx, serverName, srv)
 	if err != nil {
 		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}

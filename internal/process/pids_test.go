@@ -1,15 +1,43 @@
 package process
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/testutil"
 )
+
+func writeLegacyPIDEntries(t *testing.T, pt *PIDTracker, entries map[string]pidEntry) string {
+	t.Helper()
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal legacy PID entries: %v", err)
+	}
+	path := filepath.Join(pt.dir, legacyPIDsFile)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("write legacy PID entries: %v", err)
+	}
+	return path
+}
+
+func readLegacyPIDEntries(t *testing.T, path string) map[string]pidEntry {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read legacy PID entries: %v", err)
+	}
+	var entries map[string]pidEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("parse legacy PID entries: %v", err)
+	}
+	return entries
+}
 
 // skipIfPsUnavailable skips the test if the ps command is unavailable or blocked.
 // This is common in sandboxed CI environments on macOS/FreeBSD where ps may fail.
@@ -32,24 +60,30 @@ func TestPIDTracker_AddAndRemove(t *testing.T) {
 		t.Fatalf("NewPIDTracker failed: %v", err)
 	}
 
-	// Add a PID
-	err = pt.Add("test-server", 12345, "/usr/bin/node", []string{"server.js"})
+	// Add the current PID. The tracker requires a real start identity so crash
+	// cleanup can never rely on a bare, potentially reused PID.
+	err = pt.Add("test-server", os.Getpid(), "/usr/bin/node", []string{"server.js"})
 	if err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
 
-	// Verify it was saved
-	pt2, err := NewPIDTracker()
+	data, err := os.ReadFile(pt.path)
 	if err != nil {
-		t.Fatalf("NewPIDTracker (reload) failed: %v", err)
+		t.Fatalf("read owner registry: %v", err)
 	}
-
-	entry, ok := pt2.pids["test-server"]
-	if !ok {
-		t.Fatal("expected test-server to be tracked")
+	var record pidRegistry
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatalf("parse owner registry: %v", err)
 	}
-	if entry.PID != 12345 {
-		t.Errorf("expected PID 12345, got %d", entry.PID)
+	if len(record.Entries) != 1 {
+		t.Fatalf("expected one tracked entry, got %d", len(record.Entries))
+	}
+	entry := record.Entries[0]
+	if entry.Instance != SharedInstanceID("test-server") {
+		t.Errorf("unexpected instance: %v", entry.Instance)
+	}
+	if entry.PID != os.Getpid() {
+		t.Errorf("expected PID %d, got %d", os.Getpid(), entry.PID)
 	}
 	if entry.Command != "/usr/bin/node" {
 		t.Errorf("expected command '/usr/bin/node', got %q", entry.Command)
@@ -64,13 +98,8 @@ func TestPIDTracker_AddAndRemove(t *testing.T) {
 		t.Fatalf("Remove failed: %v", err)
 	}
 
-	// Verify removal was saved
-	pt3, err := NewPIDTracker()
-	if err != nil {
-		t.Fatalf("NewPIDTracker (reload after remove) failed: %v", err)
-	}
-	if _, ok := pt3.pids["test-server"]; ok {
-		t.Error("expected test-server to be removed")
+	if _, err := os.Stat(pt.path); !os.IsNotExist(err) {
+		t.Errorf("expected empty owner registry to be removed, stat err=%v", err)
 	}
 }
 
@@ -83,13 +112,13 @@ func TestPIDTracker_CleanupOrphans_ProcessGone(t *testing.T) {
 	}
 
 	// Add a PID that doesn't exist (high unlikely PID)
-	pt.pids["gone-server"] = pidEntry{
+	path := writeLegacyPIDEntries(t, pt, map[string]pidEntry{"gone-server": {
 		PID:               999999,
 		Command:           "/usr/bin/fake",
 		Args:              []string{},
 		StartedAt:         time.Now().Add(-time.Hour),
 		ProcessStartTicks: 12345,
-	}
+	}})
 
 	killed := pt.CleanupOrphans()
 
@@ -99,8 +128,8 @@ func TestPIDTracker_CleanupOrphans_ProcessGone(t *testing.T) {
 	}
 
 	// Entry should be removed
-	if _, ok := pt.pids["gone-server"]; ok {
-		t.Error("expected gone-server to be removed from tracking")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected resolved legacy registry to be removed, stat err=%v", err)
 	}
 }
 
@@ -115,19 +144,20 @@ func TestPIDTracker_CleanupOrphans_RetryCount(t *testing.T) {
 
 	// Use current process PID (it exists, but command won't match and no start ticks)
 	// This will trigger verifyUncertain
-	pt.pids["uncertain-server"] = pidEntry{
+	path := writeLegacyPIDEntries(t, pt, map[string]pidEntry{"uncertain-server": {
 		PID:        os.Getpid(),
 		Command:    "/some/nonexistent/command",
 		Args:       []string{},
 		StartedAt:  time.Now().Add(-time.Hour),
 		RetryCount: 0,
 		// No ProcessStartTicks - can't verify via start time
-	}
+	}})
 
 	// First cleanup - should increment retry count
 	pt.CleanupOrphans()
 
-	entry, ok := pt.pids["uncertain-server"]
+	entries := readLegacyPIDEntries(t, path)
+	entry, ok := entries["uncertain-server"]
 	if !ok {
 		t.Fatal("expected uncertain-server to still be tracked")
 	}
@@ -137,13 +167,13 @@ func TestPIDTracker_CleanupOrphans_RetryCount(t *testing.T) {
 
 	// Set retry count to max-1
 	entry.RetryCount = MaxRetryCount - 1
-	pt.pids["uncertain-server"] = entry
+	writeLegacyPIDEntries(t, pt, map[string]pidEntry{"uncertain-server": entry})
 
 	// This cleanup should hit max and remove
 	pt.CleanupOrphans()
 
-	if _, ok := pt.pids["uncertain-server"]; ok {
-		t.Error("expected uncertain-server to be removed after max retries")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected uncertain registry to retire after max retries, stat err=%v", err)
 	}
 }
 
@@ -251,13 +281,13 @@ func TestPIDTracker_PIDReuse_DetectedViaStartTicks(t *testing.T) {
 
 	// Record a fake entry with the same PID but different start ticks
 	// This represents the "old" process that died and whose PID was reused
-	pt.pids["reused-server"] = pidEntry{
+	path := writeLegacyPIDEntries(t, pt, map[string]pidEntry{"reused-server": {
 		PID:               currentPID,
 		Command:           "/some/old/command",
 		Args:              []string{"old-arg"},
 		StartedAt:         time.Now().Add(-time.Hour),
 		ProcessStartTicks: actualTicks + 99999, // Different from actual!
-	}
+	}})
 
 	// Run cleanup - should detect PID reuse and NOT kill the process
 	killed := pt.CleanupOrphans()
@@ -268,8 +298,8 @@ func TestPIDTracker_PIDReuse_DetectedViaStartTicks(t *testing.T) {
 	}
 
 	// Entry should be removed from tracking (it's a stale entry)
-	if _, ok := pt.pids["reused-server"]; ok {
-		t.Error("expected reused-server to be removed from tracking after PID reuse detection")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected reused PID registry to be removed, stat err=%v", err)
 	}
 }
 
@@ -400,8 +430,10 @@ func TestPIDTracker_CleanupOrphans_MultiplePIDStates(t *testing.T) {
 		t.Fatalf("getProcessStartTicks failed: %v", err)
 	}
 
+	entries := map[string]pidEntry{}
+
 	// 1. Process gone (non-existent PID)
-	pt.pids["gone-server"] = pidEntry{
+	entries["gone-server"] = pidEntry{
 		PID:               999999,
 		Command:           "/fake/cmd",
 		StartedAt:         time.Now().Add(-time.Hour),
@@ -409,7 +441,7 @@ func TestPIDTracker_CleanupOrphans_MultiplePIDStates(t *testing.T) {
 	}
 
 	// 2. PID reused (exists but different start ticks)
-	pt.pids["reused-server"] = pidEntry{
+	entries["reused-server"] = pidEntry{
 		PID:               currentPID,
 		Command:           "/old/cmd",
 		StartedAt:         time.Now().Add(-time.Hour),
@@ -417,13 +449,14 @@ func TestPIDTracker_CleanupOrphans_MultiplePIDStates(t *testing.T) {
 	}
 
 	// 3. Uncertain (no start ticks, command mismatch)
-	pt.pids["uncertain-server"] = pidEntry{
+	entries["uncertain-server"] = pidEntry{
 		PID:               currentPID,
 		Command:           "/different/command/entirely",
 		StartedAt:         time.Now().Add(-time.Hour),
 		ProcessStartTicks: 0, // No ticks recorded
 	}
 
+	path := writeLegacyPIDEntries(t, pt, entries)
 	killed := pt.CleanupOrphans()
 
 	// Gone and reused should be removed, uncertain should increment retry
@@ -432,17 +465,18 @@ func TestPIDTracker_CleanupOrphans_MultiplePIDStates(t *testing.T) {
 	}
 
 	// Gone: removed
-	if _, ok := pt.pids["gone-server"]; ok {
+	entries = readLegacyPIDEntries(t, path)
+	if _, ok := entries["gone-server"]; ok {
 		t.Error("gone-server should be removed")
 	}
 
 	// Reused: removed (PID reuse detected)
-	if _, ok := pt.pids["reused-server"]; ok {
+	if _, ok := entries["reused-server"]; ok {
 		t.Error("reused-server should be removed (PID reuse detected)")
 	}
 
 	// Uncertain: still tracked with incremented retry count
-	entry, ok := pt.pids["uncertain-server"]
+	entry, ok := entries["uncertain-server"]
 	if !ok {
 		t.Error("uncertain-server should still be tracked")
 	} else if entry.RetryCount != 1 {

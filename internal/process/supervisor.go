@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -39,23 +38,18 @@ const (
 // but it is not a running MCP connection and may be replaced by the next use.
 var ErrNeedsLogin = errors.New("oauth login required")
 
-type authRetry struct {
-	done   chan struct{}
-	handle *Handle
-	err    error
-}
-
 // Supervisor manages MCP server process lifecycles.
 type Supervisor struct {
 	bus                     *events.Bus
-	handles                 map[string]*Handle
+	handles                 map[InstanceID]*Handle
 	pidTracker              *PIDTracker
 	credStore               oauth.CredentialStore
 	tokenManager            *oauth.TokenManager
 	toolCache               *config.ToolCache
 	globalOAuthCallbackPort *int
 	mu                      sync.RWMutex
-	authRetries             map[string]*authRetry
+	lifecycleMu             sync.Mutex
+	lifecycleLocks          map[InstanceID]*sync.Mutex
 
 	// notificationSink receives upstream notifications. Set once via
 	// SetNotificationSink before any client is started; read under sinkMu.
@@ -101,10 +95,8 @@ type SupervisorOptions struct {
 	// If empty, the default ~/.config/mcpmu/ directory is used.
 	PIDTrackerDir string
 
-	// PIDFilePrefix scopes the PID tracking file to a specific manager mode.
-	// When set (e.g., "web", "tui"), the file becomes "pids-web.json" instead
-	// of "pids.json". This prevents different manager modes from interfering
-	// with each other's tracked processes during CleanupOrphans.
+	// PIDFilePrefix labels this owner process's registry file by manager mode.
+	// Unique owner identity, not the prefix, prevents concurrent clobbering.
 	PIDFilePrefix string
 
 	// GlobalOAuthCallbackPort is the global fallback OAuth callback port.
@@ -159,12 +151,12 @@ func NewSupervisorWithOptions(bus *events.Bus, opts SupervisorOptions) *Supervis
 
 	return &Supervisor{
 		bus:                     bus,
-		handles:                 make(map[string]*Handle),
+		handles:                 make(map[InstanceID]*Handle),
 		pidTracker:              pidTracker,
 		credStore:               credStore,
 		tokenManager:            tokenManager,
 		globalOAuthCallbackPort: opts.GlobalOAuthCallbackPort,
-		authRetries:             make(map[string]*authRetry),
+		lifecycleLocks:          make(map[InstanceID]*sync.Mutex),
 	}
 }
 
@@ -173,60 +165,64 @@ func (s *Supervisor) CredentialStore() oauth.CredentialStore {
 	return s.credStore
 }
 
-// Start starts an MCP server (stdio process or HTTP connection).
-// The name parameter is used as the identifier for the server.
+// lifecycleLock returns the stable lock for an instance. Lock order is:
+// per-instance lifecycle lock -> supervisor map lock -> handle lock.
+// lifecycleMu protects only the lock map and is never held while a lifecycle
+// lock is acquired or while process I/O is performed.
+func (s *Supervisor) lifecycleLock(id InstanceID) *sync.Mutex {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	lock := s.lifecycleLocks[id]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.lifecycleLocks[id] = lock
+	}
+	return lock
+}
+
+// Start starts or joins the start of a shared MCP server instance.
 func (s *Supervisor) Start(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
-	s.mu.Lock()
-	if retry, ok := s.authRetries[name]; ok {
-		s.mu.Unlock()
-		return waitForAuthRetry(ctx, retry)
-	}
+	return s.StartInstance(ctx, SharedInstanceID(name), srv, nil)
+}
 
-	// Check if already running
-	if h, exists := s.handles[name]; exists {
-		if h.NeedsLogin() {
-			retry := &authRetry{done: make(chan struct{})}
-			s.authRetries[name] = retry
-			s.mu.Unlock()
+// StartInstance starts or joins one instance under its lifecycle lock. validate
+// runs while that lock is held, immediately before inspecting or creating the
+// handle; Core uses it as the config-generation barrier.
+func (s *Supervisor) StartInstance(
+	ctx context.Context,
+	id InstanceID,
+	srv config.ServerConfig,
+	validate func() error,
+) (*Handle, error) {
+	lock := s.lifecycleLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 
-			retry.handle, retry.err = s.retryAfterLogin(ctx, name, srv, h)
-			close(retry.done)
-
-			s.mu.Lock()
-			delete(s.authRetries, name)
-			s.mu.Unlock()
-			return retry.handle, retry.err
-		}
-		if h.IsRunning() {
-			s.mu.Unlock()
-			return nil, fmt.Errorf("server %s is already running", name)
+	if validate != nil {
+		if err := validate(); err != nil {
+			return nil, err
 		}
 	}
-	s.mu.Unlock()
 
-	return s.start(ctx, name, srv)
-}
-
-func waitForAuthRetry(ctx context.Context, retry *authRetry) (*Handle, error) {
-	select {
-	case <-retry.done:
-		return retry.handle, retry.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	s.mu.RLock()
+	existing := s.handles[id]
+	s.mu.RUnlock()
+	if existing != nil {
+		if existing.NeedsLogin() {
+			if err := existing.Stop(); err != nil {
+				return nil, fmt.Errorf("stop needs-login handle: %w", err)
+			}
+		} else if existing.IsRunning() {
+			return existing, nil
+		} else if err := existing.Stop(); err != nil {
+			return nil, fmt.Errorf("finish previous server stop: %w", err)
+		}
 	}
+
+	return s.startInstanceLocked(ctx, id, srv)
 }
 
-// retryAfterLogin replaces a needs-login handle and re-runs authentication
-// from the current server config and credential store. Start registers one
-// authRetry per server, so concurrent callers join the same replacement.
-func (s *Supervisor) retryAfterLogin(ctx context.Context, name string, srv config.ServerConfig, failed *Handle) (*Handle, error) {
-	if err := failed.Stop(); err != nil {
-		return nil, fmt.Errorf("stop needs-login handle: %w", err)
-	}
-	return s.start(ctx, name, srv)
-}
-
-func (s *Supervisor) start(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
+func (s *Supervisor) startInstanceLocked(ctx context.Context, id InstanceID, srv config.ServerConfig) (*Handle, error) {
 	// Dispatch based on server type — initialization runs without the
 	// global lock so that multiple servers can start concurrently.
 	var (
@@ -234,16 +230,16 @@ func (s *Supervisor) start(ctx context.Context, name string, srv config.ServerCo
 		err    error
 	)
 	if srv.IsHTTP() {
-		handle, err = s.startHTTP(ctx, name, srv)
+		handle, err = s.startHTTP(ctx, id, srv)
 	} else {
-		handle, err = s.startStdio(ctx, name, srv)
+		handle, err = s.startStdio(ctx, id, srv)
 	}
 
 	if err != nil {
 		// Clean up any partially-registered handle
 		s.mu.Lock()
-		if h, exists := s.handles[name]; exists && !h.IsRunning() {
-			delete(s.handles, name)
+		if h, exists := s.handles[id]; exists && !h.IsRunning() {
+			delete(s.handles, id)
 		}
 		s.mu.Unlock()
 	}
@@ -252,7 +248,8 @@ func (s *Supervisor) start(ctx context.Context, name string, srv config.ServerCo
 }
 
 // startStdio starts a stdio-based MCP server process.
-func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
+func (s *Supervisor) startStdio(ctx context.Context, id InstanceID, srv config.ServerConfig) (*Handle, error) {
+	name := id.Server
 	log.Printf("Starting stdio server: name=%s cmd=%s args=%v", name, srv.Command, srv.Args)
 
 	// Emit starting event
@@ -263,6 +260,7 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 	// a caller context would kill it when short-lived contexts (like the
 	// tools/list grace period) expire.
 	cmd := exec.Command(srv.Command, srv.Args...)
+	configureProcessGroup(cmd)
 
 	// Set working directory
 	if srv.Cwd != "" {
@@ -296,11 +294,20 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 		s.emitStatus(name, events.StateError, 0, nil, err.Error())
 		return nil, fmt.Errorf("start process: %w", err)
 	}
+	pgid, err := commandProcessGroupID(cmd)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		s.emitStatus(name, events.StateError, 0, nil, err.Error())
+		return nil, fmt.Errorf("get process group: %w", err)
+	}
 
 	// Track PID for orphan cleanup
 	if s.pidTracker != nil {
-		if err := s.pidTracker.Add(name, cmd.Process.Pid, srv.Command, srv.Args); err != nil {
-			log.Printf("Warning: failed to track PID: %v", err)
+		if err := s.pidTracker.AddInstance(id, cmd.Process.Pid, pgid, srv.Command, srv.Args); err != nil {
+			stopUntrackedCommand(cmd, pgid)
+			s.emitStatus(name, events.StateError, 0, nil, err.Error())
+			return nil, fmt.Errorf("persist process identity: %w", err)
 		}
 	}
 
@@ -312,10 +319,12 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 	handleCtx, handleCancel := context.WithCancel(context.Background())
 	handle := &Handle{
 		id:             name,
+		instance:       id,
 		kind:           HandleKindStdio,
 		ctx:            handleCtx,
 		ctxCancel:      handleCancel,
 		cmd:            cmd,
+		pgid:           pgid,
 		client:         client,
 		stdioTransport: transport,
 		logs:           make([]string, 0, 1000),
@@ -324,9 +333,17 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 		startedAt:      time.Now(),
 		done:           make(chan struct{}),
 	}
+	if s.pidTracker != nil {
+		leaderPID := cmd.Process.Pid
+		handle.onGroupRetired = func() {
+			if err := s.pidTracker.RemoveInstancePID(id, leaderPID); err != nil {
+				log.Printf("Warning: failed to retire PID tracking for %s: %v", id, err)
+			}
+		}
+	}
 
 	s.mu.Lock()
-	s.handles[name] = handle
+	s.handles[id] = handle
 	s.mu.Unlock()
 
 	// Start stderr reader goroutine
@@ -343,6 +360,22 @@ func (s *Supervisor) startStdio(ctx context.Context, name string, srv config.Ser
 	go s.initAndDiscoverAsync(handle, client, name)
 
 	return handle, nil
+}
+
+func stopUntrackedCommand(cmd *exec.Cmd, pgid int) {
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	_ = terminateProcessGroupGracefully(pgid)
+	select {
+	case <-done:
+	case <-time.After(GracefulShutdownTimeout):
+		_ = killProcessGroup(pgid)
+		<-done
+	}
+	_ = terminateProcessGroup(pgid, GracefulShutdownTimeout)
 }
 
 // initAndDiscoverAsync initializes the MCP connection (with retries) and then
@@ -435,7 +468,8 @@ initLoop:
 }
 
 // startHTTP starts an HTTP-based MCP server connection.
-func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
+func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, srv config.ServerConfig) (*Handle, error) {
+	name := id.Server
 	log.Printf("Starting HTTP server: name=%s url=%s", name, srv.URL)
 
 	// Emit starting event
@@ -514,6 +548,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 	handleCtx, handleCancel := context.WithCancel(context.Background())
 	handle := &Handle{
 		id:            name,
+		instance:      id,
 		kind:          HandleKindHTTP,
 		ctx:           handleCtx,
 		ctxCancel:     handleCancel,
@@ -530,7 +565,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 	}
 
 	s.mu.Lock()
-	s.handles[name] = handle
+	s.handles[id] = handle
 	s.mu.Unlock()
 
 	// Initialize MCP connection
@@ -597,9 +632,21 @@ func (s *Supervisor) startHTTP(ctx context.Context, name string, srv config.Serv
 
 // Stop stops a running MCP server process.
 func (s *Supervisor) Stop(id string) error {
-	s.mu.Lock()
+	return s.StopInstance(SharedInstanceID(id))
+}
+
+// StopInstance stops one instance under the same lifecycle lock used by start.
+func (s *Supervisor) StopInstance(id InstanceID) error {
+	lock := s.lifecycleLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return s.stopInstanceLocked(id)
+}
+
+func (s *Supervisor) stopInstanceLocked(id InstanceID) error {
+	s.mu.RLock()
 	handle, exists := s.handles[id]
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	if !exists {
 		return fmt.Errorf("server %s not found", id)
@@ -608,8 +655,8 @@ func (s *Supervisor) Stop(id string) error {
 	err := handle.Stop()
 
 	// Remove PID tracking after stop
-	if s.pidTracker != nil {
-		if removeErr := s.pidTracker.Remove(id); removeErr != nil {
+	if err == nil && s.pidTracker != nil {
+		if removeErr := s.pidTracker.RemoveInstance(id); removeErr != nil {
 			log.Printf("Warning: failed to remove PID tracking: %v", removeErr)
 		}
 	}
@@ -617,8 +664,31 @@ func (s *Supervisor) Stop(id string) error {
 	return err
 }
 
+// Restart stops and starts a shared instance as one serialized lifecycle operation.
+func (s *Supervisor) Restart(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
+	id := SharedInstanceID(name)
+	lock := s.lifecycleLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	s.mu.RLock()
+	_, exists := s.handles[id]
+	s.mu.RUnlock()
+	if exists {
+		if err := s.stopInstanceLocked(id); err != nil {
+			return nil, err
+		}
+	}
+	return s.startInstanceLocked(ctx, id, srv)
+}
+
 // Get returns the handle for a server, or nil if not running.
 func (s *Supervisor) Get(id string) *Handle {
+	return s.GetInstance(SharedInstanceID(id))
+}
+
+// GetInstance returns the handle for one stable instance identity.
+func (s *Supervisor) GetInstance(id InstanceID) *Handle {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.handles[id]
@@ -630,7 +700,7 @@ func (s *Supervisor) Get(id string) *Handle {
 // to attempt stopping all servers regardless of individual failures.
 func (s *Supervisor) StopAll() {
 	s.mu.RLock()
-	ids := make([]string, 0, len(s.handles))
+	ids := make([]InstanceID, 0, len(s.handles))
 	for id := range s.handles {
 		ids = append(ids, id)
 	}
@@ -639,9 +709,9 @@ func (s *Supervisor) StopAll() {
 	var wg sync.WaitGroup
 	for _, id := range ids {
 		wg.Add(1)
-		go func(id string) {
+		go func(id InstanceID) {
 			defer wg.Done()
-			if err := s.Stop(id); err != nil {
+			if err := s.StopInstance(id); err != nil {
 				log.Printf("Warning: failed to stop server %q: %v", id, err)
 			}
 		}(id)
@@ -669,7 +739,7 @@ func (s *Supervisor) RunningServers() []string {
 	ids := make([]string, 0, len(s.handles))
 	for id, h := range s.handles {
 		if h.IsRunning() {
-			ids = append(ids, id)
+			ids = append(ids, id.Server)
 		}
 	}
 	return ids
@@ -784,12 +854,15 @@ const (
 
 // Handle represents a running server (process or HTTP connection).
 type Handle struct {
-	id   string
-	kind HandleKind
+	id       string
+	instance InstanceID
+	kind     HandleKind
 
 	// Stdio-specific fields
 	cmd            *exec.Cmd
+	pgid           int
 	stdioTransport *mcp.StdioTransport
+	onGroupRetired func()
 
 	// HTTP-specific fields
 	httpTransport *mcp.StreamableHTTPTransport
@@ -816,11 +889,18 @@ type Handle struct {
 	stopped      bool
 	stopMu       sync.Mutex
 	done         chan struct{} // closed when server stops
+	groupErr     error
+	groupErrMu   sync.Mutex
 }
 
 // ID returns the server ID.
 func (h *Handle) ID() string {
 	return h.id
+}
+
+// InstanceID returns the stable identity used by the Supervisor and PID registry.
+func (h *Handle) InstanceID() InstanceID {
+	return h.instance
 }
 
 // Client returns the MCP client.
@@ -977,7 +1057,8 @@ func (h *Handle) Stop() error {
 	h.stopMu.Lock()
 	if h.stopped {
 		h.stopMu.Unlock()
-		return nil
+		<-h.done
+		return h.processGroupError()
 	}
 	h.stopped = true
 	h.stopMu.Unlock()
@@ -999,9 +1080,10 @@ func (h *Handle) Stop() error {
 	}
 
 	if h.kind == HandleKindStdio {
-		// Stdio: send SIGTERM to process
-		if h.cmd != nil && h.cmd.Process != nil {
-			_ = h.cmd.Process.Signal(syscall.SIGTERM)
+		// Stdio: signal the entire process group. The watcher retires the PGID
+		// only after the leader is reaped and any surviving workers are gone.
+		if h.cmd != nil && h.cmd.Process != nil && h.pgid > 0 {
+			_ = terminateProcessGroupGracefully(h.pgid)
 
 			// Wait for watchProcess to signal completion with timeout
 			select {
@@ -1009,7 +1091,7 @@ func (h *Handle) Stop() error {
 				// Process exited gracefully
 			case <-time.After(GracefulShutdownTimeout):
 				// Force kill
-				_ = h.cmd.Process.Signal(syscall.SIGKILL)
+				_ = killProcessGroup(h.pgid)
 				<-h.done
 			}
 		}
@@ -1027,7 +1109,19 @@ func (h *Handle) Stop() error {
 		}))
 	}
 
-	return nil
+	return h.processGroupError()
+}
+
+func (h *Handle) setProcessGroupError(err error) {
+	h.groupErrMu.Lock()
+	h.groupErr = err
+	h.groupErrMu.Unlock()
+}
+
+func (h *Handle) processGroupError() error {
+	h.groupErrMu.Lock()
+	defer h.groupErrMu.Unlock()
+	return h.groupErr
 }
 
 // readStderr reads stderr and publishes log events.
@@ -1052,7 +1146,21 @@ func (h *Handle) readStderr(stderr io.ReadCloser) {
 func (h *Handle) watchProcess() {
 	err := h.cmd.Wait()
 
-	// Signal that process has exited
+	// A wrapper may exit while leaving workers behind. The leader's watcher
+	// owns immediate group cleanup so a later restart cannot discard the PGID.
+	var cleanupErr error
+	if h.pgid > 0 {
+		cleanupErr = terminateProcessGroup(h.pgid, GracefulShutdownTimeout)
+		if cleanupErr != nil {
+			h.setProcessGroupError(fmt.Errorf("retire process group %d: %w", h.pgid, cleanupErr))
+			log.Printf("Failed to retire process group %d for %s: %v", h.pgid, h.instance, cleanupErr)
+		}
+	}
+	if cleanupErr == nil && h.onGroupRetired != nil {
+		h.onGroupRetired()
+	}
+
+	// Signal completion only after the process group and registry entry retire.
 	close(h.done)
 
 	h.stopMu.Lock()
@@ -1064,11 +1172,7 @@ func (h *Handle) watchProcess() {
 	signal := ""
 	if h.cmd.ProcessState != nil {
 		exitCode = h.cmd.ProcessState.ExitCode()
-		if ws, ok := h.cmd.ProcessState.Sys().(syscall.WaitStatus); ok {
-			if ws.Signaled() {
-				signal = ws.Signal().String()
-			}
-		}
+		signal = processExitSignal(h.cmd.ProcessState)
 	}
 
 	lastExit := &events.LastExit{
@@ -1102,7 +1206,7 @@ func (h *Handle) OAuthMeta() *oauth.AuthorizationServerMetadata {
 // It opens a browser for the user to authenticate, then reconnects.
 func (s *Supervisor) LoginOAuth(ctx context.Context, name string) error {
 	s.mu.Lock()
-	handle, exists := s.handles[name]
+	handle, exists := s.handles[SharedInstanceID(name)]
 	if !exists {
 		s.mu.Unlock()
 		return fmt.Errorf("server %s not found", name)
@@ -1181,7 +1285,7 @@ func resolveOAuthFlowConfig(
 // retryHTTPConnection attempts to reconnect an HTTP server after OAuth completes.
 func (s *Supervisor) retryHTTPConnection(ctx context.Context, name string) error {
 	s.mu.RLock()
-	handle, exists := s.handles[name]
+	handle, exists := s.handles[SharedInstanceID(name)]
 	s.mu.RUnlock()
 
 	if !exists {

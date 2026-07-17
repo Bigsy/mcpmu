@@ -27,7 +27,7 @@ var DebugLogging bool
 type Options struct {
 	Config             *config.Config
 	ConfigPath         string        // Expanded path for hot-reload watching (empty = no watching)
-	PIDTrackerDir      string        // Directory for PID tracking file (empty = derive from ConfigPath or default)
+	PIDTrackerDir      string        // Directory for per-owner PID registries (empty = derive from ConfigPath or default)
 	Namespace          string        // Namespace to expose (empty = auto-select)
 	EagerStart         bool          // Pre-start all servers
 	ExposeManagerTools bool          // Include mcpmu.* tools in tools/list
@@ -1175,15 +1175,16 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 	clear(s.subs)
 	s.subMu.Unlock()
 
-	// Stop all running servers
-	s.supervisor.StopAll()
-
-	// Swap config
+	// Advance the config generation before stopping instances. Any stale
+	// get-or-start path must revalidate under its instance lifecycle lock.
 	s.mu.Lock()
 	oldNamespaceName := s.activeNamespaceName
 	oldSelectionMethod := s.selectionMethod
 	s.mu.Unlock()
 	s.replaceConfig(newCfg)
+
+	// Stop all running servers after the generation barrier is visible.
+	s.supervisor.StopAll()
 
 	// Re-resolve namespace
 	// If namespace was selected by flag and still exists, keep it

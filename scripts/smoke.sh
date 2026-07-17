@@ -119,9 +119,81 @@ _smoke_cf_access_headers_inner() {
   return 0
 }
 
+# Verifies that the real serve binary starts stdio upstreams in their own
+# process group and reaps a wrapper-launched worker when the MCP session exits.
+smoke_process_group_cleanup() {
+  local tmp cfg fake child_file response child_pid rc=0
+  tmp=$(mktemp -d -t mcpmu-smoke-group.XXXXXX)
+  cfg="$tmp/config.json"
+  fake="$tmp/fake-mcp.sh"
+  child_file="$tmp/child.pid"
+
+  cat > "$fake" <<'EOF'
+#!/usr/bin/env bash
+sleep 300 &
+echo "$!" > "$CHILD_PID_FILE"
+while IFS= read -r line; do
+  method=$(printf '%s' "$line" | jq -r '.method // empty')
+  id=$(printf '%s' "$line" | jq -r '.id // empty')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"smoke-wrapper","version":"1"}}}\n' "$id"
+      ;;
+    tools/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}\n' "$id"
+      ;;
+  esac
+done
+EOF
+  chmod 0700 "$fake"
+
+  jq -n --arg command "$fake" --arg child_file "$child_file" '{
+    schemaVersion: 1,
+    servers: {
+      wrapper: {
+        command: $command,
+        env: {CHILD_PID_FILE: $child_file},
+        startup_timeout_sec: 3
+      }
+    },
+    namespaces: {}
+  }' > "$cfg"
+
+  response=$({
+    printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}\n'
+    printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
+    printf '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n'
+  } | ./mcpmu serve --stdio --config "$cfg" 2>/dev/null)
+
+  if ! printf '%s\n' "$response" | jq -e 'select(.id == 2 and .result.tools)' >/dev/null; then
+    echo "FAIL: real serve session did not complete tools/list"
+    rc=1
+  elif [[ ! -s "$child_file" ]]; then
+    echo "FAIL: wrapper did not record its worker PID"
+    rc=1
+  else
+    child_pid=$(cat "$child_file")
+    for _ in {1..50}; do
+      if ! kill -0 "$child_pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.02
+    done
+    if kill -0 "$child_pid" 2>/dev/null; then
+      echo "FAIL: wrapper worker PID $child_pid survived serve shutdown"
+      kill "$child_pid" 2>/dev/null || true
+      rc=1
+    fi
+  fi
+
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # Register new smoke checks here.
 SMOKE_CHECKS=(
   smoke_cf_access_headers
+  smoke_process_group_cleanup
 )
 
 # --- Runner ---------------------------------------------------------------

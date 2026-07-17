@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 const lockFileName = "manager.lock"
@@ -56,7 +55,7 @@ func (l *ManagerLock) Acquire(mode string) error {
 
 	// Try to acquire an exclusive non-blocking lock.
 	// If another process holds the lock, this fails immediately.
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := tryLockFile(f); err != nil {
 		// Lock is held — read the file to report who holds it
 		_ = f.Close()
 		info, readErr := l.readFile()
@@ -98,7 +97,7 @@ func (l *ManagerLock) Acquire(mode string) error {
 // removing the path after close creates a window where a second process
 // flocks the old inode while a third creates a new file at the same path,
 // letting two managers coexist on different inodes. Leaving the file in
-// place (like pids.json and toolcache.json) avoids this race entirely.
+// place (like the PID registry files and toolcache.json) avoids this race entirely.
 func (l *ManagerLock) Release() {
 	if l.file != nil {
 		_ = l.file.Close()
