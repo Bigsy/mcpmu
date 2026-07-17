@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -128,7 +129,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	if cfg.IsDaemonModeEnabled() && !serveIsolated {
+	// Windows has no daemon transport yet; use embedded mode directly instead
+	// of treating the expected platform limitation as a fallback failure.
+	if runtime.GOOS != "windows" && cfg.IsDaemonModeEnabled() && !serveIsolated {
 		connection, connectErr := shim.ConnectOrSpawn(ctx, shim.Options{
 			ConfigPath: resolvedConfigPath, Namespace: serveNamespace,
 			LogLevel: serveLogLevel, Eager: serveEager,

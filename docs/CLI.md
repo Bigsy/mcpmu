@@ -81,24 +81,24 @@ mcpmu serve --stdio --isolated
 
 Resource URIs are passed through unmodified from upstream servers. Prompt names are qualified as `serverName.promptName`.
 
-## Shared daemon mode (opt-in)
+## Shared daemon mode
 
-Shared serve remains opt-in during rollout. Enable it at the top level of the
-config; the pointer-shaped setting preserves absent versus explicit false:
+On Unix, shared serve is enabled by default. The first `mcpmu serve` for a
+canonical config path starts a detached daemon and connects its stdio through a
+Unix-socket shim. Later serves for that config share the daemon's Core and
+upstream processes. The pointer-shaped setting preserves absent versus explicit
+false; use false as the global kill switch:
 
 ```json
 {
-  "daemonMode": true,
+  "daemonMode": false,
   "servers": {},
   "namespaces": {}
 }
 ```
 
-On Unix, the first `mcpmu serve` for a canonical config path starts a detached
-daemon and connects its stdio through a Unix-socket shim. Later serves for that
-config share the daemon's Core and upstream processes. `daemonMode` absent or
-false keeps embedded behavior in this release. `--isolated` always runs the
-calling serve embedded. Windows also remains embedded.
+An absent or true `daemonMode` uses the shared daemon. `--isolated` always runs
+only the calling serve embedded. Windows remains embedded.
 
 The connect protocol verifies the executable content hash, protocol version,
 and full canonical config path. Any connect, spawn, startup, or handshake
@@ -130,8 +130,13 @@ manager actions are scoped to the caller. The instance is stopped on session
 disconnect. `shared` is optional and absent means shared. The TUI and web edit
 forms preserve this config field but do not expose a control for it yet.
 
-The control surface remains hidden from casual command help while rollout is
-in progress:
+Shared servers also share their upstream login/authentication state and rate
+limits. `mcpmu.servers_stop` on a shared server stops that instance for every
+connected client; the next use lazily starts a fresh instance. With
+`shared: false`, stop and restart manager actions affect only the caller's
+private instance.
+
+The daemon diagnostic control surface is hidden from casual command help:
 
 ```bash
 mcpmu --config /path/to/config.json daemon run --foreground
@@ -284,6 +289,6 @@ With bearer token auth:
 
 | Field | Description |
 |-------|-------------|
-| `daemonMode` | Unix shared-daemon serve mode; absent/false is embedded during rollout, true opts in |
+| `daemonMode` | Unix shared-daemon serve mode; absent/true enables it, false is the global embedded-mode kill switch |
 | `mcp_oauth_credentials_store` | Where to store OAuth tokens: `"auto"`, `"keyring"`, or `"file"` (default: auto) |
 | `mcp_oauth_callback_port` | Port for the OAuth callback server (default: auto-assigned) |

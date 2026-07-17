@@ -53,7 +53,7 @@ mcp_tool_call() {
     printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
     printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' "$tool" "$args"
     sleep 10
-  } | ./mcpmu serve --stdio --config "$cfg" --namespace "$ns" 2>/dev/null
+  } | ./mcpmu serve --stdio --isolated --config "$cfg" --namespace "$ns" 2>/dev/null
 }
 
 # --- Smoke checks ----------------------------------------------------------
@@ -163,7 +163,7 @@ EOF
     printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}\n'
     printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
     printf '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n'
-  } | ./mcpmu serve --stdio --config "$cfg" 2>/dev/null)
+  } | ./mcpmu serve --stdio --isolated --config "$cfg" 2>/dev/null)
 
   if ! printf '%s\n' "$response" | jq -e 'select(.id == 2 and .result.tools)' >/dev/null; then
     echo "FAIL: real serve session did not complete tools/list"
@@ -255,7 +255,7 @@ smoke_daemon_shim_fallback() {
   cfg="$tmp/config.json"
   missing="$tmp/not-created/config.json"
   stderr_file="$tmp/serve.stderr"
-  echo '{"schemaVersion":1,"daemonMode":true,"servers":{},"namespaces":{}}' > "$cfg"
+  echo '{"schemaVersion":1,"servers":{},"namespaces":{}}' > "$cfg"
 
   response=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}' |
     XDG_RUNTIME_DIR="$runtime" ./mcpmu serve --stdio --config "$cfg" 2>"$stderr_file")
@@ -329,7 +329,6 @@ EOF
   chmod 0700 "$fake"
   jq -n --arg command "$fake" --arg pid_file "$pid_file" '{
     schemaVersion: 1,
-    daemonMode: true,
     servers: {
       browser: {
         command: $command,

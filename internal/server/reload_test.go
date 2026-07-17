@@ -654,7 +654,7 @@ func TestEndToEnd_HotReload_ToolsChange(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	serverCmd := exec.CommandContext(ctx, tmpBin, "serve", "--stdio", "--config", tmpConfig, "--log-level", "debug", "--expose-manager-tools")
+	serverCmd := exec.CommandContext(ctx, tmpBin, "serve", "--stdio", "--isolated", "--config", tmpConfig, "--log-level", "debug", "--expose-manager-tools")
 	stdin, err := serverCmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("StdinPipe: %v", err)
@@ -910,7 +910,7 @@ func TestServer_ReloadDuringActiveRequest(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	serverCmd := exec.CommandContext(ctx, tmpBin, "serve", "--stdio", "--config", tmpConfig, "--log-level", "debug")
+	serverCmd := exec.CommandContext(ctx, tmpBin, "serve", "--stdio", "--isolated", "--config", tmpConfig, "--log-level", "debug")
 	stdin, err := serverCmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("StdinPipe: %v", err)

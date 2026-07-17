@@ -139,9 +139,10 @@ type Config struct {
 	MCPOAuthCallbackPort    *int   `json:"mcp_oauth_callback_port,omitempty"`     // nil = random, 0 invalid
 }
 
-// DefaultDaemonMode controls the behavior when daemonMode is absent. Shared
-// serve remains opt-in until the final daemon rollout phase.
-const DefaultDaemonMode = false
+// DefaultDaemonMode controls the behavior when daemonMode is absent. Unix
+// serves share the per-config daemon by default; explicit false is the global
+// embedded-mode kill switch.
+const DefaultDaemonMode = true
 
 // IsDaemonModeEnabled returns the configured daemon-mode setting, preserving
 // the distinction between an absent field and an explicit false value.

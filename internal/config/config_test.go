@@ -231,6 +231,9 @@ func TestServerConfig_SetEnabled(t *testing.T) {
 }
 
 func TestConfig_DaemonModeTriState(t *testing.T) {
+	if !DefaultDaemonMode {
+		t.Fatal("compiled daemon mode default must be enabled after rollout")
+	}
 	var absent Config
 	if absent.DaemonMode != nil {
 		t.Fatal("absent daemonMode decoded as present")

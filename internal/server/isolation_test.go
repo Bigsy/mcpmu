@@ -160,6 +160,60 @@ func TestAbsentSharedFieldUsesOneSharedInstance(t *testing.T) {
 	}
 }
 
+func TestSharedManagerStopAffectsEverySessionAndNextUseRestarts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess test")
+	}
+	testutil.SetupTestHome(t)
+	cfg := &config.Config{SchemaVersion: 1, Servers: map[string]config.ServerConfig{
+		"files": fakeServerConfig(t, map[string]any{"tools": []any{map[string]any{"name": "read"}}}),
+	}}
+	core, err := NewCore(Options{Config: cfg, PIDTrackerDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(core.Close)
+	first, err := NewSession(core, Options{Config: cfg, Stdin: strings.NewReader(""), Stdout: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewSession(core, Options{Config: cfg, Stdin: strings.NewReader(""), Stdout: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	defer second.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sharedHandle, _, err := first.getOrStartHandle(ctx, "files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherHandle, _, err := second.getOrStartHandle(ctx, "files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherHandle != sharedHandle {
+		t.Fatal("sessions did not initially share an upstream handle")
+	}
+
+	if _, rpcErr := first.router.handleServersStop(ctx, json.RawMessage(`{"server_id":"files"}`)); rpcErr != nil {
+		t.Fatalf("shared manager stop: %v", rpcErr)
+	}
+	if sharedHandle.IsRunning() || core.supervisor.Get("files") != sharedHandle {
+		t.Fatal("shared manager stop did not stop the daemon-wide instance")
+	}
+
+	restarted, _, err := second.getOrStartHandle(ctx, "files")
+	if err != nil {
+		t.Fatalf("second session lazy restart: %v", err)
+	}
+	if restarted == sharedHandle || !restarted.IsRunning() {
+		t.Fatal("next use did not create a fresh shared upstream handle")
+	}
+}
+
 func TestPrivateStartRacingDisconnectCannotLeak(t *testing.T) {
 	if testing.Short() {
 		t.Skip("subprocess test")

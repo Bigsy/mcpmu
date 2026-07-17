@@ -186,7 +186,7 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 - **Process-tree cleanup** — Stop wrapper-launched workers with their parent and retain identity-validated crash recovery records
 - **Streamable HTTP/SSE** — Connect to remote MCP endpoints with full SSE support
 - **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`
-- **Optional shared daemon** — Let concurrent `serve` clients share one set of upstream processes on Unix
+- **Shared daemon** — Concurrent `serve` clients share one set of upstream processes by default on Unix
 - **OAuth support** — Full OAuth 2.1 with PKCE, dynamic client registration, token management, and automatic scope discovery
 - **Hot-reload** — Serve mode watches the config file and automatically applies changes without restart
 - **Lazy or eager startup** — Start servers on-demand or pre-start everything with `--eager`
@@ -207,12 +207,12 @@ mcpmu serve --stdio --expose-manager-tools   # include mcpmu.* management tools
 mcpmu serve --stdio --log-level debug        # verbose logging
 ```
 
-Serve remains embedded by default during the shared-daemon rollout. To opt in
-on Unix, set `"daemonMode": true` at the top level of the mcpmu config. The
-first `serve` process starts a detached per-config daemon and becomes a stdio
-shim; concurrent clients then share the daemon's upstream processes. Any
-connect, spawn, or identity-handshake failure emits one warning and falls back
-to embedded serve. Use `--isolated` to bypass an enabled daemon for one client.
+On Unix, the first `serve` process for a config starts a detached daemon and
+becomes a stdio shim; concurrent clients then share the daemon's upstream
+processes. Any connect, spawn, or identity-handshake failure emits one warning
+and falls back to embedded serve. Use `--isolated` for one private embedded
+client, or set top-level `"daemonMode": false` as a global kill switch.
+Windows remains embedded.
 
 The daemon inherits the environment and working directory of its first
 spawner. Prefer absolute server `cwd` values and explicit config `env` entries.
@@ -233,8 +233,11 @@ agent gets its own instance:
 ```
 
 Private instances have session-scoped tools, notifications, logs, and manager
-actions, and are stopped when that serve session disconnects.
-See [docs/CLI.md](docs/CLI.md#shared-daemon-mode-opt-in) for configuration and
+actions, and are stopped when that serve session disconnects. Shared instances
+also share authentication sessions and upstream rate limits. Calling
+`mcpmu.servers_stop` for a shared server stops it for every client; the next
+use starts it again. For `shared: false`, that action affects only the caller.
+See [docs/CLI.md](docs/CLI.md#shared-daemon-mode) for configuration and
 diagnostic commands.
 
 ## Shell Completions

@@ -49,12 +49,12 @@ mcpmu is an MCP server aggregator that manages multiple MCP servers and exposes 
 
 ## Primary Usage: stdio Mode
 
-Claude Code/Codex spawns mcpmu as a subprocess. During rollout the shipped
-`serve` path is embedded by default: one process owns one Core and one stdio
-Session. Setting top-level `daemonMode` to true on Unix changes that process
-into a stdio-to-Unix-socket shim connected to a shared per-config daemon.
-`--isolated` forces embedded behavior for one process, and every daemon setup
-failure falls back to embedded serve.
+Claude Code/Codex spawns mcpmu as a subprocess. On Unix, the default `serve`
+path is a stdio-to-Unix-socket shim connected to one shared daemon per canonical
+config path. The daemon owns one Core and attaches one Session per shim.
+Top-level `daemonMode: false` disables daemon mode globally, `--isolated`
+forces embedded behavior for one process, and every daemon setup failure falls
+back to embedded serve. Windows remains embedded.
 
 ```json
 // ~/.claude/mcp_servers.json
@@ -103,13 +103,13 @@ are delivered only to their owner, and manager operations resolve the caller's
 private instance. Browser automation and interpreter/REPL servers are the
 primary candidates for this isolation escape hatch.
 
-### Shared Daemon and Shim (opt-in)
+### Shared Daemon and Shim
 
 `internal/daemon` provides the Unix listener and shared Core;
 `internal/shim` implements the stdio bridge and connect-or-spawn protocol.
-Top-level `daemonMode: true` selects it, while absent/false remains embedded
-until the final rollout gate. The hidden commands are available for development
-and diagnostics:
+An absent or true top-level `daemonMode` selects it; explicit false keeps every
+serve embedded. The hidden commands are available for development and
+diagnostics:
 
 ```bash
 mcpmu --config /absolute/or/relative/config.json daemon run --foreground
@@ -159,6 +159,12 @@ the spawn race. Server configs should therefore use absolute `cwd` values and
 explicit `env` entries; `env_http_headers` also resolve in that inherited daemon
 environment. Environment is deliberately not part of daemon identity because
 that would fragment sharing per caller.
+
+Shared upstreams also share server-side login state, OAuth/token use, and rate
+limits. Manager actions resolve through the calling Session: for a shared
+instance, `mcpmu.servers_stop` stops it for every Session and the next use
+starts it again; for `shared: false`, stop/restart affects only the caller's
+private instance.
 
 A run lock serializes daemon ownership. The first and last Session transitions
 control a 60-second linger timer; `daemon stop` rejects new Sessions, drains
@@ -397,3 +403,8 @@ mcpmu embeds a `SKILL.md` file in the binary (`cmd/mcpmu/skill_data/SKILL.md` vi
 4. **Graceful degradation**: If one server fails, others still work
 5. **Strict output discipline**: stdout = MCP protocol only, stderr = logs
 6. **Transport-agnostic core**: Easy to add HTTP later if needed
+7. **Shared daemon ownership**: On Unix, thin stdio shims share one per-config
+   Core and upstream process set. This deliberately supersedes the earlier
+   no-daemon/single-process simplicity so concurrent agents do not duplicate
+   every upstream; embedded mode remains the failure fallback and explicit
+   isolation escape hatch.

@@ -272,6 +272,8 @@ mcpmu serve --stdio --namespace work         # specific namespace
 mcpmu serve --stdio -n work --eager          # pre-start all servers
 mcpmu serve --stdio --expose-manager-tools   # include mcpmu.* management tools
 mcpmu serve --stdio --log-level debug        # verbose logging
+mcpmu serve --stdio --isolated               # private embedded serve
+mcpmu serve --stdio --isolated               # private embedded serve
 ```
 
 Flags:
@@ -279,6 +281,58 @@ Flags:
 - `--eager` — pre-start all servers (default: lazy/on-demand)
 - `--expose-manager-tools` — include mcpmu.* tools in tools/list
 - `-l, --log-level` — debug, info, warn, error
+- `--isolated` — bypass the shared daemon for this serve process
+
+### Shared daemon behavior
+
+On Unix, concurrent serves for the same config share one daemon and one
+instance of each upstream server by default. Windows stays embedded. Set
+top-level `"daemonMode": false` to disable the daemon globally, or use
+`--isolated` for one private serve.
+
+The daemon inherits the first spawner's working directory and environment, so
+prefer absolute server `cwd` values and explicit `env` config. Shared servers
+also share login state and upstream rate limits. Stateful servers such as
+browser automation, REPLs, and interpreter sessions should use
+`"shared": false` in that server's config; they then get one instance per
+connected serve session.
+
+`mcpmu.servers_stop` stops a shared instance for every connected client and
+the next use starts it again. For `shared: false`, manager start/stop/restart
+actions affect only the caller's instance.
+
+Daemon diagnostics are available when needed:
+
+```bash
+mcpmu daemon status
+mcpmu daemon stop
+```
+- `--isolated` — bypass the shared daemon for this serve process
+
+### Shared daemon behavior
+
+On Unix, concurrent serves for the same config share one daemon and one
+instance of each upstream server by default. Windows stays embedded. Set
+top-level `"daemonMode": false` to disable the daemon globally, or use
+`--isolated` for one private serve.
+
+The daemon inherits the first spawner's working directory and environment, so
+prefer absolute server `cwd` values and explicit `env` config. Shared servers
+also share login state and upstream rate limits. Stateful servers such as
+browser automation, REPLs, and interpreter sessions should use
+`"shared": false` in that server's config; they then get one instance per
+connected serve session.
+
+`mcpmu.servers_stop` stops a shared instance for every connected client and
+the next use starts it again. For `shared: false`, manager start/stop/restart
+actions affect only the caller's instance.
+
+Daemon diagnostics are available when needed:
+
+```bash
+mcpmu daemon status
+mcpmu daemon stop
+```
 
 ## Connecting mcpmu to Other Agents
 
