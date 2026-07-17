@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -45,6 +46,76 @@ func TestCoreSessionLifecycle(t *testing.T) {
 		t.Fatalf("NewSession after close: %v", err)
 	}
 	second.Close()
+}
+
+func TestCoreReloadUpdatesEverySession(t *testing.T) {
+	testutil.SetupTestHome(t)
+	initial := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"a": {Command: "echo"}, "b": {Command: "echo"},
+		},
+		Namespaces: map[string]config.NamespaceConfig{
+			"first":  {ServerIDs: []string{"a"}},
+			"second": {ServerIDs: []string{"b"}},
+		},
+	}
+	core, err := NewCore(Options{Config: initial, PIDTrackerDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(core.Close)
+
+	firstOutput := &bytes.Buffer{}
+	first, err := NewSession(core, Options{
+		Config: initial, Namespace: "first", ExposeResources: true,
+		Stdin: strings.NewReader(""), Stdout: firstOutput,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	secondOutput := &bytes.Buffer{}
+	second, err := NewSession(core, Options{
+		Config: initial, Namespace: "second", ExposePrompts: true,
+		Stdin: strings.NewReader(""), Stdout: secondOutput,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	initialize := json.RawMessage(`{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1"}}`)
+	if _, rpcErr := first.handleInitialize(context.Background(), initialize); rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	if _, rpcErr := second.handleInitialize(context.Background(), initialize); rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+
+	reloaded := &config.Config{
+		SchemaVersion: 1,
+		Servers: map[string]config.ServerConfig{
+			"a": {Command: "echo"}, "b": {Command: "echo"},
+		},
+		Namespaces: map[string]config.NamespaceConfig{
+			"first":  {ServerIDs: []string{"b"}},
+			"second": {ServerIDs: []string{"a"}},
+		},
+	}
+	core.applyReload(context.Background(), reloaded, nil)
+
+	if got := first.activeServerNames; len(got) != 1 || got[0] != "b" {
+		t.Fatalf("first session servers = %v, want [b]", got)
+	}
+	if got := second.activeServerNames; len(got) != 1 || got[0] != "a" {
+		t.Fatalf("second session servers = %v, want [a]", got)
+	}
+	if output := firstOutput.String(); !strings.Contains(output, "notifications/tools/list_changed") || !strings.Contains(output, "notifications/resources/list_changed") || strings.Contains(output, "notifications/prompts/list_changed") {
+		t.Fatalf("first session reload notifications = %s", output)
+	}
+	if output := secondOutput.String(); !strings.Contains(output, "notifications/tools/list_changed") || strings.Contains(output, "notifications/resources/list_changed") || !strings.Contains(output, "notifications/prompts/list_changed") {
+		t.Fatalf("second session reload notifications = %s", output)
+	}
 }
 
 type recordingNotificationSink struct {

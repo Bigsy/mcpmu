@@ -8,6 +8,7 @@ import (
 	"log"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -37,6 +38,8 @@ type Core struct {
 	configPath    string
 	debounceDelay time.Duration
 	watchOnce     sync.Once
+	reloadOnce    sync.Once
+	sharedReload  atomic.Bool
 	closeOnce     sync.Once
 }
 
@@ -239,6 +242,31 @@ func (c *Core) startWatching(ctx context.Context) {
 	c.watchOnce.Do(func() {
 		go c.watchConfig(ctx, c.configPath)
 	})
+}
+
+// StartWatching binds the Core-owned config watcher to the caller's
+// lifecycle. Daemon mode uses a daemon-wide context so the watcher is not
+// accidentally owned by whichever client session connects first.
+func (c *Core) StartWatching(ctx context.Context) {
+	c.sharedReload.Store(true)
+	c.startWatching(ctx)
+	c.reloadOnce.Do(func() {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case cfg := <-c.reloadCh:
+					c.applyReload(ctx, cfg, nil)
+				}
+			}
+		}()
+	})
+}
+
+// RunningServers returns a stable snapshot for daemon status reporting.
+func (c *Core) RunningServers() []string {
+	return c.supervisor.RunningServers()
 }
 
 func (c *Core) registerSession(session *Session) {

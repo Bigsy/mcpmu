@@ -79,6 +79,23 @@ mcpmu serve --stdio --resources --prompts
 
 Resource URIs are passed through unmodified from upstream servers. Prompt names are qualified as `serverName.promptName`.
 
+## Shared daemon diagnostics (experimental)
+
+The daemon control surface is hidden from casual command help while shared
+serve mode is being rolled out. At this phase `mcpmu serve` remains embedded;
+these commands are for testing and diagnostics:
+
+```bash
+mcpmu --config /path/to/config.json daemon run --foreground
+mcpmu --config /path/to/config.json daemon status [--json]
+mcpmu --config /path/to/config.json daemon stop
+```
+
+Without `--foreground`, daemon output goes to its per-config runtime log.
+`status` and `stop` use the Unix control socket; if it is unavailable, they
+accept pidfile state only after validating the full config path, process start
+identity, and executable path. Windows continues to use embedded serve.
+
 ## Namespace commands (alias: `ns`)
 
 ```bash

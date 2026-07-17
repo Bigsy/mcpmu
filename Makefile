@@ -3,6 +3,7 @@
 LINT_DIRS := \
 	cmd/mcpmu \
 	internal/config \
+	internal/daemon \
 	internal/mcp \
 	internal/oauth \
 	internal/process \

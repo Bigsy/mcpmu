@@ -29,10 +29,10 @@ cd "$(dirname "$0")/.."
 
 # Build once, up front. Individual checks should not rebuild.
 build_binary() {
-  if [[ ! -x ./mcpmu || ./cmd/mcpmu -nt ./mcpmu ]]; then
-    echo "==> building binary"
-    go build -o mcpmu ./cmd/mcpmu
-  fi
+  # Internal package changes do not update the cmd/mcpmu directory mtime, so
+  # timestamp checks can silently exercise a stale binary. Always rebuild once.
+  echo "==> building binary"
+  go build -o mcpmu ./cmd/mcpmu
 }
 
 # Make a throwaway config file and echo its path.
@@ -190,10 +190,66 @@ EOF
   return "$rc"
 }
 
+# Verifies the real daemon binary's per-config rendezvous, status protocol,
+# graceful stop, and runtime-artifact cleanup without touching the user config.
+smoke_daemon_control() {
+  local tmp cfg runtime daemon_pid status socket pidfile rc=0
+  tmp=$(mktemp -d -t mcpmu-smoke-daemon.XXXXXX)
+  cfg="$tmp/config.json"
+  runtime=$(mktemp -d /tmp/mu-daemon.XXXXXX)
+  chmod 0700 "$runtime"
+  echo '{"schemaVersion":1,"servers":{},"namespaces":{}}' > "$cfg"
+
+  XDG_RUNTIME_DIR="$runtime" ./mcpmu --config "$cfg" daemon run &
+  daemon_pid=$!
+
+  status=""
+  for _ in {1..100}; do
+    status=$(XDG_RUNTIME_DIR="$runtime" ./mcpmu --config "$cfg" daemon status --json 2>/dev/null || true)
+    if [[ -n "$status" ]] && printf '%s' "$status" | jq -e '.pidfileFallback == false' >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.02
+  done
+
+  if [[ -z "$status" ]] || ! printf '%s' "$status" | jq -e --argjson pid "$daemon_pid" '.pid == $pid and .pidfileFallback == false' >/dev/null 2>&1; then
+    echo "FAIL: daemon status did not report the live daemon"
+    printf '%s\n' "$status"
+    rc=1
+  else
+    socket=$(printf '%s' "$status" | jq -r '.socket')
+    pidfile="${socket%.sock}.pid"
+    if ! XDG_RUNTIME_DIR="$runtime" ./mcpmu --config "$cfg" daemon stop >/dev/null; then
+      echo "FAIL: daemon stop command failed"
+      rc=1
+    fi
+
+    for _ in {1..100}; do
+      if [[ ! -e "$socket" && ! -e "$pidfile" ]]; then
+        break
+      fi
+      sleep 0.02
+    done
+    if [[ -e "$socket" || -e "$pidfile" ]]; then
+      echo "FAIL: daemon runtime artifacts remain after graceful stop"
+      rc=1
+    fi
+  fi
+
+  if kill -0 "$daemon_pid" 2>/dev/null; then
+    kill -TERM "$daemon_pid" 2>/dev/null || true
+  fi
+  wait "$daemon_pid" 2>/dev/null || true
+  rm -rf "$runtime"
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # Register new smoke checks here.
 SMOKE_CHECKS=(
   smoke_cf_access_headers
   smoke_process_group_cleanup
+  smoke_daemon_control
 )
 
 # --- Runner ---------------------------------------------------------------

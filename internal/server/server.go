@@ -199,6 +199,12 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Start config file watcher if ConfigPath is set
 	s.startWatching(ctx)
+	reloadCh := s.reloadCh
+	if s.sharedReload.Load() {
+		// Daemon mode has one Core-owned reload consumer. Letting every Session
+		// receive from this channel would update only whichever Session won.
+		reloadCh = nil
+	}
 
 	// Start a goroutine to read lines from stdin
 	lines := make(chan readResult)
@@ -226,7 +232,7 @@ func (s *Server) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 
-		case newCfg := <-s.reloadCh:
+		case newCfg := <-reloadCh:
 			// Config file changed - apply reload
 			s.applyReload(ctx, newCfg)
 
@@ -1043,68 +1049,76 @@ func (s *Server) handlePromptsGet(ctx context.Context, params json.RawMessage) (
 // resolveNamespace determines which namespace to use and which servers are active.
 func (s *Server) resolveNamespace() *RPCError {
 	cfg := s.currentConfig()
-	namespaceArg := s.opts.Namespace
+	name, servers, method, rpcErr := resolveNamespaceSelection(cfg, s.opts.Namespace)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	s.activeNamespaceName = name
+	s.activeServerNames = servers
+	s.selectionMethod = method
+	switch method {
+	case SelectionFlag:
+		log.Printf("Using namespace %q with %d servers (selection: flag)", name, len(servers))
+	case SelectionDefault:
+		log.Printf("Using default namespace %q with %d servers (selection: default)", name, len(servers))
+	case SelectionOnly:
+		log.Printf("Using only namespace %q with %d servers (selection: only)", name, len(servers))
+	case SelectionAll:
+		log.Printf("No namespaces configured, exposing all %d enabled servers (selection: all)", len(servers))
+	}
+	return nil
+}
+
+func resolveNamespaceSelection(cfg *config.Config, namespaceArg string) (string, []string, SelectionMethod, *RPCError) {
 
 	// Rule 1: If --namespace provided, use it (lookup by name)
 	if namespaceArg != "" {
 		if ns, exists := cfg.Namespaces[namespaceArg]; exists {
-			s.activeNamespaceName = namespaceArg
-			s.activeServerNames = ns.ServerIDs
-			s.selectionMethod = SelectionFlag
-			log.Printf("Using namespace %q with %d servers (selection: flag)", namespaceArg, len(s.activeServerNames))
-			return nil
+			return namespaceArg, slices.Clone(ns.ServerIDs), SelectionFlag, nil
 		}
-		return ErrNamespaceNotFound(namespaceArg)
+		return "", nil, "", ErrNamespaceNotFound(namespaceArg)
 	}
 
 	// Rule 2: If config.defaultNamespace is set, use it
 	if cfg.DefaultNamespace != "" {
 		if ns, exists := cfg.Namespaces[cfg.DefaultNamespace]; exists {
-			s.activeNamespaceName = cfg.DefaultNamespace
-			s.activeServerNames = ns.ServerIDs
-			s.selectionMethod = SelectionDefault
-			log.Printf("Using default namespace %q with %d servers (selection: default)", cfg.DefaultNamespace, len(s.activeServerNames))
-			return nil
+			return cfg.DefaultNamespace, slices.Clone(ns.ServerIDs), SelectionDefault, nil
 		}
-		return ErrNamespaceNotFound(cfg.DefaultNamespace)
+		return "", nil, "", ErrNamespaceNotFound(cfg.DefaultNamespace)
 	}
 
 	// Rule 3: If exactly 1 namespace, use it
 	if len(cfg.Namespaces) == 1 {
 		for name, ns := range cfg.Namespaces {
-			s.activeNamespaceName = name
-			s.activeServerNames = ns.ServerIDs
-			s.selectionMethod = SelectionOnly
-			log.Printf("Using only namespace %q with %d servers (selection: only)", name, len(s.activeServerNames))
-			return nil
+			return name, slices.Clone(ns.ServerIDs), SelectionOnly, nil
 		}
 	}
 
 	// Rule 4: If 0 namespaces, expose all enabled servers
 	if len(cfg.Namespaces) == 0 {
-		s.activeNamespaceName = ""
-		s.activeServerNames = make([]string, 0, len(cfg.Servers))
+		servers := make([]string, 0, len(cfg.Servers))
 		for name, srv := range cfg.Servers {
 			if srv.IsEnabled() {
-				s.activeServerNames = append(s.activeServerNames, name)
+				servers = append(servers, name)
 			}
 		}
-		slices.Sort(s.activeServerNames)
-		s.selectionMethod = SelectionAll
-		log.Printf("No namespaces configured, exposing all %d enabled servers (selection: all)", len(s.activeServerNames))
-		return nil
+		slices.Sort(servers)
+		return "", servers, SelectionAll, nil
 	}
 
 	// Rule 5: 2+ namespaces, none selected - fail
-	return NewRPCError(ErrCodeInvalidRequest,
+	return "", nil, "", NewRPCError(ErrCodeInvalidRequest,
 		fmt.Sprintf("Multiple namespaces configured (%d), but none selected. Use --namespace to specify which namespace to expose.", len(cfg.Namespaces)),
 		nil)
 }
 
 // startEagerServers starts all servers in the active namespace.
 func (s *Server) startEagerServers(ctx context.Context) {
-	log.Printf("Starting %d servers eagerly", len(s.activeServerNames))
-	for _, name := range s.activeServerNames {
+	s.mu.RLock()
+	names := slices.Clone(s.activeServerNames)
+	s.mu.RUnlock()
+	log.Printf("Starting %d servers eagerly", len(names))
+	for _, name := range names {
 		srv, ok := s.currentConfig().GetServer(name)
 		if !ok {
 			continue
@@ -1215,11 +1229,16 @@ func (c *Core) watchConfig(ctx context.Context, configPath string) {
 	}
 }
 
-// applyReload applies a new configuration, rebuilding all components.
-// Must be called from the Run() goroutine to serialize with request handling.
+// applyReload applies a new configuration once at Core scope, then re-resolves
+// every attached Session. Embedded mode has one Session; daemon mode's
+// Core-owned watcher calls this directly for all live Sessions.
 func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
-	s.resourceStateMu.Lock()
-	defer s.resourceStateMu.Unlock()
+	s.Core.applyReload(ctx, newCfg, s)
+}
+
+func (c *Core) applyReload(ctx context.Context, newCfg *config.Config, initiator *Session) {
+	c.resourceStateMu.Lock()
+	defer c.resourceStateMu.Unlock()
 
 	log.Printf("Applying config reload: %d servers, %d namespaces",
 		len(newCfg.Servers), len(newCfg.Namespaces))
@@ -1228,31 +1247,68 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 	// transport ends the upstream-side subscription cleanly, so we only
 	// need to drop our local bookkeeping. No per-URI unsubscribe RPC is
 	// attempted — it would race with shutdown.
-	s.clearResourceStateForReload()
+	c.clearResourceStateForReload()
 
 	// Advance the config generation before stopping instances. Any stale
 	// get-or-start path must revalidate under its instance lifecycle lock.
-	s.mu.Lock()
-	oldNamespaceName := s.activeNamespaceName
-	oldSelectionMethod := s.selectionMethod
-	s.mu.Unlock()
-	s.replaceConfig(newCfg)
+	c.replaceConfig(newCfg)
 
 	// Stop all running servers after the generation barrier is visible.
-	s.supervisor.StopAll()
+	c.supervisor.StopAll()
+
+	sessions := c.sessionSnapshot()
+	if initiator != nil && !slices.Contains(sessions, initiator) {
+		// A few focused tests construct a Session directly around a Core. Keep
+		// the internal applyReload hook correct for that legacy arrangement.
+		sessions = append(sessions, initiator)
+	}
+	eagerServers := make(map[string]struct{})
+	for _, session := range sessions {
+		for _, name := range session.applyReloadConfig(newCfg) {
+			eagerServers[name] = struct{}{}
+		}
+	}
+
+	if len(eagerServers) > 0 {
+		names := make([]string, 0, len(eagerServers))
+		for name := range eagerServers {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		go c.startEagerServers(ctx, names)
+	}
+
+	for _, session := range sessions {
+		session.sendNotification("notifications/tools/list_changed")
+		if session.opts.ExposeResources {
+			session.sendNotification("notifications/resources/list_changed")
+		}
+		if session.opts.ExposePrompts {
+			session.sendNotification("notifications/prompts/list_changed")
+		}
+	}
+
+	log.Printf("Config reload complete")
+}
+
+func (s *Session) applyReloadConfig(newCfg *config.Config) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	oldNamespaceName := s.activeNamespaceName
+	oldServerNames := slices.Clone(s.activeServerNames)
+	oldSelectionMethod := s.selectionMethod
 
 	// Re-resolve namespace
 	// If namespace was selected by flag and still exists, keep it
 	// If namespace was auto-selected and still valid, keep it
 	// If namespace no longer exists, re-auto-select
-	s.mu.Lock()
-
 	var keepNamespace bool
 	if oldSelectionMethod == SelectionFlag && s.opts.Namespace != "" {
 		// Try to find the namespace by the original flag value
 		if ns, exists := newCfg.Namespaces[s.opts.Namespace]; exists {
 			s.activeNamespaceName = s.opts.Namespace
-			s.activeServerNames = ns.ServerIDs
+			s.activeServerNames = slices.Clone(ns.ServerIDs)
 			s.selectionMethod = SelectionFlag
 			keepNamespace = true
 		}
@@ -1260,33 +1316,27 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 		// Try to keep the same namespace by name
 		if ns, exists := newCfg.Namespaces[oldNamespaceName]; exists {
 			s.activeNamespaceName = oldNamespaceName
-			s.activeServerNames = ns.ServerIDs
+			s.activeServerNames = slices.Clone(ns.ServerIDs)
 			s.selectionMethod = oldSelectionMethod
 			keepNamespace = true
 		}
 	}
 
 	if !keepNamespace {
-		// Need to re-resolve namespace from scratch
-		// Save previous state so we can restore on failure (fail-closed)
-		oldActiveServerNames := s.activeServerNames
-		s.activeNamespaceName = ""
-		s.activeServerNames = nil
-		s.mu.Unlock()
-
-		// Re-run namespace resolution
-		if err := s.resolveNamespace(); err != nil {
+		name, servers, method, err := resolveNamespaceSelection(newCfg, s.opts.Namespace)
+		if err != nil {
 			log.Printf("WARN: namespace resolution failed after reload, keeping previous config: %v", err)
-			s.mu.Lock()
 			s.activeNamespaceName = oldNamespaceName
-			s.activeServerNames = oldActiveServerNames
+			s.activeServerNames = oldServerNames
 			s.selectionMethod = oldSelectionMethod
-			s.mu.Unlock()
+		} else {
+			s.activeNamespaceName = name
+			s.activeServerNames = servers
+			s.selectionMethod = method
 		}
 	} else {
 		log.Printf("Kept namespace %q after reload with %d servers",
 			s.activeNamespaceName, len(s.activeServerNames))
-		s.mu.Unlock()
 	}
 
 	// Rebuild aggregator and router with new config. Swap under the write
@@ -1294,29 +1344,24 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 	// the whole new pair, never a torn read.
 	newRouter := NewRouter(s.Core)
 
-	s.mu.Lock()
 	s.router = newRouter
 	activeNsName := s.activeNamespaceName
 	selMethod := s.selectionMethod
-	s.mu.Unlock()
 
 	newRouter.SetActiveNamespace(activeNsName, selMethod)
-
-	// Restart servers if eager start is configured
-	if s.opts.EagerStart {
-		go s.startEagerServers(ctx)
+	if !s.opts.EagerStart {
+		return nil
 	}
+	return slices.Clone(s.activeServerNames)
+}
 
-	// Notify client that lists may have changed
-	s.sendNotification("notifications/tools/list_changed")
-	if s.opts.ExposeResources {
-		s.sendNotification("notifications/resources/list_changed")
+func (c *Core) startEagerServers(ctx context.Context, names []string) {
+	log.Printf("Starting %d servers eagerly after reload", len(names))
+	for _, name := range names {
+		if _, _, err := c.getOrStartHandle(ctx, name); err != nil {
+			log.Printf("Failed to start server %s after reload: %v", name, err)
+		}
 	}
-	if s.opts.ExposePrompts {
-		s.sendNotification("notifications/prompts/list_changed")
-	}
-
-	log.Printf("Config reload complete")
 }
 
 // sendResult sends a successful JSON-RPC response.

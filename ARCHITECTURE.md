@@ -49,7 +49,11 @@ mcpmu is an MCP server aggregator that manages multiple MCP servers and exposes 
 
 ## Primary Usage: stdio Mode
 
-Claude Code/Codex spawns mcpmu as a subprocess. No daemons, no manual startup.
+Claude Code/Codex spawns mcpmu as a subprocess. The shipped `serve` path is
+still embedded at this phase: one process owns one Core and one stdio Session.
+The Unix shared-daemon runtime and its hidden control commands now exist for
+integration testing, but `serve` does not connect to or auto-spawn it until the
+next rollout phase.
 
 ```json
 // ~/.claude/mcp_servers.json
@@ -84,8 +88,52 @@ same Core helper.
 That helper enforces each server's `startup_timeout_sec` (10 seconds by
 default) across startup, initialization, and initial tool discovery.
 
-This is an internal layering boundary only. It does not change the stdio wire
-protocol, process ownership, or user-facing lifecycle described above.
+Embedded serve keeps the same stdio wire protocol and process ownership. The
+same boundary also lets the internal daemon attach multiple Sessions to one
+Core without duplicating upstream processes.
+
+### Shared Daemon Foundation (opt-in/internal)
+
+`internal/daemon` provides the Unix listener and control plane used by the
+planned shared serve path. It is deliberately not selected by `mcpmu serve`
+yet. The hidden commands are available for development and diagnostics:
+
+```bash
+mcpmu --config /absolute/or/relative/config.json daemon run --foreground
+mcpmu --config /absolute/or/relative/config.json daemon status
+mcpmu --config /absolute/or/relative/config.json daemon stop
+```
+
+There is one daemon identity per canonical config path. Canonicalization
+expands `~`, makes the path absolute, resolves symlinks, and preserves a
+not-yet-created suffix below the nearest existing ancestor. A short hash of
+that path names the Unix socket, run lock, pidfile, and log in a user-owned
+runtime directory; the complete canonical path remains authoritative in every
+handshake and pidfile, so a short-hash collision cannot select another config.
+Runtime directories are mode `0700`, sockets and pidfiles are `0600`, and
+Linux/macOS connections additionally require a matching peer UID.
+
+Session connections use a versioned pre-MCP handshake carrying the executable
+content hash, canonical config path, namespace, eager setting, manager-tool
+visibility, and resource/prompt passthrough flags. Once accepted, the socket is
+ordinary NDJSON MCP. Each Session has one bounded outbound queue; a client that
+cannot drain is disconnected instead of blocking the shared Core. Control
+connections have a separately frozen protocol and tolerate executable-build
+mismatch so a newly installed CLI can still inspect or stop an older daemon.
+
+The daemon owns config watching and applies each reload once at Core scope:
+subscriptions and URI maps are cleared, upstreams are stopped, every attached
+Session re-resolves its namespace and permissions, the union of eager Sessions
+is restarted, and capability-scoped list-change notifications are sent to each
+Session. Embedded serve retains its single-Session reload consumer.
+
+A run lock serializes daemon ownership. The first and last Session transitions
+control a 60-second linger timer; `daemon stop` rejects new Sessions, drains
+existing ones for at most 30 seconds, then cancels them. SIGTERM follows the
+same path. Normal exit closes the shared Core (and therefore every upstream
+process group), removes the socket and pidfile, and retains the per-config log.
+The pidfile records the full config path, PID/start identity, and executable;
+control fallback validates all of that identity before signalling anything.
 
 ### Verified Upstream Catalog
 

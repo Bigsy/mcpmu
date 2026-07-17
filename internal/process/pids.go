@@ -465,6 +465,13 @@ func getProcessStartTicks(pid int) (int64, error) {
 	return getProcessStartTicksPlatform(pid)
 }
 
+// ProcessStartIdentity returns the OS-provided start identity for pid. The
+// value is only meaningful when compared with another observation from the
+// same platform; it is used to reject reused PIDs before signalling them.
+func ProcessStartIdentity(pid int) (int64, error) {
+	return getProcessStartTicks(pid)
+}
+
 // getProcessCmdline returns the full command line of a process.
 func getProcessCmdline(pid int) ([]string, error) {
 	switch runtime.GOOS {

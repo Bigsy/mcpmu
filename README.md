@@ -206,6 +206,12 @@ mcpmu serve --stdio --expose-manager-tools   # include mcpmu.* management tools
 mcpmu serve --stdio --log-level debug        # verbose logging
 ```
 
+Serve currently runs an embedded Core and owns its upstream processes. An
+experimental Unix shared-daemon foundation is available through hidden
+`mcpmu daemon run|status|stop` diagnostics, but `serve` does not connect to or
+auto-spawn it yet. See [docs/CLI.md](docs/CLI.md#shared-daemon-diagnostics-experimental)
+for the opt-in development commands.
+
 ## Shell Completions
 
 Tab-completion for server names, namespace names, and subcommand arguments. If installed via Homebrew:
