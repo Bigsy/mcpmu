@@ -61,23 +61,22 @@ func NewCore(opts Options) (*Core, error) {
 		}
 	}
 
-	broadcaster := &singleSubscriberBroadcaster{}
 	c := &Core{
 		cfg:              opts.Config,
 		configGeneration: 1,
 		bus:              bus,
 		supervisor:       supervisor,
-		notifications:    broadcaster,
 		reloadCh:         make(chan *config.Config, 1),
 		configPath:       opts.ConfigPath,
 		debounceDelay:    opts.DebounceDelay,
 	}
 	c.aggregator = NewAggregator(c.cfg, supervisor, false)
 	c.aggregator.acquire = c.getOrStartHandle
+	c.notifications = newNotificationBroadcaster(c.processNotification)
 
-	// Supervisor only knows about the Core broadcaster, never an individual
-	// Session. This is the seam Phase 2B expands to real fanout.
-	supervisor.SetNotificationSink(broadcaster)
+	// Supervisor publishes immutable generation-tagged results to Core. It
+	// never knows about individual downstream sessions.
+	supervisor.SetObserver(c)
 	return c, nil
 }
 
@@ -241,6 +240,48 @@ func (c *Core) startWatching(ctx context.Context) {
 func (c *Core) Close() {
 	c.closeOnce.Do(func() {
 		c.supervisor.StopAll()
+		c.notifications.Close()
 		c.bus.Close()
 	})
 }
+
+// OnDiscoveryResult consumes the Supervisor-owned initial discovery result.
+func (c *Core) OnDiscoveryResult(result process.DiscoveryResult) {
+	changed, hadPrior := c.currentAggregator().applyDiscovery(result)
+	if changed && hadPrior {
+		c.notifications.Publish(process.UpstreamNotification{
+			Instance: result.Instance, Generation: result.Generation,
+			Method: "notifications/tools/list_changed",
+		})
+	}
+}
+
+// OnInstanceStopped invalidates verification while retaining the last-good
+// tool set for partial responses and diagnostics.
+func (c *Core) OnInstanceStopped(id process.InstanceID, generation uint64) {
+	c.currentAggregator().invalidateInstance(id, generation)
+}
+
+// OnUpstreamNotification is called on the MCP response-reader goroutine and
+// therefore only enqueues work for the broadcaster worker.
+func (c *Core) OnUpstreamNotification(notification process.UpstreamNotification) {
+	c.notifications.OnUpstreamNotification(notification)
+}
+
+func (c *Core) processNotification(notification process.UpstreamNotification) bool {
+	handle := c.supervisor.GetInstance(notification.Instance)
+	if notification.Upstream && (handle == nil || !handle.IsRunning() || handle.Generation() != notification.Generation) {
+		return false
+	}
+	if notification.Upstream && notification.Method == "notifications/tools/list_changed" {
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultToolDiscoveryTimeout)
+		err := c.currentAggregator().refreshHandleTools(ctx, handle)
+		cancel()
+		if err != nil {
+			log.Printf("Failed to refresh tools after upstream list_changed from %s: %v", notification.Instance, err)
+		}
+	}
+	return true
+}
+
+var _ process.Observer = (*Core)(nil)

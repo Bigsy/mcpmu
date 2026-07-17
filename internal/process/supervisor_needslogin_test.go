@@ -78,7 +78,7 @@ func newNeedsLoginHTTPFixture(t *testing.T, expectedConfigHeader string) *needsL
 				"id":      req.ID,
 				"result": map[string]any{
 					"protocolVersion": "2025-11-25",
-					"capabilities":    map[string]any{},
+					"capabilities":    map[string]any{"tools": map[string]any{}},
 					"serverInfo": map[string]any{
 						"name":    "needs-login-fixture",
 						"version": "1.0.0",

@@ -96,7 +96,7 @@ func TestSupervisor_HTTPOAuthRefreshesTokenDuringRuntime(t *testing.T) {
 					"id":      req.ID,
 					"result": map[string]any{
 						"protocolVersion": "2025-11-25",
-						"capabilities":    map[string]any{},
+						"capabilities":    map[string]any{"tools": map[string]any{}},
 						"serverInfo": map[string]any{
 							"name":    "fake",
 							"version": "1.0.0",

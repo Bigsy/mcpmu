@@ -197,11 +197,6 @@ func (r *Router) handleServersStart(ctx context.Context, arguments json.RawMessa
 		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}
 
-	// Refresh tools after starting
-	if err := r.core.currentAggregator().RefreshServerTools(ctx, serverName); err != nil {
-		log.Printf("Failed to refresh tools after start: %v", err)
-	}
-
 	return textResult(fmt.Sprintf("Started server %s (PID: %d, tools: %d)", serverName, handle.PID(), len(handle.Tools()))), nil
 }
 
@@ -258,11 +253,6 @@ func (r *Router) handleServersRestart(ctx context.Context, arguments json.RawMes
 	// Wait for init + tool discovery
 	if err := handle.WaitForTools(ctx); err != nil {
 		return nil, ErrServerFailedToStart(serverName, err.Error())
-	}
-
-	// Refresh tools after restart
-	if err := r.core.currentAggregator().RefreshServerTools(ctx, serverName); err != nil {
-		log.Printf("Failed to refresh tools after restart: %v", err)
 	}
 
 	return textResult(fmt.Sprintf("Restarted server %s (PID: %d, tools: %d)", serverName, handle.PID(), len(handle.Tools()))), nil

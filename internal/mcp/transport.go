@@ -62,14 +62,6 @@ type PromptsCapability struct {
 	ListChanged bool `json:"listChanged,omitempty"`
 }
 
-// NotificationSink receives notifications from upstream MCP clients. The
-// supervisor wires a sink into each client after initialization, so the
-// server-level aggregator can relay notifications such as
-// `notifications/resources/updated` back to the downstream client.
-type NotificationSink interface {
-	OnUpstreamNotification(serverName, method string, params json.RawMessage)
-}
-
 // Tool represents an MCP tool definition.
 type Tool struct {
 	Name        string `json:"name"`

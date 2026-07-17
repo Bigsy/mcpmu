@@ -599,14 +599,8 @@ func TestServer_ResourcesSubscribe_ReloadClearsSubs(t *testing.T) {
 	}
 }
 
-// TestServer_ResourcesSubscribe_DuplicateURI: when two upstreams advertise
-// the same URI, resourceMap is last-writer-wins (pre-existing limitation).
-// Subscribe must route to the last writer; a stray update from the other
-// upstream for that URI must be dropped.
-//
-// The test forces deterministic "last-writer" ordering by delaying srv_b's
-// resources/list response, so srv_b stores into resourceMap after srv_a.
-// Assertions are then exact, not "at most one update".
+// TestServer_ResourcesSubscribe_DuplicateURI verifies stable namespace-order
+// ownership regardless of goroutine completion order. The first server wins.
 func TestServer_ResourcesSubscribe_DuplicateURI(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -620,26 +614,21 @@ func TestServer_ResourcesSubscribe_DuplicateURI(t *testing.T) {
 		SchemaVersion: 1,
 		Servers: map[string]config.ServerConfig{
 			"srv_a": fakeServerConfig(t, map[string]any{
-				"tools":              []any{},
-				"resources":          []any{map[string]any{"uri": "file:///shared.txt", "name": "shared"}},
-				"resourcesSubscribe": true,
-				"requestLogPath":     logA,
-				// Emits an unsolicited update at startup — represents the
-				// "losing" upstream trying to push updates for a URI it
-				// doesn't own in mcpmu's routing map.
-				"emitStartupUpdates": []string{"file:///shared.txt"},
-			}),
-			"srv_b": fakeServerConfig(t, map[string]any{
 				"tools":                    []any{},
 				"resources":                []any{map[string]any{"uri": "file:///shared.txt", "name": "shared"}},
 				"resourcesSubscribe":       true,
-				"requestLogPath":           logB,
+				"requestLogPath":           logA,
 				"emitUpdateAfterSubscribe": true,
 				"postSubscribeEmitDelayMs": 50,
+			}),
+			"srv_b": fakeServerConfig(t, map[string]any{
+				"tools":              []any{},
+				"resources":          []any{map[string]any{"uri": "file:///shared.txt", "name": "shared"}},
+				"resourcesSubscribe": true,
+				"requestLogPath":     logB,
+				"emitStartupUpdates": []string{"file:///shared.txt"},
 				// Delay resources/list so srv_b responds AFTER srv_a. The
-				// aggregator's per-server goroutines store into resourceMap
-				// as their ListResources calls return, so srv_b stores last
-				// and wins the URI in resourceMap.
+				// Completion order must not affect namespace-order ownership.
 				"delays": map[string]int64{
 					"resources/list": int64(200 * time.Millisecond),
 				},
@@ -652,15 +641,17 @@ func TestServer_ResourcesSubscribe_DuplicateURI(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
 	)
-	// Wait for resources/list to fully complete on both upstreams before
-	// subscribing, so the last-writer-wins ordering is stable.
+	// Wait for resources/list to fully complete on both upstreams.
 	h.settle(400 * time.Millisecond)
 
-	// Verify routing: the shared URI must be owned by srv_b (the delayed one).
-	if val, ok := h.srv.resourceMap.Load("file:///shared.txt"); !ok {
+	// Verify routing: srv_a wins because it is first in stable server order.
+	h.srv.resourceMapMu.RLock()
+	owner, ok := h.srv.resourceMap["file:///shared.txt"]
+	h.srv.resourceMapMu.RUnlock()
+	if !ok {
 		t.Fatal("expected shared URI in resourceMap after list, missing")
-	} else if got := val.(string); got != "srv_b" {
-		t.Fatalf("last-writer routing: expected srv_b to own shared URI, got %q", got)
+	} else if owner != "srv_a" {
+		t.Fatalf("namespace-order routing: expected srv_a to own shared URI, got %q", owner)
 	}
 
 	h.write(`{"jsonrpc":"2.0","id":3,"method":"resources/subscribe","params":{"uri":"file:///shared.txt"}}`)
@@ -679,18 +670,18 @@ func TestServer_ResourcesSubscribe_DuplicateURI(t *testing.T) {
 		t.Fatalf("subscribe on duplicated URI should have succeeded, got: %v", subResp.Error)
 	}
 
-	// Routing: subscribe hit srv_b only, not srv_a.
+	// Routing: subscribe hit srv_a only, not srv_b.
 	logABytes, _ := os.ReadFile(logA)
 	logBBytes, _ := os.ReadFile(logB)
-	if strings.Contains(string(logABytes), "resources/subscribe") {
-		t.Errorf("subscribe must not be sent to losing upstream srv_a; log:\n%s", logABytes)
+	if !strings.Contains(string(logABytes), "resources/subscribe") {
+		t.Errorf("subscribe should have been sent to winning upstream srv_a; log:\n%s", logABytes)
 	}
-	if !strings.Contains(string(logBBytes), "resources/subscribe") {
-		t.Errorf("subscribe should have been sent to winning upstream srv_b; log:\n%s", logBBytes)
+	if strings.Contains(string(logBBytes), "resources/subscribe") {
+		t.Errorf("subscribe must not be sent to losing upstream srv_b; log:\n%s", logBBytes)
 	}
 
-	// Downstream: exactly one update for the shared URI — from srv_b
-	// (post-subscribe). srv_a's startup emit must have been filtered as stray.
+	// Downstream: exactly one update from winner srv_a. srv_b's startup update
+	// is filtered as stray.
 	uris := collectUpdatedURIs(t, h.stdout.String())
 	count := 0
 	for _, u := range uris {
@@ -699,7 +690,7 @@ func TestServer_ResourcesSubscribe_DuplicateURI(t *testing.T) {
 		}
 	}
 	if count != 1 {
-		t.Errorf("expected exactly 1 downstream update for shared URI (srv_b's post-subscribe, srv_a's stray filtered); got %d: %v",
+		t.Errorf("expected exactly 1 downstream update for shared URI; got %d: %v",
 			count, uris)
 	}
 }

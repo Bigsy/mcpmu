@@ -53,6 +53,12 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			Params:  map[string]string{"uri": uri},
 		})
 	}
+	emitToolsListChanged := func() {
+		_ = writeFrame(syncedOut, rpcNotification{
+			JSONRPC: "2.0",
+			Method:  "notifications/tools/list_changed",
+		})
+	}
 
 	if cfg.SetUpdateHook != nil {
 		cfg.SetUpdateHook(emitUpdate)
@@ -121,11 +127,14 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		// Handle methods
 		switch req.Method {
 		case "initialize":
-			caps := Capabilities{Tools: &ToolsCapability{}}
-			if len(cfg.Resources) > 0 || cfg.ResourceContents != nil || cfg.ResourcesSubscribe {
+			caps := Capabilities{}
+			if cfg.AdvertiseTools == nil || *cfg.AdvertiseTools {
+				caps.Tools = &ToolsCapability{}
+			}
+			if capabilityEnabled(cfg.AdvertiseResources, len(cfg.Resources) > 0 || cfg.ResourceContents != nil || cfg.ResourcesSubscribe) {
 				caps.Resources = &ResourcesCapability{Subscribe: cfg.ResourcesSubscribe}
 			}
-			if len(cfg.Prompts) > 0 || cfg.PromptMessages != nil {
+			if capabilityEnabled(cfg.AdvertisePrompts, len(cfg.Prompts) > 0 || cfg.PromptMessages != nil) {
 				caps.Prompts = &PromptsCapability{}
 			}
 			_ = writeResponse(out, req.ID, InitializeResult{
@@ -136,10 +145,16 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 
 		case "tools/list":
 			tools := cfg.Tools
+			if methodAttempts[req.Method] > 1 && cfg.ToolsAfterListChanged != nil {
+				tools = cfg.ToolsAfterListChanged
+			}
 			if tools == nil {
 				tools = []Tool{}
 			}
 			_ = writeResponse(out, req.ID, ToolsListResult{Tools: tools}, cfg)
+			if methodAttempts[req.Method] == 1 && cfg.EmitToolsListChangedAfterFirstList {
+				emitToolsListChanged()
+			}
 
 		case "tools/call":
 			var params ToolCallParams
@@ -303,6 +318,13 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			}, cfg)
 		}
 	}
+}
+
+func capabilityEnabled(explicit *bool, inferred bool) bool {
+	if explicit != nil {
+		return *explicit
+	}
+	return inferred
 }
 
 // syncedWriter serializes writes from multiple goroutines (main request loop

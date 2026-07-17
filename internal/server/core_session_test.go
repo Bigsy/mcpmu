@@ -3,12 +3,12 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
-	"github.com/Bigsy/mcpmu/internal/mcp"
+	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/Bigsy/mcpmu/internal/testutil"
 )
 
@@ -33,9 +33,11 @@ func TestCoreSessionLifecycle(t *testing.T) {
 	if first.Core != core {
 		t.Fatal("session is not attached to the requested core")
 	}
-	if _, err := NewSession(core, opts); !errors.Is(err, errNotificationSubscriberExists) {
-		t.Fatalf("second NewSession error = %v, want single-subscriber error", err)
+	concurrent, err := NewSession(core, opts)
+	if err != nil {
+		t.Fatalf("second concurrent NewSession: %v", err)
 	}
+	concurrent.Close()
 
 	first.Close()
 	second, err := NewSession(core, opts)
@@ -46,38 +48,46 @@ func TestCoreSessionLifecycle(t *testing.T) {
 }
 
 type recordingNotificationSink struct {
-	server string
-	method string
-	params json.RawMessage
+	notifications chan process.UpstreamNotification
 }
 
-func (s *recordingNotificationSink) OnUpstreamNotification(serverName, method string, params json.RawMessage) {
-	s.server = serverName
-	s.method = method
-	s.params = append(s.params[:0], params...)
+func (s *recordingNotificationSink) OnUpstreamNotification(notification process.UpstreamNotification) {
+	s.notifications <- notification.Clone()
 }
 
-var _ mcp.NotificationSink = (*recordingNotificationSink)(nil)
+var _ NotificationSink = (*recordingNotificationSink)(nil)
 
-func TestSingleSubscriberBroadcasterForwardsNotifications(t *testing.T) {
-	broadcaster := &singleSubscriberBroadcaster{}
-	sink := &recordingNotificationSink{}
+func TestNotificationBroadcasterForwardsToMultipleSubscribers(t *testing.T) {
+	broadcaster := newNotificationBroadcaster(nil)
+	t.Cleanup(broadcaster.Close)
+	sink := &recordingNotificationSink{notifications: make(chan process.UpstreamNotification, 1)}
 	unsubscribe, err := broadcaster.Subscribe(sink)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	params := json.RawMessage(`{"uri":"file:///example"}`)
-	broadcaster.OnUpstreamNotification("files", "notifications/resources/updated", params)
-	if sink.server != "files" || sink.method != "notifications/resources/updated" {
-		t.Fatalf("forwarded notification = (%q, %q), want files/resources-updated", sink.server, sink.method)
+	second := &recordingNotificationSink{notifications: make(chan process.UpstreamNotification, 1)}
+	if _, err := broadcaster.Subscribe(second); err != nil {
+		t.Fatalf("Subscribe second: %v", err)
 	}
-	if string(sink.params) != string(params) {
-		t.Fatalf("forwarded params = %s, want %s", sink.params, params)
+
+	params := json.RawMessage(`{"uri":"file:///example"}`)
+	broadcaster.OnUpstreamNotification(process.UpstreamNotification{
+		Instance: process.SharedInstanceID("files"), Method: "notifications/resources/updated", Params: params,
+	})
+	for index, receiver := range []<-chan process.UpstreamNotification{sink.notifications, second.notifications} {
+		select {
+		case got := <-receiver:
+			if got.Instance.Server != "files" || got.Method != "notifications/resources/updated" || string(got.Params) != string(params) {
+				t.Fatalf("subscriber %d got %+v", index, got)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("subscriber %d did not receive notification", index)
+		}
 	}
 
 	unsubscribe()
-	if _, err := broadcaster.Subscribe(&recordingNotificationSink{}); err != nil {
+	if _, err := broadcaster.Subscribe(&recordingNotificationSink{notifications: make(chan process.UpstreamNotification, 1)}); err != nil {
 		t.Fatalf("Subscribe after unsubscribe: %v", err)
 	}
 }

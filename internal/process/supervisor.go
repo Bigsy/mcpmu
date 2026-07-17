@@ -50,11 +50,12 @@ type Supervisor struct {
 	mu                      sync.RWMutex
 	lifecycleMu             sync.Mutex
 	lifecycleLocks          map[InstanceID]*sync.Mutex
+	generations             map[InstanceID]uint64
 
-	// notificationSink receives upstream notifications. Set once via
-	// SetNotificationSink before any client is started; read under sinkMu.
-	sinkMu           sync.RWMutex
-	notificationSink mcp.NotificationSink
+	// observer receives immutable discovery/lifecycle results and upstream
+	// notifications. Set before clients start; read under observerMu.
+	observerMu sync.RWMutex
+	observer   Observer
 }
 
 // SetToolCache sets the tool cache for token counting.
@@ -62,26 +63,30 @@ func (s *Supervisor) SetToolCache(tc *config.ToolCache) {
 	s.toolCache = tc
 }
 
-// SetNotificationSink installs a sink that receives notifications from every
-// upstream client. Must be called before Start() so that all clients have the
-// handler wired immediately after Initialize.
-func (s *Supervisor) SetNotificationSink(sink mcp.NotificationSink) {
-	s.sinkMu.Lock()
-	s.notificationSink = sink
-	s.sinkMu.Unlock()
+// SetObserver installs the Core observer. It must be called before Start.
+func (s *Supervisor) SetObserver(observer Observer) {
+	s.observerMu.Lock()
+	s.observer = observer
+	s.observerMu.Unlock()
 }
 
-// installNotificationHandler wires the sink (if any) into a client so that
-// upstream notifications are forwarded with the server name attached.
-func (s *Supervisor) installNotificationHandler(name string, client *mcp.Client) {
-	s.sinkMu.RLock()
-	sink := s.notificationSink
-	s.sinkMu.RUnlock()
-	if sink == nil {
+// installNotificationHandler wires the observer into a client. The callback
+// only hands off immutable data; Core performs refresh work asynchronously.
+func (s *Supervisor) installNotificationHandler(handle *Handle, client *mcp.Client) {
+	s.observerMu.RLock()
+	observer := s.observer
+	s.observerMu.RUnlock()
+	if observer == nil {
 		return
 	}
 	client.SetNotificationHandler(func(method string, params json.RawMessage) {
-		sink.OnUpstreamNotification(name, method, params)
+		observer.OnUpstreamNotification(UpstreamNotification{
+			Instance:   handle.instance,
+			Generation: handle.generation,
+			Method:     method,
+			Params:     append(json.RawMessage(nil), params...),
+			Upstream:   true,
+		})
 	})
 }
 
@@ -157,6 +162,7 @@ func NewSupervisorWithOptions(bus *events.Bus, opts SupervisorOptions) *Supervis
 		tokenManager:            tokenManager,
 		globalOAuthCallbackPort: opts.GlobalOAuthCallbackPort,
 		lifecycleLocks:          make(map[InstanceID]*sync.Mutex),
+		generations:             make(map[InstanceID]uint64),
 	}
 }
 
@@ -223,6 +229,11 @@ func (s *Supervisor) StartInstance(
 }
 
 func (s *Supervisor) startInstanceLocked(ctx context.Context, id InstanceID, srv config.ServerConfig) (*Handle, error) {
+	s.mu.Lock()
+	s.generations[id]++
+	generation := s.generations[id]
+	s.mu.Unlock()
+
 	// Dispatch based on server type — initialization runs without the
 	// global lock so that multiple servers can start concurrently.
 	var (
@@ -230,9 +241,9 @@ func (s *Supervisor) startInstanceLocked(ctx context.Context, id InstanceID, srv
 		err    error
 	)
 	if srv.IsHTTP() {
-		handle, err = s.startHTTP(ctx, id, srv)
+		handle, err = s.startHTTP(ctx, id, generation, srv)
 	} else {
-		handle, err = s.startStdio(ctx, id, srv)
+		handle, err = s.startStdio(ctx, id, generation, srv)
 	}
 
 	if err != nil {
@@ -248,7 +259,7 @@ func (s *Supervisor) startInstanceLocked(ctx context.Context, id InstanceID, srv
 }
 
 // startStdio starts a stdio-based MCP server process.
-func (s *Supervisor) startStdio(ctx context.Context, id InstanceID, srv config.ServerConfig) (*Handle, error) {
+func (s *Supervisor) startStdio(ctx context.Context, id InstanceID, generation uint64, srv config.ServerConfig) (*Handle, error) {
 	name := id.Server
 	log.Printf("Starting stdio server: name=%s cmd=%s args=%v", name, srv.Command, srv.Args)
 
@@ -320,6 +331,7 @@ func (s *Supervisor) startStdio(ctx context.Context, id InstanceID, srv config.S
 	handle := &Handle{
 		id:             name,
 		instance:       id,
+		generation:     generation,
 		kind:           HandleKindStdio,
 		ctx:            handleCtx,
 		ctxCancel:      handleCancel,
@@ -333,6 +345,7 @@ func (s *Supervisor) startStdio(ctx context.Context, id InstanceID, srv config.S
 		startedAt:      time.Now(),
 		done:           make(chan struct{}),
 	}
+	handle.onStopped = s.notifyInstanceStopped
 	if s.pidTracker != nil {
 		leaderPID := cmd.Process.Pid
 		handle.onGroupRetired = func() {
@@ -414,61 +427,25 @@ initLoop:
 
 	if initErr != nil {
 		handle.setInitError(initErr)
+		s.publishDiscovery(DiscoveryResult{
+			Instance: handle.instance, Generation: handle.generation, Err: initErr,
+		})
 		_ = handle.Stop()
 		s.emitStatus(name, events.StateError, handle.PID(), nil, fmt.Sprintf("MCP init failed after %d attempts: %v", MaxInitRetries, initErr))
 		return
 	}
 
 	// Install notification handler now that initialization succeeded.
-	s.installNotificationHandler(name, client)
+	s.installNotificationHandler(handle, client)
 
 	// Emit running event
 	s.emitStatus(name, events.StateRunning, handle.PID(), nil, "")
 
-	// Discover tools
-	ctx, cancel := context.WithTimeout(handle.ctx, 30*time.Second)
-	defer cancel()
-
-	tools, err := client.ListTools(ctx)
-	if err != nil {
-		s.bus.Publish(events.NewErrorEvent(name, err, "Failed to list tools"))
-		return
-	}
-
-	handle.SetTools(tools)
-
-	mcpTools := make([]events.McpTool, len(tools))
-	for i, t := range tools {
-		var schema json.RawMessage
-		if t.InputSchema != nil {
-			schema, _ = json.Marshal(t.InputSchema)
-		}
-		mcpTools[i] = events.McpTool{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: schema,
-		}
-	}
-	// Update tool cache before publishing event so TUI reads fresh data
-	if s.toolCache != nil {
-		cacheInputs := make([]config.CachedToolInput, len(mcpTools))
-		for i, t := range mcpTools {
-			cacheInputs[i] = config.CachedToolInput{
-				Name:        t.Name,
-				Description: t.Description,
-				InputSchema: t.InputSchema,
-			}
-		}
-		if err := s.toolCache.Update(name, cacheInputs); err != nil {
-			log.Printf("Warning: failed to update tool cache for %s: %v", name, err)
-		}
-	}
-
-	s.bus.Publish(events.NewToolsUpdatedEvent(name, mcpTools))
+	s.discoverInitialTools(handle, client, name)
 }
 
 // startHTTP starts an HTTP-based MCP server connection.
-func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, srv config.ServerConfig) (*Handle, error) {
+func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, generation uint64, srv config.ServerConfig) (*Handle, error) {
 	name := id.Server
 	log.Printf("Starting HTTP server: name=%s url=%s", name, srv.URL)
 
@@ -549,6 +526,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, srv config.Se
 	handle := &Handle{
 		id:            name,
 		instance:      id,
+		generation:    generation,
 		kind:          HandleKindHTTP,
 		ctx:           handleCtx,
 		ctxCancel:     handleCancel,
@@ -563,6 +541,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, srv config.Se
 		startedAt:     time.Now(),
 		done:          make(chan struct{}),
 	}
+	handle.onStopped = s.notifyInstanceStopped
 
 	s.mu.Lock()
 	s.handles[id] = handle
@@ -604,7 +583,11 @@ func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, srv config.Se
 				handle.client = nil // No client until authenticated
 				_ = httpTransport.Close()
 				handle.httpTransport = nil
-				handle.setInitError(fmt.Errorf("%w for server %s", ErrNeedsLogin, name))
+				needsLoginErr := fmt.Errorf("%w for server %s", ErrNeedsLogin, name)
+				handle.setInitError(needsLoginErr)
+				s.publishDiscovery(DiscoveryResult{
+					Instance: handle.instance, Generation: handle.generation, Err: needsLoginErr,
+				})
 				handle.signalToolsReady()
 
 				s.emitStatus(name, events.StateNeedsAuth, 0, nil, "OAuth login required")
@@ -613,13 +596,16 @@ func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, srv config.Se
 			}
 		}
 
+		s.publishDiscovery(DiscoveryResult{
+			Instance: handle.instance, Generation: handle.generation, Err: err,
+		})
 		_ = handle.Stop()
 		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
 		return nil, fmt.Errorf("initialize mcp: %w", err)
 	}
 
 	// Install notification handler now that initialization succeeded.
-	s.installNotificationHandler(name, client)
+	s.installNotificationHandler(handle, client)
 
 	// Emit running event immediately (tool discovery happens in background)
 	s.emitStatus(name, events.StateRunning, 0, nil, "")
@@ -760,6 +746,22 @@ func (s *Supervisor) emitStatus(id string, state events.RuntimeState, pid int, l
 // Used by startHTTP (which does its own sync init) and retryHTTPConnection.
 func (s *Supervisor) discoverToolsAsync(handle *Handle, client *mcp.Client, name string) {
 	defer handle.signalToolsReady()
+	s.discoverInitialTools(handle, client, name)
+}
+
+// discoverInitialTools is the Supervisor's single owner of initial upstream
+// discovery. Initialization without a tools capability verifies an empty tool
+// catalog and deliberately does not issue tools/list.
+func (s *Supervisor) discoverInitialTools(handle *Handle, client *mcp.Client, name string) {
+	capabilities := client.Capabilities()
+	if capabilities.Tools == nil {
+		handle.SetTools([]mcp.Tool{})
+		s.publishDiscovery(DiscoveryResult{
+			Instance: handle.instance, Generation: handle.generation, Initialized: true,
+			Capabilities: capabilities, Tools: []mcp.Tool{},
+		})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(handle.ctx, 30*time.Second)
 	defer cancel()
@@ -767,11 +769,22 @@ func (s *Supervisor) discoverToolsAsync(handle *Handle, client *mcp.Client, name
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		s.bus.Publish(events.NewErrorEvent(name, err, "Failed to list tools"))
+		s.publishDiscovery(DiscoveryResult{
+			Instance: handle.instance, Generation: handle.generation, Initialized: true,
+			Capabilities: capabilities, Err: err,
+		})
 		return
 	}
 
 	handle.SetTools(tools)
+	s.publishDiscovery(DiscoveryResult{
+		Instance: handle.instance, Generation: handle.generation, Initialized: true,
+		Capabilities: capabilities, Tools: tools,
+	})
+	s.publishToolsUpdated(name, tools)
+}
 
+func (s *Supervisor) publishToolsUpdated(name string, tools []mcp.Tool) {
 	mcpTools := make([]events.McpTool, len(tools))
 	for i, t := range tools {
 		var schema json.RawMessage
@@ -799,6 +812,28 @@ func (s *Supervisor) discoverToolsAsync(handle *Handle, client *mcp.Client, name
 	}
 
 	s.bus.Publish(events.NewToolsUpdatedEvent(name, mcpTools))
+}
+
+func (s *Supervisor) publishDiscovery(result DiscoveryResult) {
+	result = result.Clone()
+	if handle := s.GetInstance(result.Instance); handle != nil && handle.Generation() == result.Generation {
+		handle.setDiscoveryResult(result)
+	}
+	s.observerMu.RLock()
+	observer := s.observer
+	s.observerMu.RUnlock()
+	if observer != nil {
+		observer.OnDiscoveryResult(result.Clone())
+	}
+}
+
+func (s *Supervisor) notifyInstanceStopped(id InstanceID, generation uint64) {
+	s.observerMu.RLock()
+	observer := s.observer
+	s.observerMu.RUnlock()
+	if observer != nil {
+		observer.OnInstanceStopped(id, generation)
+	}
 }
 
 // buildEnv creates the environment for a subprocess with PATH augmentation.
@@ -854,9 +889,10 @@ const (
 
 // Handle represents a running server (process or HTTP connection).
 type Handle struct {
-	id       string
-	instance InstanceID
-	kind     HandleKind
+	id         string
+	instance   InstanceID
+	generation uint64
+	kind       HandleKind
 
 	// Stdio-specific fields
 	cmd            *exec.Cmd
@@ -882,6 +918,9 @@ type Handle struct {
 	toolsReadyMu sync.Mutex    // protects toolsReady close
 	initErr      error         // set if MCP init fails (checked by WaitForTools)
 	initErrMu    sync.Mutex
+	discovery    DiscoveryResult
+	discoverySet bool
+	discoveryMu  sync.RWMutex
 	logs         []string
 	logsMu       sync.RWMutex
 	bus          *events.Bus
@@ -891,6 +930,8 @@ type Handle struct {
 	done         chan struct{} // closed when server stops
 	groupErr     error
 	groupErrMu   sync.Mutex
+	onStopped    func(InstanceID, uint64)
+	stoppedOnce  sync.Once
 }
 
 // ID returns the server ID.
@@ -901,6 +942,11 @@ func (h *Handle) ID() string {
 // InstanceID returns the stable identity used by the Supervisor and PID registry.
 func (h *Handle) InstanceID() InstanceID {
 	return h.instance
+}
+
+// Generation identifies this exact process/transport generation.
+func (h *Handle) Generation() uint64 {
+	return h.generation
 }
 
 // Client returns the MCP client.
@@ -922,14 +968,36 @@ func (h *Handle) Capabilities() mcp.ServerCapabilities {
 func (h *Handle) Tools() []mcp.Tool {
 	h.toolsMu.RLock()
 	defer h.toolsMu.RUnlock()
-	return h.tools
+	return cloneTools(h.tools)
 }
 
 // SetTools sets the discovered tools (thread-safe).
 func (h *Handle) SetTools(tools []mcp.Tool) {
 	h.toolsMu.Lock()
 	defer h.toolsMu.Unlock()
-	h.tools = tools
+	h.tools = cloneTools(tools)
+}
+
+func (h *Handle) setDiscoveryResult(result DiscoveryResult) {
+	h.discoveryMu.Lock()
+	h.discovery = result.Clone()
+	h.discoverySet = true
+	h.discoveryMu.Unlock()
+}
+
+// DiscoveryResult returns the Supervisor-owned initial discovery result.
+func (h *Handle) DiscoveryResult() (DiscoveryResult, bool) {
+	h.discoveryMu.RLock()
+	defer h.discoveryMu.RUnlock()
+	return h.discovery.Clone(), h.discoverySet
+}
+
+func (h *Handle) notifyStopped() {
+	h.stoppedOnce.Do(func() {
+		if h.onStopped != nil {
+			h.onStopped(h.instance, h.generation)
+		}
+	})
 }
 
 // signalToolsReady signals that tool discovery is complete.
@@ -1108,6 +1176,7 @@ func (h *Handle) Stop() error {
 			State: events.StateStopped,
 		}))
 	}
+	h.notifyStopped()
 
 	return h.processGroupError()
 }
@@ -1195,6 +1264,7 @@ func (h *Handle) watchProcess() {
 		State:    newState,
 		LastExit: lastExit,
 	}))
+	h.notifyStopped()
 }
 
 // OAuthMeta returns the cached OAuth metadata for servers needing login.

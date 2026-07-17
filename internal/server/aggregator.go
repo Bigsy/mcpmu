@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/process"
 )
 
@@ -49,11 +51,7 @@ type Aggregator struct {
 	supervisor *process.Supervisor
 	acquire    func(context.Context, string) (*process.Handle, config.ServerConfig, error)
 
-	// Tool cache: serverName -> unqualified toolName -> tool (raw, no prefix).
-	// Per-server map so RefreshServerTools / DiscoverServer / partial-failure
-	// handling are O(1) per server rather than scanning a flat map.
-	tools   map[string]map[string]AggregatedTool
-	toolsMu sync.RWMutex
+	catalog *verifiedCatalog
 
 	// Manager tools
 	managerTools       []AggregatedTool
@@ -65,7 +63,7 @@ func NewAggregator(cfg *config.Config, supervisor *process.Supervisor, exposeMan
 	a := &Aggregator{
 		cfg:                cfg,
 		supervisor:         supervisor,
-		tools:              make(map[string]map[string]AggregatedTool),
+		catalog:            newVerifiedCatalog(),
 		exposeManagerTools: exposeManagerTools,
 	}
 	a.acquire = a.getOrStartHandle
@@ -77,20 +75,13 @@ func NewAggregator(cfg *config.Config, supervisor *process.Supervisor, exposeMan
 // This may start servers lazily if they're not running.
 // serverNames is a list of server names (map keys).
 //
-// Discovery is per-server: a failure for one server marks that server's cache
-// entry as empty (not poisoned with stale data) but does not affect entries
-// for other servers — including servers that were populated by an earlier
-// DiscoverServer / RefreshServerTools call and are not in serverNames now.
+// Discovery is singleflight per InstanceID. Supervisor owns initialize and
+// initial tools/list; Aggregator consumes that immutable result into the
+// Core-owned verified catalog.
 func (a *Aggregator) ListTools(ctx context.Context, serverNames []string) ([]AggregatedTool, error) {
-	type discoveryResult struct {
-		serverName string
-		tools      []AggregatedTool
-		err        error
-	}
-
 	sem := make(chan struct{}, MaxConcurrentDiscovery)
 	var wg sync.WaitGroup
-	results := make([]discoveryResult, len(serverNames))
+	errs := make([]error, len(serverNames))
 
 	for i, name := range serverNames {
 		wg.Add(1)
@@ -98,38 +89,17 @@ func (a *Aggregator) ListTools(ctx context.Context, serverNames []string) ([]Agg
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-
-			tools, err := a.discoverServerTools(ctx, serverName)
-			results[idx] = discoveryResult{serverName: serverName, tools: tools, err: err}
+			errs[idx] = a.ensureCatalog(ctx, serverName)
 		}(i, name)
 	}
 
 	wg.Wait()
-
-	a.toolsMu.Lock()
-	for _, r := range results {
-		if r.err != nil {
-			log.Printf("Failed to discover tools from %s: %v", r.serverName, r.err)
-			// Empty entry — explicit "no tools" rather than stale data from
-			// a previous discovery.
-			a.tools[r.serverName] = map[string]AggregatedTool{}
-			continue
-		}
-		m := make(map[string]AggregatedTool, len(r.tools))
-		for _, t := range r.tools {
-			m[t.origName] = t
-		}
-		a.tools[r.serverName] = m
-	}
-
-	// Build the exposed list from cache for the requested servers only.
-	var allTools []AggregatedTool
-	for _, name := range serverNames {
-		for _, t := range a.tools[name] {
-			allTools = append(allTools, exposeTool(name, t))
+	for i, err := range errs {
+		if err != nil {
+			log.Printf("Failed to discover tools from %s: %v", serverNames[i], err)
 		}
 	}
-	a.toolsMu.Unlock()
+	allTools := a.catalog.tools(serverNames)
 
 	// Add manager tools only if exposed
 	if a.exposeManagerTools {
@@ -150,8 +120,8 @@ func (a *Aggregator) PendingServers(serverNames []string) []string {
 		if !ok || !srv.IsEnabled() {
 			continue
 		}
-		handle := a.supervisor.Get(name)
-		if handle == nil || !handle.IsRunning() || !handle.ToolsReady() {
+		state := a.catalog.snapshot(process.SharedInstanceID(name)).state
+		if state != catalogVerified {
 			pending = append(pending, name)
 		}
 	}
@@ -174,13 +144,7 @@ func (a *Aggregator) GetTool(name string) (AggregatedTool, bool) {
 		return AggregatedTool{}, false
 	}
 
-	a.toolsMu.RLock()
-	defer a.toolsMu.RUnlock()
-	m, ok := a.tools[serverName]
-	if !ok {
-		return AggregatedTool{}, false
-	}
-	t, ok := m[toolName]
+	t, ok := a.catalog.tool(serverName, toolName)
 	if !ok {
 		return AggregatedTool{}, false
 	}
@@ -193,50 +157,51 @@ func (a *Aggregator) ManagerTools() []AggregatedTool {
 	return slices.Clone(a.managerTools)
 }
 
-// discoverServerTools acquires a ready server through the Core-provided
-// get-or-start helper and retrieves its tools.
-// Returns tools with raw (unqualified, unprefixed) values; the caller stores
-// them as-is and applies qualification/prefix at the exposure boundary.
-func (a *Aggregator) discoverServerTools(ctx context.Context, serverName string) ([]AggregatedTool, error) {
+func (a *Aggregator) ensureCatalog(ctx context.Context, serverName string) error {
 	srv, ok := a.cfg.GetServer(serverName)
 	if !ok {
-		return nil, fmt.Errorf("server not found: %s", serverName)
+		return fmt.Errorf("server not found: %s", serverName)
 	}
-
 	if !srv.IsEnabled() {
-		log.Printf("Server %s is disabled, skipping", serverName)
-		return nil, nil
+		return nil
+	}
+	id := process.SharedInstanceID(serverName)
+	flight, owner := a.catalog.begin(id)
+	if flight == nil {
+		return nil
+	}
+	if !owner {
+		if err := waitForFlight(ctx, flight); err != nil {
+			return err
+		}
+		return catalogError(a.catalog.snapshot(id))
+	}
+	defer a.catalog.finish(id, flight)
+
+	entry := a.catalog.snapshot(id)
+	handle := a.supervisor.GetInstance(id)
+	if entry.state == catalogDiscovering && entry.err != nil && handle != nil && handle.IsRunning() && handle.ToolsReady() &&
+		handle.Generation() == entry.generation {
+		return a.refreshHandleTools(ctx, handle)
 	}
 
 	handle, _, err := a.acquire(ctx, serverName)
 	if err != nil {
-		return nil, err
-	}
-
-	// Get tools from the running server
-	mcpTools := handle.Tools()
-
-	tools := make([]AggregatedTool, len(mcpTools))
-	for i, t := range mcpTools {
-		// Convert InputSchema
-		var schemaJSON json.RawMessage
-		if t.InputSchema != nil {
-			if b, err := json.Marshal(t.InputSchema); err == nil {
-				schemaJSON = b
-			}
+		generation := uint64(0)
+		if current := a.supervisor.GetInstance(id); current != nil {
+			generation = current.Generation()
 		}
-
-		tools[i] = AggregatedTool{
-			Name:        t.Name,        // unqualified, internal
-			Description: t.Description, // raw, internal
-			InputSchema: schemaJSON,
-			serverID:    serverName,
-			serverName:  serverName,
-			origName:    t.Name,
-		}
+		a.catalog.fail(id, generation, err)
+		return err
 	}
-
-	return tools, nil
+	result, exists := handle.DiscoveryResult()
+	if !exists {
+		err := errors.New("supervisor completed readiness without a discovery result")
+		a.catalog.fail(id, handle.Generation(), err)
+		return err
+	}
+	a.catalog.apply(result)
+	return catalogError(a.catalog.snapshot(id))
 }
 
 // getOrStartHandle preserves NewAggregator's standalone test/API behavior.
@@ -309,54 +274,85 @@ func (a *Aggregator) buildManagerTools() []AggregatedTool {
 	}
 }
 
-// DiscoverServer discovers tools from a single server and merges them into
-// the cache. Existing entries for tools whose names appear in the new
-// discovery are overwritten; entries for other tools from this server are
-// left in place (per-server append semantics, kept for parity with prior
-// behavior).
+// DiscoverServer verifies one server and returns its full catalog entry.
 func (a *Aggregator) DiscoverServer(ctx context.Context, serverName string) ([]AggregatedTool, error) {
-	tools, err := a.discoverServerTools(ctx, serverName)
-	if err != nil {
+	if err := a.ensureCatalog(ctx, serverName); err != nil {
 		return nil, err
 	}
-
-	a.toolsMu.Lock()
-	m, ok := a.tools[serverName]
-	if !ok {
-		m = make(map[string]AggregatedTool, len(tools))
-		a.tools[serverName] = m
-	}
-	for _, t := range tools {
-		m[t.origName] = t
-	}
-	a.toolsMu.Unlock()
-
-	// Return tools in their exposed form so callers see qualified names.
-	out := make([]AggregatedTool, len(tools))
-	for i, t := range tools {
-		out[i] = exposeTool(serverName, t)
-	}
-	return out, nil
+	return a.catalog.tools([]string{serverName}), nil
 }
 
 // RefreshServerTools refreshes the tool cache for a specific server (full
 // per-server replace — old entries for that server are dropped).
 func (a *Aggregator) RefreshServerTools(ctx context.Context, serverName string) error {
-	tools, err := a.discoverServerTools(ctx, serverName)
-	if err != nil {
-		return err
+	handle := a.supervisor.Get(serverName)
+	if handle == nil || !handle.IsRunning() {
+		return a.ensureCatalog(ctx, serverName)
 	}
+	return a.refreshHandleTools(ctx, handle)
+}
 
-	m := make(map[string]AggregatedTool, len(tools))
-	for _, t := range tools {
-		m[t.origName] = t
+func (a *Aggregator) refreshHandleTools(ctx context.Context, handle *process.Handle) error {
+	capabilities := handle.Capabilities()
+	result := process.DiscoveryResult{
+		Instance: handle.InstanceID(), Generation: handle.Generation(), Initialized: true,
+		Capabilities: capabilities,
 	}
+	if capabilities.Tools == nil {
+		result.Tools = []mcp.Tool{}
+		a.catalog.apply(result)
+		return nil
+	}
+	client := handle.Client()
+	if client == nil {
+		result.Err = errors.New("upstream client is unavailable")
+		a.catalog.apply(result)
+		return result.Err
+	}
+	tools, err := client.ListTools(ctx)
+	result.Tools = tools
+	result.Err = err
+	if err == nil {
+		handle.SetTools(tools)
+	}
+	a.catalog.apply(result)
+	return err
+}
 
-	a.toolsMu.Lock()
-	a.tools[serverName] = m
-	a.toolsMu.Unlock()
+func (a *Aggregator) applyDiscovery(result process.DiscoveryResult) (changed, hadPrior bool) {
+	return a.catalog.apply(result)
+}
 
-	return nil
+func (a *Aggregator) invalidateInstance(id process.InstanceID, generation uint64) {
+	a.catalog.invalidate(id, generation)
+}
+
+type catalogCapability uint8
+
+const (
+	catalogResources catalogCapability = iota
+	catalogPrompts
+)
+
+// shouldQueryCapability implements list fan-out scoping. Running upstreams
+// are queried regardless of catalog state; stopped verified upstreams that did
+// not advertise the relevant capability are skipped.
+func (a *Aggregator) shouldQueryCapability(serverName string, capability catalogCapability) bool {
+	if handle := a.supervisor.Get(serverName); handle != nil && handle.IsRunning() {
+		return true
+	}
+	entry := a.catalog.snapshot(process.SharedInstanceID(serverName))
+	if entry.state != catalogVerified {
+		return true
+	}
+	switch capability {
+	case catalogResources:
+		return entry.capabilities.Resources != nil
+	case catalogPrompts:
+		return entry.capabilities.Prompts != nil
+	default:
+		return true
+	}
 }
 
 // ToolForServer returns the original tool info for routing a call.
@@ -366,13 +362,7 @@ func (a *Aggregator) ToolForServer(qualifiedName string) (serverID, origToolName
 		return "", "", false
 	}
 
-	a.toolsMu.RLock()
-	defer a.toolsMu.RUnlock()
-	m, ok := a.tools[serverName]
-	if !ok {
-		return "", "", false
-	}
-	t, ok := m[toolName]
+	t, ok := a.catalog.tool(serverName, toolName)
 	if !ok {
 		return "", "", false
 	}

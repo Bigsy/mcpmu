@@ -74,14 +74,40 @@ Serve mode is split into two layers inside `internal/server`:
 
 The current stdio entry point is embedded mode: `server.New` constructs one
 `Core` and attaches exactly one stdio `Session` in the same process. Upstream
-notifications enter through a Core-owned broadcaster with one subscriber, so
-the Supervisor does not depend on a particular client connection. All lazy
-tool, resource, prompt, and discovery acquisition uses the same Core helper.
+notifications enter through a Core-owned worker-backed broadcaster, so the
+Supervisor does not depend on a particular client connection and never runs a
+refresh request on its MCP client's response-reader goroutine. The broadcaster
+supports multiple independently buffered Session subscribers; embedded mode
+uses one. All lazy tool, resource, prompt, and discovery acquisition uses the
+same Core helper.
 That helper enforces each server's `startup_timeout_sec` (10 seconds by
 default) across startup, initialization, and initial tool discovery.
 
 This is an internal layering boundary only. It does not change the stdio wire
 protocol, process ownership, or user-facing lifecycle described above.
+
+### Verified Upstream Catalog
+
+The Supervisor is the single owner of upstream initialization and initial
+`tools/list`. Each actual start receives a monotonically increasing generation
+for its `InstanceID`; after initialization, the Supervisor publishes one
+immutable result containing that identity, generation, advertised capabilities,
+tools, and any discovery error. Core consumes the result into a catalog with
+`unknown`, `discovering`, `verified`, and `failed` states.
+
+Cold discovery is singleflight per instance. A verified empty result is distinct
+from an unknown server. Initialization verifies resources-only or prompts-only
+servers without issuing an unsupported `tools/list`; failure from a server that
+advertises tools stays retryable and retains the last verified tool set. Stops
+and config reloads invalidate verification, restarts publish a fresh generation,
+and late results from older generations are ignored.
+
+An upstream `notifications/tools/list_changed` callback only enters the
+broadcaster queue. Its worker refreshes that generation's catalog entry before
+fanning the notification out to Sessions, avoiding the reader-goroutine
+request/response deadlock. Resources and prompts list fan-out uses recorded
+capabilities to skip verified, stopped upstreams that lack the relevant
+capability while still probing unknown entries.
 
 ### Process Lifecycle Foundations
 
@@ -170,6 +196,10 @@ Serve mode uses a two-phase `tools/list` flow so clients are not blocked behind 
 5. If background discovery makes progress, `mcpmu` sends `notifications/tools/list_changed` so the client can refresh with another `tools/list`.
 6. Config reloads that may change the visible tool set also send `notifications/tools/list_changed`.
 
+The catalog retains the last verified tools across a transient refresh failure,
+but keeps the entry failed/retryable. Upstream list-change notifications refresh
+the catalog before they are relayed downstream.
+
 This keeps `tools/list` responsive for clients with tight request timeouts while still converging to the full aggregated tool set.
 
 ## HTTP Server Custom Headers
@@ -180,9 +210,9 @@ For `streamable_http` servers, two map fields on `ServerConfig` flow from the CL
 
 Serve mode passes through `resources/*` and `prompts/*` MCP methods from upstream servers (enabled by default, disable with `--resources=false` or `--prompts=false`).
 
-- **Resources**: URIs are passed through unmodified from upstream servers. A reverse map (URI → server name) is built during `resources/list` and used to route `resources/read` calls to the correct upstream server. All MCP resource fields are preserved, including `annotations`, `title`, and `size`. `resources/templates/list` is also supported (returns an empty list if no upstream servers provide templates).
+- **Resources**: URIs are passed through unmodified from upstream servers. A reverse map (URI → server name) is rebuilt atomically during `resources/list` and used to route `resources/read` calls to the correct upstream server. Results are merged in stable namespace server order; if two upstreams expose the same raw URI, the first owner wins and later duplicates are omitted and logged. All MCP resource fields are preserved, including `annotations`, `title`, and `size`. `resources/templates/list` is also supported (returns an empty list if no upstream servers provide templates).
 - **Prompts**: Names are qualified as `serverName.promptName` (same as tools). Descriptions are prefixed with `[serverName]`. On `prompts/get`, the prefix is stripped before forwarding upstream.
-- **No caching**: Resources and prompts are fetched on demand from upstream servers, not cached or discovered at startup.
+- **No caching**: Resource and prompt payloads are fetched on demand. Their fan-out consults initialize-time catalog capabilities so a verified stopped server that lacks the relevant capability can be skipped without starting it.
 - **No permissions**: Unlike tools, resources and prompts have no permission layer — they are read-only and user-initiated.
 
 ## Permission Resolution

@@ -11,14 +11,25 @@ import (
 type Config struct {
 	// Tools to return from tools/list
 	Tools []Tool `json:"tools"`
+	// AdvertiseTools controls the initialize capability independently of the
+	// tools payload. Nil preserves the historical default (advertise tools).
+	AdvertiseTools *bool `json:"advertiseTools,omitempty"`
+	// ToolsAfterListChanged replaces Tools on the second and later tools/list
+	// calls, for catalog invalidation tests.
+	ToolsAfterListChanged []Tool `json:"toolsAfterListChanged,omitempty"`
+	// EmitToolsListChangedAfterFirstList emits an upstream invalidation after
+	// the initial tools/list response.
+	EmitToolsListChangedAfterFirstList bool `json:"emitToolsListChangedAfterFirstList,omitempty"`
 
 	// Resources to return from resources/list
-	Resources []Resource `json:"resources"`
+	Resources          []Resource `json:"resources"`
+	AdvertiseResources *bool      `json:"advertiseResources,omitempty"`
 	// ResourceContents maps URI -> raw content for resources/read
 	ResourceContents map[string]json.RawMessage `json:"resourceContents,omitempty"`
 
 	// Prompts to return from prompts/list
-	Prompts []Prompt `json:"prompts"`
+	Prompts          []Prompt `json:"prompts"`
+	AdvertisePrompts *bool    `json:"advertisePrompts,omitempty"`
 	// PromptMessages maps prompt name -> raw messages for prompts/get
 	PromptMessages map[string]json.RawMessage `json:"promptMessages,omitempty"`
 

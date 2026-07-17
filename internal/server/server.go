@@ -17,6 +17,7 @@ import (
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/mcp"
+	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -86,8 +87,10 @@ type Session struct {
 	bgDiscovering        atomic.Bool
 	listToolsGracePeriod time.Duration // 0 means use ListToolsGracePeriod constant
 
-	// Resource routing: maps original URI → server name (populated by resources/list)
-	resourceMap sync.Map
+	// Resource routing is rebuilt atomically from each deterministic
+	// resources/list merge: original URI → first server in namespace order.
+	resourceMapMu sync.RWMutex
+	resourceMap   map[string]string
 
 	// Active resource subscriptions: URI → upstream server name. Populated
 	// by successful resources/subscribe calls; cleared on unsubscribe and on
@@ -118,11 +121,12 @@ func New(opts Options) (*Server, error) {
 // NewSession binds one downstream connection to an existing Core.
 func NewSession(core *Core, opts Options) (*Session, error) {
 	s := &Session{
-		Core:   core,
-		opts:   opts,
-		reader: bufio.NewReader(opts.Stdin),
-		writer: opts.Stdout,
-		subs:   make(map[string]string),
+		Core:        core,
+		opts:        opts,
+		reader:      bufio.NewReader(opts.Stdin),
+		writer:      opts.Stdout,
+		subs:        make(map[string]string),
+		resourceMap: make(map[string]string),
 	}
 	s.router = NewRouter(core)
 	unsubscribe, err := core.notifications.Subscribe(s)
@@ -484,13 +488,14 @@ func (s *Server) sendNotificationWithParams(method string, params any) {
 // OnUpstreamNotification implements mcp.NotificationSink. It runs on the
 // upstream client's reader goroutine — must not block on stdout writes, so
 // any downstream emission happens in a goroutine.
-func (s *Server) OnUpstreamNotification(serverName, method string, params json.RawMessage) {
-	switch method {
+func (s *Server) OnUpstreamNotification(notification process.UpstreamNotification) {
+	serverName := notification.Instance.Server
+	switch notification.Method {
 	case "notifications/resources/updated":
 		var p struct {
 			URI string `json:"uri"`
 		}
-		if err := json.Unmarshal(params, &p); err != nil || p.URI == "" {
+		if err := json.Unmarshal(notification.Params, &p); err != nil || p.URI == "" {
 			if DebugLogging {
 				log.Printf("resources/updated: malformed params from %s: %v", serverName, err)
 			}
@@ -515,8 +520,14 @@ func (s *Server) OnUpstreamNotification(serverName, method string, params json.R
 			s.sendNotificationWithParams("notifications/resources/updated", map[string]string{"uri": p.URI})
 		})
 	default:
+		if notification.Method == "notifications/tools/list_changed" ||
+			(notification.Method == "notifications/resources/list_changed" && s.opts.ExposeResources) ||
+			(notification.Method == "notifications/prompts/list_changed" && s.opts.ExposePrompts) {
+			s.handlersWG.Go(func() { s.sendNotification(notification.Method) })
+			return
+		}
 		if DebugLogging {
-			log.Printf("OnUpstreamNotification: dropping %s from %s (relay not implemented)", method, serverName)
+			log.Printf("OnUpstreamNotification: dropping %s from %s (relay not implemented)", notification.Method, serverName)
 		}
 	}
 }
@@ -648,14 +659,20 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 		Annotations json.RawMessage `json:"annotations,omitempty"`
 	}
 
-	var allResources []listedResource
-	var mu sync.Mutex
+	type serverResources struct {
+		resources []mcp.Resource
+	}
+	results := make([]serverResources, len(activeServerNames))
 	sem := make(chan struct{}, MaxConcurrentDiscovery)
 	var wg sync.WaitGroup
 
-	for _, name := range activeServerNames {
+	aggregator := s.currentAggregator()
+	for index, name := range activeServerNames {
+		if !aggregator.shouldQueryCapability(name, catalogResources) {
+			continue
+		}
 		wg.Add(1)
-		go func(serverName string) {
+		go func(resultIndex int, serverName string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -675,31 +692,36 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 				return
 			}
 
-			mu.Lock()
-			for _, r := range resources {
-				// Pass through the original URI so clients can match URIs
-				// referenced in tool descriptions. Store the mapping for
-				// routing resources/read to the correct upstream server.
-				s.resourceMap.Store(r.URI, serverName)
-				allResources = append(allResources, listedResource{
-					URI:         r.URI,
-					Name:        r.Name,
-					Title:       r.Title,
-					Description: r.Description,
-					MimeType:    r.MimeType,
-					Size:        r.Size,
-					Annotations: r.Annotations,
-				})
-			}
-			mu.Unlock()
-		}(name)
+			results[resultIndex].resources = resources
+		}(index, name)
 	}
 
 	wg.Wait()
 
-	if allResources == nil {
-		allResources = []listedResource{}
+	allResources := make([]listedResource, 0)
+	owners := make(map[string]string)
+	for index, result := range results {
+		serverName := activeServerNames[index]
+		for _, r := range result.resources {
+			if firstOwner, exists := owners[r.URI]; exists {
+				log.Printf("resources/list URI collision for %q: keeping %s, omitting %s", r.URI, firstOwner, serverName)
+				continue
+			}
+			owners[r.URI] = serverName
+			allResources = append(allResources, listedResource{
+				URI:         r.URI,
+				Name:        r.Name,
+				Title:       r.Title,
+				Description: r.Description,
+				MimeType:    r.MimeType,
+				Size:        r.Size,
+				Annotations: r.Annotations,
+			})
+		}
 	}
+	s.resourceMapMu.Lock()
+	s.resourceMap = owners
+	s.resourceMapMu.Unlock()
 	return struct {
 		Resources []listedResource `json:"resources"`
 	}{Resources: allResources}, nil
@@ -723,12 +745,12 @@ func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage
 	}
 
 	// Look up which server owns this URI (populated by resources/list)
-	val, ok := s.resourceMap.Load(req.URI)
+	s.resourceMapMu.RLock()
+	serverName, ok := s.resourceMap[req.URI]
+	s.resourceMapMu.RUnlock()
 	if !ok {
 		return nil, ErrInvalidParams("unknown resource URI (has resources/list been called?): " + req.URI)
 	}
-	serverName := val.(string)
-
 	if !slices.Contains(activeServerNames, serverName) {
 		return nil, ErrServerNotFound(serverName)
 	}
@@ -771,12 +793,12 @@ func (s *Server) handleResourcesSubscribe(ctx context.Context, params json.RawMe
 		return nil, ErrInvalidParams("missing uri")
 	}
 
-	val, ok := s.resourceMap.Load(req.URI)
+	s.resourceMapMu.RLock()
+	serverName, ok := s.resourceMap[req.URI]
+	s.resourceMapMu.RUnlock()
 	if !ok {
 		return nil, ErrInvalidParams("unknown resource URI (has resources/list been called?): " + req.URI)
 	}
-	serverName := val.(string)
-
 	if !slices.Contains(activeServerNames, serverName) {
 		return nil, ErrServerNotFound(serverName)
 	}
@@ -832,8 +854,11 @@ func (s *Server) handleResourcesUnsubscribe(ctx context.Context, params json.Raw
 	serverName, known := s.subs[req.URI]
 	s.subMu.Unlock()
 	if !known {
-		if val, ok := s.resourceMap.Load(req.URI); ok {
-			serverName = val.(string)
+		s.resourceMapMu.RLock()
+		mappedServer, ok := s.resourceMap[req.URI]
+		s.resourceMapMu.RUnlock()
+		if ok {
+			serverName = mappedServer
 			known = true
 		}
 	}
@@ -886,14 +911,17 @@ func (s *Server) handlePromptsList(ctx context.Context) (any, *RPCError) {
 		Arguments   []mcp.PromptArgument `json:"arguments,omitempty"`
 	}
 
-	var allPrompts []qualifiedPrompt
-	var mu sync.Mutex
+	results := make([][]mcp.Prompt, len(activeServerNames))
 	sem := make(chan struct{}, MaxConcurrentDiscovery)
 	var wg sync.WaitGroup
 
-	for _, name := range activeServerNames {
+	aggregator := s.currentAggregator()
+	for index, name := range activeServerNames {
+		if !aggregator.shouldQueryCapability(name, catalogPrompts) {
+			continue
+		}
 		wg.Add(1)
-		go func(serverName string) {
+		go func(resultIndex int, serverName string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -913,28 +941,28 @@ func (s *Server) handlePromptsList(ctx context.Context) (any, *RPCError) {
 				return
 			}
 
-			mu.Lock()
-			for _, p := range prompts {
-				desc := p.Description
-				if desc != "" {
-					desc = fmt.Sprintf("[%s] %s", serverName, desc)
-				} else {
-					desc = fmt.Sprintf("[%s]", serverName)
-				}
-				allPrompts = append(allPrompts, qualifiedPrompt{
-					Name:        serverName + "." + p.Name,
-					Description: desc,
-					Arguments:   p.Arguments,
-				})
-			}
-			mu.Unlock()
-		}(name)
+			results[resultIndex] = prompts
+		}(index, name)
 	}
 
 	wg.Wait()
 
-	if allPrompts == nil {
-		allPrompts = []qualifiedPrompt{}
+	allPrompts := make([]qualifiedPrompt, 0)
+	for index, prompts := range results {
+		serverName := activeServerNames[index]
+		for _, p := range prompts {
+			desc := p.Description
+			if desc != "" {
+				desc = fmt.Sprintf("[%s] %s", serverName, desc)
+			} else {
+				desc = fmt.Sprintf("[%s]", serverName)
+			}
+			allPrompts = append(allPrompts, qualifiedPrompt{
+				Name:        serverName + "." + p.Name,
+				Description: desc,
+				Arguments:   p.Arguments,
+			})
+		}
 	}
 	return struct {
 		Prompts []qualifiedPrompt `json:"prompts"`
@@ -1036,6 +1064,7 @@ func (s *Server) resolveNamespace() *RPCError {
 				s.activeServerNames = append(s.activeServerNames, name)
 			}
 		}
+		slices.Sort(s.activeServerNames)
 		s.selectionMethod = SelectionAll
 		log.Printf("No namespaces configured, exposing all %d enabled servers (selection: all)", len(s.activeServerNames))
 		return nil
@@ -1174,6 +1203,9 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 	s.subMu.Lock()
 	clear(s.subs)
 	s.subMu.Unlock()
+	s.resourceMapMu.Lock()
+	clear(s.resourceMap)
+	s.resourceMapMu.Unlock()
 
 	// Advance the config generation before stopping instances. Any stale
 	// get-or-start path must revalidate under its instance lifecycle lock.
