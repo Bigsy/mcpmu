@@ -11,7 +11,7 @@ import (
 
 // Router routes tool calls to the appropriate upstream server.
 type Router struct {
-	core *Core
+	session *Session
 
 	// Active namespace info (set after initialize)
 	activeNamespaceName string
@@ -19,8 +19,8 @@ type Router struct {
 }
 
 // NewRouter creates a new tool call router.
-func NewRouter(core *Core) *Router {
-	return &Router{core: core}
+func NewRouter(session *Session) *Router {
+	return &Router{session: session}
 }
 
 // SetActiveNamespace sets the active namespace info for the router.
@@ -45,7 +45,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 	// 1. Global deny (applies even without a namespace)
 	// 2. Namespace-scoped permissions (when namespace is active)
 	// 3. Returns true for everything else when namespace is empty
-	cfg := r.core.currentConfig()
+	cfg := r.session.currentConfig()
 	allowed, reason := IsToolAllowed(cfg, r.activeNamespaceName, serverName, toolName)
 	if !allowed {
 		return nil, ErrToolDenied(qualifiedName, reason)
@@ -58,7 +58,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 	}
 
 	// Acquire through the Core's single lazy-start/readiness path.
-	sc, rpcErr := r.core.getOrStartServer(ctx, serverName)
+	sc, rpcErr := r.session.getOrStartServer(ctx, serverName)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -80,9 +80,9 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 		if isRetriableHTTPError(err) {
 			log.Printf("CallTool: 4xx error for %s.%s, reinitializing: %v", serverName, toolName, err)
 
-			_ = r.core.supervisor.Stop(serverName)
+			_ = r.session.supervisor.StopInstance(r.session.instanceID(serverName))
 
-			reinitialized, reinitErr := r.core.getOrStartServer(ctx, serverName)
+			reinitialized, reinitErr := r.session.getOrStartServer(ctx, serverName)
 			if reinitErr != nil {
 				return nil, ErrInternalError(fmt.Sprintf("tool call failed (reinit: %v) (original: %v)", reinitErr, err))
 			}
@@ -136,7 +136,7 @@ func (r *Router) handleManagerTool(ctx context.Context, toolName string, argumen
 
 // handleServersList returns the list of configured servers with status.
 func (r *Router) handleServersList(ctx context.Context) (*ToolCallResult, *RPCError) {
-	cfg := r.core.currentConfig()
+	cfg := r.session.currentConfig()
 	servers := make([]ServerInfo, 0, len(cfg.Servers))
 	for name, srv := range cfg.Servers {
 		info := ServerInfo{
@@ -148,7 +148,7 @@ func (r *Router) handleServersList(ctx context.Context) (*ToolCallResult, *RPCEr
 		}
 
 		// Check if running
-		handle := r.core.supervisor.Get(name)
+		handle := r.session.supervisor.GetInstance(r.session.instanceID(name))
 		if handle != nil && handle.IsRunning() {
 			info.Status = "running"
 			info.PID = handle.PID()
@@ -174,20 +174,21 @@ func (r *Router) handleServersStart(ctx context.Context, arguments json.RawMessa
 	}
 
 	serverName := args.ServerID // server_id now means server name
-	cfg := r.core.currentConfig()
-	srv, ok := cfg.GetServer(serverName)
+	cfg := r.session.currentConfig()
+	_, ok := cfg.GetServer(serverName)
 	if !ok {
 		return nil, ErrServerNotFound(serverName)
 	}
 
 	// Check if already running
-	handle := r.core.supervisor.Get(serverName)
+	instance := r.session.instanceID(serverName)
+	handle := r.session.supervisor.GetInstance(instance)
 	if handle != nil && handle.IsRunning() {
 		return textResult(fmt.Sprintf("Server %s is already running (PID: %d)", serverName, handle.PID())), nil
 	}
 
 	// Start the server
-	handle, err := r.core.supervisor.Start(ctx, serverName, srv)
+	handle, _, err := r.session.getOrStartHandle(ctx, serverName)
 	if err != nil {
 		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}
@@ -210,18 +211,19 @@ func (r *Router) handleServersStop(ctx context.Context, arguments json.RawMessag
 	}
 
 	serverName := args.ServerID
-	if _, ok := r.core.currentConfig().GetServer(serverName); !ok {
+	if _, ok := r.session.currentConfig().GetServer(serverName); !ok {
 		return nil, ErrServerNotFound(serverName)
 	}
 
 	// Check if running
-	handle := r.core.supervisor.Get(serverName)
+	instance := r.session.instanceID(serverName)
+	handle := r.session.supervisor.GetInstance(instance)
 	if handle == nil || !handle.IsRunning() {
 		return textResult(fmt.Sprintf("Server %s is not running", serverName)), nil
 	}
 
 	// Stop the server
-	if err := r.core.supervisor.Stop(serverName); err != nil {
+	if err := r.session.supervisor.StopInstance(instance); err != nil {
 		return nil, ErrInternalError(fmt.Sprintf("failed to stop server: %v", err))
 	}
 
@@ -238,14 +240,14 @@ func (r *Router) handleServersRestart(ctx context.Context, arguments json.RawMes
 	}
 
 	serverName := args.ServerID
-	cfg := r.core.currentConfig()
+	cfg := r.session.currentConfig()
 	srv, ok := cfg.GetServer(serverName)
 	if !ok {
 		return nil, ErrServerNotFound(serverName)
 	}
 
 	// Stop and start under one per-instance lifecycle lock.
-	handle, err := r.core.supervisor.Restart(ctx, serverName, srv)
+	handle, err := r.session.restartHandle(ctx, serverName, srv)
 	if err != nil {
 		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}
@@ -278,11 +280,11 @@ func (r *Router) handleServerLogs(ctx context.Context, arguments json.RawMessage
 	}
 
 	serverName := args.ServerID
-	if _, ok := r.core.currentConfig().GetServer(serverName); !ok {
+	if _, ok := r.session.currentConfig().GetServer(serverName); !ok {
 		return nil, ErrServerNotFound(serverName)
 	}
 
-	handle := r.core.supervisor.Get(serverName)
+	handle := r.session.supervisor.GetInstance(r.session.instanceID(serverName))
 	if handle == nil {
 		return textResult(fmt.Sprintf("Server %s has not been started in this session", serverName)), nil
 	}
@@ -303,7 +305,7 @@ func (r *Router) handleServerLogs(ctx context.Context, arguments json.RawMessage
 
 // handleNamespacesList returns the list of namespaces with active namespace info.
 func (r *Router) handleNamespacesList(ctx context.Context) (*ToolCallResult, *RPCError) {
-	cfg := r.core.currentConfig()
+	cfg := r.session.currentConfig()
 	namespaces := make([]NamespaceInfo, 0, len(cfg.Namespaces))
 	for name, ns := range cfg.Namespaces {
 		namespaces = append(namespaces, NamespaceInfo{

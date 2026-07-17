@@ -127,12 +127,12 @@ func (c *verifiedCatalog) snapshot(id process.InstanceID) catalogEntry {
 	return entry
 }
 
-func (c *verifiedCatalog) tools(serverNames []string) []AggregatedTool {
+func (c *verifiedCatalog) toolsForInstances(serverNames []string, instanceFor func(string) process.InstanceID) []AggregatedTool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	var result []AggregatedTool
 	for _, name := range serverNames {
-		entry := c.entries[process.SharedInstanceID(name)]
+		entry := c.entries[instanceFor(name)]
 		toolNames := make([]string, 0, len(entry.tools))
 		for toolName := range entry.tools {
 			toolNames = append(toolNames, toolName)
@@ -145,10 +145,10 @@ func (c *verifiedCatalog) tools(serverNames []string) []AggregatedTool {
 	return result
 }
 
-func (c *verifiedCatalog) tool(serverName, toolName string) (AggregatedTool, bool) {
+func (c *verifiedCatalog) toolForInstance(id process.InstanceID, toolName string) (AggregatedTool, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	tool, ok := c.entries[process.SharedInstanceID(serverName)].tools[toolName]
+	tool, ok := c.entries[id].tools[toolName]
 	return tool, ok
 }
 

@@ -47,9 +47,11 @@ type AggregatedTool struct {
 
 // Aggregator collects and manages tools from multiple upstream servers.
 type Aggregator struct {
-	cfg        *config.Config
-	supervisor *process.Supervisor
-	acquire    func(context.Context, string) (*process.Handle, config.ServerConfig, error)
+	cfg          *config.Config
+	supervisor   *process.Supervisor
+	acquire      func(context.Context, string) (*process.Handle, config.ServerConfig, error)
+	instanceFor  func(string) process.InstanceID
+	serverConfig func(string) (config.ServerConfig, bool)
 
 	catalog *verifiedCatalog
 
@@ -67,6 +69,8 @@ func NewAggregator(cfg *config.Config, supervisor *process.Supervisor, exposeMan
 		exposeManagerTools: exposeManagerTools,
 	}
 	a.acquire = a.getOrStartHandle
+	a.instanceFor = process.SharedInstanceID
+	a.serverConfig = cfg.GetServer
 	a.managerTools = a.buildManagerTools()
 	return a
 }
@@ -99,7 +103,7 @@ func (a *Aggregator) ListTools(ctx context.Context, serverNames []string) ([]Agg
 			log.Printf("Failed to discover tools from %s: %v", serverNames[i], err)
 		}
 	}
-	allTools := a.catalog.tools(serverNames)
+	allTools := a.catalog.toolsForInstances(serverNames, a.instanceFor)
 
 	// Add manager tools only if exposed
 	if a.exposeManagerTools {
@@ -116,11 +120,11 @@ func (a *Aggregator) ListTools(ctx context.Context, serverNames []string) ([]Agg
 func (a *Aggregator) PendingServers(serverNames []string) []string {
 	var pending []string
 	for _, name := range serverNames {
-		srv, ok := a.cfg.GetServer(name)
+		srv, ok := a.serverConfig(name)
 		if !ok || !srv.IsEnabled() {
 			continue
 		}
-		state := a.catalog.snapshot(process.SharedInstanceID(name)).state
+		state := a.catalog.snapshot(a.instanceFor(name)).state
 		if state != catalogVerified {
 			pending = append(pending, name)
 		}
@@ -144,7 +148,7 @@ func (a *Aggregator) GetTool(name string) (AggregatedTool, bool) {
 		return AggregatedTool{}, false
 	}
 
-	t, ok := a.catalog.tool(serverName, toolName)
+	t, ok := a.catalog.toolForInstance(a.instanceFor(serverName), toolName)
 	if !ok {
 		return AggregatedTool{}, false
 	}
@@ -158,14 +162,14 @@ func (a *Aggregator) ManagerTools() []AggregatedTool {
 }
 
 func (a *Aggregator) ensureCatalog(ctx context.Context, serverName string) error {
-	srv, ok := a.cfg.GetServer(serverName)
+	srv, ok := a.serverConfig(serverName)
 	if !ok {
 		return fmt.Errorf("server not found: %s", serverName)
 	}
 	if !srv.IsEnabled() {
 		return nil
 	}
-	id := process.SharedInstanceID(serverName)
+	id := a.instanceFor(serverName)
 	flight, owner := a.catalog.begin(id)
 	if flight == nil {
 		return nil
@@ -279,13 +283,13 @@ func (a *Aggregator) DiscoverServer(ctx context.Context, serverName string) ([]A
 	if err := a.ensureCatalog(ctx, serverName); err != nil {
 		return nil, err
 	}
-	return a.catalog.tools([]string{serverName}), nil
+	return a.catalog.toolsForInstances([]string{serverName}, a.instanceFor), nil
 }
 
 // RefreshServerTools refreshes the tool cache for a specific server (full
 // per-server replace — old entries for that server are dropped).
 func (a *Aggregator) RefreshServerTools(ctx context.Context, serverName string) error {
-	handle := a.supervisor.Get(serverName)
+	handle := a.supervisor.GetInstance(a.instanceFor(serverName))
 	if handle == nil || !handle.IsRunning() {
 		return a.ensureCatalog(ctx, serverName)
 	}
@@ -338,10 +342,11 @@ const (
 // are queried regardless of catalog state; stopped verified upstreams that did
 // not advertise the relevant capability are skipped.
 func (a *Aggregator) shouldQueryCapability(serverName string, capability catalogCapability) bool {
-	if handle := a.supervisor.Get(serverName); handle != nil && handle.IsRunning() {
+	id := a.instanceFor(serverName)
+	if handle := a.supervisor.GetInstance(id); handle != nil && handle.IsRunning() {
 		return true
 	}
-	entry := a.catalog.snapshot(process.SharedInstanceID(serverName))
+	entry := a.catalog.snapshot(id)
 	if entry.state != catalogVerified {
 		return true
 	}
@@ -362,7 +367,7 @@ func (a *Aggregator) ToolForServer(qualifiedName string) (serverID, origToolName
 		return "", "", false
 	}
 
-	t, ok := a.catalog.tool(serverName, toolName)
+	t, ok := a.catalog.toolForInstance(a.instanceFor(serverName), toolName)
 	if !ok {
 		return "", "", false
 	}

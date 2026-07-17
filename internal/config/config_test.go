@@ -259,6 +259,24 @@ func TestConfig_DaemonModeTriState(t *testing.T) {
 	}
 }
 
+func TestServerConfig_SharedTriState(t *testing.T) {
+	var absent ServerConfig
+	if err := json.Unmarshal([]byte(`{"command":"echo"}`), &absent); err != nil {
+		t.Fatal(err)
+	}
+	if absent.Shared != nil || !absent.IsShared() {
+		t.Fatal("absent shared field should decode as nil and behave as shared")
+	}
+
+	var private ServerConfig
+	if err := json.Unmarshal([]byte(`{"command":"echo","shared":false}`), &private); err != nil {
+		t.Fatal(err)
+	}
+	if private.Shared == nil || *private.Shared || private.IsShared() {
+		t.Fatal("explicit shared:false was not preserved")
+	}
+}
+
 func TestValidateName(t *testing.T) {
 	tests := []struct {
 		name    string

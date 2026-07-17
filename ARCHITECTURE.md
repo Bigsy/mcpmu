@@ -76,7 +76,8 @@ Serve mode is split into two layers inside `internal/server`:
 - `Session` owns one downstream MCP connection: initialize state and
   negotiated capabilities, namespace selection, permission context, resource
   URI routing and its local subscription view, and the JSON-RPC read/write
-  loop.
+  loop. It also owns discovery state for servers configured with
+  `shared: false`.
 
 The embedded stdio path uses `server.New` to construct one
 `Core` and attaches exactly one stdio `Session` in the same process. Upstream
@@ -92,6 +93,15 @@ default) across startup, initialization, and initial tool discovery.
 Embedded serve keeps the same stdio wire protocol and process ownership. The
 same boundary also lets the internal daemon attach multiple Sessions to one
 Core without duplicating upstream processes.
+
+Server instance identity is explicit throughout the Supervisor, PID registry,
+subscriptions, notifications, and manager tools. Shared servers use the server
+name as their identity. A server with `shared: false` uses `(server,
+sessionID)`, is discovered in that Session's private catalog, and is stopped
+and forgotten when the Session disconnects. Private upstream notifications
+are delivered only to their owner, and manager operations resolve the caller's
+private instance. Browser automation and interpreter/REPL servers are the
+primary candidates for this isolation escape hatch.
 
 ### Shared Daemon and Shim (opt-in)
 
@@ -126,9 +136,10 @@ mismatch so a newly installed CLI can still inspect or stop an older daemon.
 
 The daemon owns config watching and applies each reload once at Core scope:
 subscriptions and URI maps are cleared, upstreams are stopped, every attached
-Session re-resolves its namespace and permissions, the union of eager Sessions
-is restarted, and capability-scoped list-change notifications are sent to each
-Session. Embedded serve retains its single-Session reload consumer.
+Session re-resolves its namespace and permissions, eager Sessions restart
+their selected shared and private instances, and capability-scoped list-change
+notifications are sent to each Session. Embedded serve retains its
+single-Session reload consumer.
 
 A spawn lock serializes concurrent cold starts. The winning shim rechecks the
 socket, proves staleness only when the daemon run lock is free, removes a stale

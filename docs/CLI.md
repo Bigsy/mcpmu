@@ -109,6 +109,27 @@ The daemon inherits the first spawner's working directory and environment.
 Use absolute upstream `cwd` values and explicit `env` config; environment-backed
 HTTP headers are likewise resolved from the daemon environment.
 
+Servers share one upstream instance by default. Set `"shared": false` on a
+stateful server—especially browser automation, a REPL, or an interpreter-style
+server—to create one private instance per connected serve session:
+
+```json
+{
+  "servers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp"],
+      "shared": false
+    }
+  }
+}
+```
+
+Private-instance discovery, notifications, logs, and `mcpmu.servers_*`
+manager actions are scoped to the caller. The instance is stopped on session
+disconnect. `shared` is optional and absent means shared. The TUI and web edit
+forms preserve this config field but do not expose a control for it yet.
+
 The control surface remains hidden from casual command help while rollout is
 in progress:
 
@@ -252,6 +273,12 @@ With bearer token auth:
 | `oauth.scopes` | OAuth scopes to request (auto-discovered from server if omitted) |
 | `startup_timeout_sec` | Connection, initialization, and initial-discovery timeout (default: 10) |
 | `tool_timeout_sec` | Tool call timeout (default: 60) |
+
+### General server config fields
+
+| Field | Description |
+|-------|-------------|
+| `shared` | Share one daemon upstream across serve sessions; absent/true is shared, false creates a private per-session instance |
 
 ### Global config fields
 

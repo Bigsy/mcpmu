@@ -418,6 +418,17 @@ func TestShowEdit_TimeoutsPrePopulated(t *testing.T) {
 	}
 }
 
+func TestShowEdit_PreservesUnexposedSharedField(t *testing.T) {
+	form := NewServerForm(theme.New())
+	shared := false
+	_ = form.ShowEdit("browser", config.ServerConfig{Command: "browser-mcp", Shared: &shared})
+
+	got := form.buildServerConfig()
+	if got.Shared == nil || *got.Shared {
+		t.Fatal("editing through the TUI dropped shared: false")
+	}
+}
+
 func TestBuildServerConfig_EmptyTimeoutsAreZero(t *testing.T) {
 	th := theme.New()
 	form := NewServerForm(th)

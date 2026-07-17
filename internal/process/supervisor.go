@@ -652,7 +652,11 @@ func (s *Supervisor) stopInstanceLocked(id InstanceID) error {
 
 // Restart stops and starts a shared instance as one serialized lifecycle operation.
 func (s *Supervisor) Restart(ctx context.Context, name string, srv config.ServerConfig) (*Handle, error) {
-	id := SharedInstanceID(name)
+	return s.RestartInstance(ctx, SharedInstanceID(name), srv)
+}
+
+// RestartInstance stops and starts one instance as one serialized lifecycle operation.
+func (s *Supervisor) RestartInstance(ctx context.Context, id InstanceID, srv config.ServerConfig) (*Handle, error) {
 	lock := s.lifecycleLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -666,6 +670,29 @@ func (s *Supervisor) Restart(ctx context.Context, name string, srv config.Server
 		}
 	}
 	return s.startInstanceLocked(ctx, id, srv)
+}
+
+// StopSessionInstances stops and forgets every private instance owned by a
+// downstream session. Shared instances are deliberately untouched.
+func (s *Supervisor) StopSessionInstances(session string) {
+	s.mu.RLock()
+	ids := make([]InstanceID, 0)
+	for id := range s.handles {
+		if id.Session == session {
+			ids = append(ids, id)
+		}
+	}
+	s.mu.RUnlock()
+
+	for _, id := range ids {
+		if err := s.StopInstance(id); err != nil {
+			log.Printf("Warning: failed to stop private server %q: %v", id, err)
+			continue
+		}
+		s.mu.Lock()
+		delete(s.handles, id)
+		s.mu.Unlock()
+	}
 }
 
 // Get returns the handle for a server, or nil if not running.

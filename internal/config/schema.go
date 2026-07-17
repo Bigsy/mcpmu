@@ -36,6 +36,7 @@ type OAuthConfig struct {
 type ServerConfig struct {
 	Kind      ServerKind        `json:"kind,omitempty"`      // optional, inferred from command vs url
 	Enabled   *bool             `json:"enabled,omitempty"`   // nil treated as true (enabled by default)
+	Shared    *bool             `json:"shared,omitempty"`    // nil treated as true; false creates one instance per serve session
 	Autostart bool              `json:"autostart,omitempty"` // start server automatically on app launch
 	Command   string            `json:"command,omitempty"`   // stdio only
 	Args      []string          `json:"args,omitempty"`      // stdio only
@@ -164,6 +165,12 @@ func NewConfig() *Config {
 // IsEnabled returns whether the server is enabled (nil defaults to true).
 func (s ServerConfig) IsEnabled() bool {
 	return s.Enabled == nil || *s.Enabled
+}
+
+// IsShared returns whether serve sessions should share this upstream instance.
+// An absent field preserves the default shared-daemon behavior.
+func (s ServerConfig) IsShared() bool {
+	return s.Shared == nil || *s.Shared
 }
 
 // IsHTTP returns true if this server uses HTTP transport (has URL configured).

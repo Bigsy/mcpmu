@@ -1216,6 +1216,32 @@ func TestAPIUpdateServer_PartialDoesNotDropFields(t *testing.T) {
 	}
 }
 
+func TestServerFormUpdatePreservesUnexposedSharedField(t *testing.T) {
+	srv := newTestServer(t)
+	shared := false
+	existing, _ := srv.cfg.GetServer("test-stdio")
+	existing.Shared = &shared
+	srv.cfg.Servers["test-stdio"] = existing
+	if err := config.SaveTo(srv.cfg, srv.configPath); err != nil {
+		t.Fatal(err)
+	}
+
+	form := strings.NewReader("kind=stdio&command=echo&args=hello&enabled=true&startup_timeout=10&tool_timeout=60&auth_mode=none")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/servers/test-stdio/edit", form)
+	req.SetPathValue("name", "test-stdio")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("edit status = %d, want %d", rec.Code, http.StatusSeeOther)
+	}
+
+	updated, _ := srv.cfg.GetServer("test-stdio")
+	if updated.Shared == nil || *updated.Shared {
+		t.Fatal("editing through the web form dropped shared: false")
+	}
+}
+
 func TestAPIUpdateServer_CombinedPartialUpdate(t *testing.T) {
 	srv := newTestServer(t)
 

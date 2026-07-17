@@ -294,12 +294,124 @@ smoke_daemon_shim_fallback() {
   return "$rc"
 }
 
+# Verifies the real daemon/shim path gives shared:false servers one upstream
+# process per live session and tears each process down with its owner.
+smoke_daemon_private_instances() {
+  local tmp runtime cfg fake pid_file input_one input_two output_one output_two
+  local serve_one serve_two pid_one pid_two live rc=0
+  tmp=$(mktemp -d -t mcpmu-smoke-private.XXXXXX)
+  runtime=$(mktemp -d /tmp/mu-private.XXXXXX)
+  chmod 0700 "$runtime"
+  cfg="$tmp/config.json"
+  fake="$tmp/fake-mcp.sh"
+  pid_file="$tmp/upstreams.pid"
+  input_one="$tmp/session-one.in"
+  input_two="$tmp/session-two.in"
+  output_one="$tmp/session-one.out"
+  output_two="$tmp/session-two.out"
+
+  cat > "$fake" <<'EOF'
+#!/usr/bin/env bash
+echo "$$" >> "$UPSTREAM_PID_FILE"
+while IFS= read -r line; do
+  method=$(printf '%s' "$line" | jq -r '.method // empty')
+  id=$(printf '%s' "$line" | jq -r '.id // empty')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"private-smoke","version":"1"}}}\n' "$id"
+      ;;
+    tools/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}\n' "$id"
+      ;;
+  esac
+done
+EOF
+  chmod 0700 "$fake"
+  jq -n --arg command "$fake" --arg pid_file "$pid_file" '{
+    schemaVersion: 1,
+    daemonMode: true,
+    servers: {
+      browser: {
+        command: $command,
+        env: {UPSTREAM_PID_FILE: $pid_file},
+        shared: false,
+        startup_timeout_sec: 3
+      }
+    },
+    namespaces: {}
+  }' > "$cfg"
+
+  mkfifo "$input_one" "$input_two"
+  XDG_RUNTIME_DIR="$runtime" ./mcpmu serve --stdio --config "$cfg" < "$input_one" > "$output_one" 2>/dev/null &
+  serve_one=$!
+  exec 3>"$input_one"
+  XDG_RUNTIME_DIR="$runtime" ./mcpmu serve --stdio --config "$cfg" < "$input_two" > "$output_two" 2>/dev/null 3>&- &
+  serve_two=$!
+  exec 4>"$input_two"
+
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"private-one","version":"0"}}}' >&3
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' >&3
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"private-two","version":"0"}}}' >&4
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' >&4
+
+  for _ in {1..150}; do
+    if [[ -s "$pid_file" ]] && [[ $(sort -u "$pid_file" | wc -l | tr -d ' ') -eq 2 ]]; then
+      break
+    fi
+    sleep 0.02
+  done
+  if [[ ! -s "$pid_file" ]] || [[ $(sort -u "$pid_file" | wc -l | tr -d ' ') -ne 2 ]]; then
+    echo "FAIL: shared:false sessions did not start two upstream processes"
+    rc=1
+  else
+    pid_one=$(sort -u "$pid_file" | sed -n '1p')
+    pid_two=$(sort -u "$pid_file" | sed -n '2p')
+
+    exec 3>&-
+    wait "$serve_one" 2>/dev/null || true
+    for _ in {1..100}; do
+      live=0
+      kill -0 "$pid_one" 2>/dev/null && live=$((live + 1))
+      kill -0 "$pid_two" 2>/dev/null && live=$((live + 1))
+      [[ $live -eq 1 ]] && break
+      sleep 0.02
+    done
+    if [[ $live -ne 1 ]]; then
+      echo "FAIL: closing one session did not leave exactly one private upstream"
+      rc=1
+    fi
+
+    exec 4>&-
+    wait "$serve_two" 2>/dev/null || true
+    for _ in {1..100}; do
+      live=0
+      kill -0 "$pid_one" 2>/dev/null && live=$((live + 1))
+      kill -0 "$pid_two" 2>/dev/null && live=$((live + 1))
+      [[ $live -eq 0 ]] && break
+      sleep 0.02
+    done
+    if [[ $live -ne 0 ]]; then
+      echo "FAIL: private upstream survived its session disconnect"
+      rc=1
+    fi
+  fi
+
+  exec 3>&- 2>/dev/null || true
+  exec 4>&- 2>/dev/null || true
+  kill "$serve_one" "$serve_two" 2>/dev/null || true
+  XDG_RUNTIME_DIR="$runtime" ./mcpmu --config "$cfg" daemon stop >/dev/null 2>&1 || true
+  rm -rf "$runtime"
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # Register new smoke checks here.
 SMOKE_CHECKS=(
   smoke_cf_access_headers
   smoke_process_group_cleanup
   smoke_daemon_control
   smoke_daemon_shim_fallback
+  smoke_daemon_private_instances
 )
 
 # --- Runner ---------------------------------------------------------------

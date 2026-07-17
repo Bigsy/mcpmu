@@ -27,6 +27,7 @@ type Core struct {
 	resourceStateMu  sync.RWMutex
 	sessionsMu       sync.RWMutex
 	sessions         map[*Session]struct{}
+	nextSessionID    atomic.Uint64
 	subscriptions    *resourceSubscriptions
 
 	bus        *events.Bus
@@ -125,6 +126,10 @@ type serverClient struct {
 // resources, prompts, and discovery. It snapshots the complete server config,
 // then revalidates it under the instance lifecycle lock before a start.
 func (c *Core) getOrStartHandle(ctx context.Context, serverName string) (*process.Handle, config.ServerConfig, error) {
+	return c.getOrStartInstance(ctx, process.SharedInstanceID(serverName), serverName)
+}
+
+func (c *Core) getOrStartInstance(ctx context.Context, id process.InstanceID, serverName string) (*process.Handle, config.ServerConfig, error) {
 	c.coreMu.RLock()
 	snapshotGeneration := c.configGeneration
 	srv, ok := c.cfg.GetServer(serverName)
@@ -134,6 +139,9 @@ func (c *Core) getOrStartHandle(ctx context.Context, serverName string) (*proces
 	}
 	if !srv.IsEnabled() {
 		return nil, config.ServerConfig{}, fmt.Errorf("server is disabled: %s", serverName)
+	}
+	if srv.IsShared() != id.IsShared() {
+		return nil, config.ServerConfig{}, fmt.Errorf("server sharing mode changed: %s", serverName)
 	}
 	snapshot, err := normalizedServerConfig(srv)
 	if err != nil {
@@ -145,7 +153,7 @@ func (c *Core) getOrStartHandle(ctx context.Context, serverName string) (*proces
 
 	handle, err := c.supervisor.StartInstance(
 		startCtx,
-		process.SharedInstanceID(serverName),
+		id,
 		srv,
 		func() error {
 			c.coreMu.RLock()
@@ -211,30 +219,6 @@ func getOrStartHandle(
 	return handle, srv, nil
 }
 
-func (c *Core) getOrStartServer(ctx context.Context, serverName string) (serverClient, *RPCError) {
-	handle, srv, err := c.getOrStartHandle(ctx, serverName)
-	if err != nil {
-		cfg := c.currentConfig()
-		if _, ok := cfg.GetServer(serverName); !ok {
-			return serverClient{}, ErrServerNotFound(serverName)
-		}
-		if existing, ok := cfg.GetServer(serverName); ok && !existing.IsEnabled() {
-			return serverClient{}, NewRPCError(ErrCodeServerNotRunning, "server is disabled: "+serverName, nil)
-		}
-		return serverClient{}, ErrServerFailedToStart(serverName, err.Error())
-	}
-	client := handle.Client()
-	if client == nil {
-		return serverClient{}, ErrServerNotRunning(serverName)
-	}
-	return serverClient{
-		handle:       handle,
-		client:       client,
-		timeout:      time.Duration(srv.ToolTimeout()) * time.Second,
-		capabilities: handle.Capabilities(),
-	}, nil
-}
-
 func (c *Core) startWatching(ctx context.Context) {
 	if c.configPath == "" {
 		return
@@ -275,6 +259,31 @@ func (c *Core) registerSession(session *Session) {
 	c.sessionsMu.Unlock()
 }
 
+func (c *Core) newSessionID() string {
+	return fmt.Sprintf("session-%d", c.nextSessionID.Add(1))
+}
+
+func (c *Core) sessionForID(id string) *Session {
+	c.sessionsMu.RLock()
+	defer c.sessionsMu.RUnlock()
+	for session := range c.sessions {
+		if session.id == id {
+			return session
+		}
+	}
+	return nil
+}
+
+func (c *Core) aggregatorForInstance(id process.InstanceID) *Aggregator {
+	if id.IsShared() {
+		return c.currentAggregator()
+	}
+	if session := c.sessionForID(id.Session); session != nil {
+		return session.privateAggregatorSnapshot()
+	}
+	return nil
+}
+
 func (c *Core) unregisterSession(session *Session) {
 	c.sessionsMu.Lock()
 	delete(c.sessions, session)
@@ -309,7 +318,11 @@ func (c *Core) Close() {
 
 // OnDiscoveryResult consumes the Supervisor-owned initial discovery result.
 func (c *Core) OnDiscoveryResult(result process.DiscoveryResult) {
-	changed, hadPrior := c.currentAggregator().applyDiscovery(result)
+	aggregator := c.aggregatorForInstance(result.Instance)
+	if aggregator == nil {
+		return
+	}
+	changed, hadPrior := aggregator.applyDiscovery(result)
 	if changed && hadPrior {
 		c.notifications.Publish(process.UpstreamNotification{
 			Instance: result.Instance, Generation: result.Generation,
@@ -324,7 +337,9 @@ func (c *Core) OnDiscoveryResult(result process.DiscoveryResult) {
 // OnInstanceStopped invalidates verification while retaining the last-good
 // tool set for partial responses and diagnostics.
 func (c *Core) OnInstanceStopped(id process.InstanceID, generation uint64) {
-	c.currentAggregator().invalidateInstance(id, generation)
+	if aggregator := c.aggregatorForInstance(id); aggregator != nil {
+		aggregator.invalidateInstance(id, generation)
+	}
 }
 
 // OnUpstreamNotification is called on the MCP response-reader goroutine and
@@ -340,7 +355,12 @@ func (c *Core) processNotification(notification process.UpstreamNotification) bo
 	}
 	if notification.Upstream && notification.Method == "notifications/tools/list_changed" {
 		ctx, cancel := context.WithTimeout(context.Background(), DefaultToolDiscoveryTimeout)
-		err := c.currentAggregator().refreshHandleTools(ctx, handle)
+		aggregator := c.aggregatorForInstance(notification.Instance)
+		if aggregator == nil {
+			cancel()
+			return false
+		}
+		err := aggregator.refreshHandleTools(ctx, handle)
 		cancel()
 		if err != nil {
 			log.Printf("Failed to refresh tools after upstream list_changed from %s: %v", notification.Instance, err)

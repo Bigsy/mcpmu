@@ -216,6 +216,24 @@ to embedded serve. Use `--isolated` to bypass an enabled daemon for one client.
 
 The daemon inherits the environment and working directory of its first
 spawner. Prefer absolute server `cwd` values and explicit config `env` entries.
+Servers are shared by default. Stateful servers such as browser automation,
+REPLs, and interpreter sessions should opt out per server so each connected
+agent gets its own instance:
+
+```json
+{
+  "servers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp"],
+      "shared": false
+    }
+  }
+}
+```
+
+Private instances have session-scoped tools, notifications, logs, and manager
+actions, and are stopped when that serve session disconnects.
 See [docs/CLI.md](docs/CLI.md#shared-daemon-mode-opt-in) for configuration and
 diagnostic commands.
 

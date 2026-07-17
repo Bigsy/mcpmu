@@ -60,11 +60,16 @@ const (
 // read/write loop while embedding the shared Core it operates against.
 type Session struct {
 	*Core
+	id                       string
 	opts                     Options
 	router                   *Router
+	privateAggregatorMu      sync.RWMutex
+	privateAggregator        *Aggregator
 	unsubscribeNotifications func()
 	ownsCore                 bool
 	closeOnce                sync.Once
+	instanceMu               sync.RWMutex
+	closed                   atomic.Bool
 
 	// Active namespace (resolved at init)
 	activeNamespaceName string          // Name of the active namespace
@@ -124,13 +129,15 @@ func New(opts Options) (*Server, error) {
 func NewSession(core *Core, opts Options) (*Session, error) {
 	s := &Session{
 		Core:        core,
+		id:          core.newSessionID(),
 		opts:        opts,
 		reader:      bufio.NewReader(opts.Stdin),
 		writer:      opts.Stdout,
 		subs:        make(map[string]process.InstanceID),
 		resourceMap: make(map[string]process.InstanceID),
 	}
-	s.router = NewRouter(core)
+	s.privateAggregator = s.newPrivateAggregator()
+	s.router = NewRouter(s)
 	unsubscribe, err := core.notifications.Subscribe(s)
 	if err != nil {
 		return nil, err
@@ -144,6 +151,7 @@ func NewSession(core *Core, opts Options) (*Session, error) {
 // independent unless the Session was created by New for embedded serve.
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
+		s.closed.Store(true)
 		s.resourceStateMu.RLock()
 		s.cleanupSessionSubscriptions(s)
 		s.resourceStateMu.RUnlock()
@@ -151,7 +159,101 @@ func (s *Session) Close() {
 			s.unsubscribeNotifications()
 		}
 		s.unregisterSession(s)
+		s.instanceMu.Lock()
+		s.supervisor.StopSessionInstances(s.id)
+		s.instanceMu.Unlock()
 	})
+}
+
+func (s *Session) privateAggregatorSnapshot() *Aggregator {
+	s.privateAggregatorMu.RLock()
+	defer s.privateAggregatorMu.RUnlock()
+	return s.privateAggregator
+}
+
+func (s *Session) newPrivateAggregator() *Aggregator {
+	aggregator := NewAggregator(s.currentConfig(), s.supervisor, false)
+	aggregator.instanceFor = func(serverName string) process.InstanceID {
+		return process.PrivateInstanceID(serverName, s.id)
+	}
+	aggregator.serverConfig = func(serverName string) (config.ServerConfig, bool) {
+		return s.currentConfig().GetServer(serverName)
+	}
+	aggregator.acquire = func(ctx context.Context, serverName string) (*process.Handle, config.ServerConfig, error) {
+		return s.getOrStartSessionInstance(ctx, process.PrivateInstanceID(serverName, s.id), serverName)
+	}
+	return aggregator
+}
+
+func (s *Session) replacePrivateAggregator() {
+	aggregator := s.newPrivateAggregator()
+	s.privateAggregatorMu.Lock()
+	s.privateAggregator = aggregator
+	s.privateAggregatorMu.Unlock()
+}
+
+func (s *Session) instanceID(serverName string) process.InstanceID {
+	srv, ok := s.currentConfig().GetServer(serverName)
+	if ok && !srv.IsShared() {
+		return process.PrivateInstanceID(serverName, s.id)
+	}
+	return process.SharedInstanceID(serverName)
+}
+
+func (s *Session) ownsInstance(id process.InstanceID) bool {
+	return id.IsShared() || id.Session == s.id
+}
+
+func (s *Session) aggregatorForServer(serverName string) *Aggregator {
+	if s.instanceID(serverName).IsShared() {
+		return s.currentAggregator()
+	}
+	return s.privateAggregatorSnapshot()
+}
+
+func (s *Session) getOrStartHandle(ctx context.Context, serverName string) (*process.Handle, config.ServerConfig, error) {
+	return s.getOrStartSessionInstance(ctx, s.instanceID(serverName), serverName)
+}
+
+func (s *Session) getOrStartSessionInstance(ctx context.Context, id process.InstanceID, serverName string) (*process.Handle, config.ServerConfig, error) {
+	s.instanceMu.RLock()
+	defer s.instanceMu.RUnlock()
+	if s.closed.Load() {
+		return nil, config.ServerConfig{}, fmt.Errorf("session is closed")
+	}
+	return s.getOrStartInstance(ctx, id, serverName)
+}
+
+func (s *Session) restartHandle(ctx context.Context, serverName string, srv config.ServerConfig) (*process.Handle, error) {
+	s.instanceMu.RLock()
+	defer s.instanceMu.RUnlock()
+	if s.closed.Load() {
+		return nil, fmt.Errorf("session is closed")
+	}
+	return s.supervisor.RestartInstance(ctx, s.instanceID(serverName), srv)
+}
+
+func (s *Session) getOrStartServer(ctx context.Context, serverName string) (serverClient, *RPCError) {
+	handle, srv, err := s.getOrStartHandle(ctx, serverName)
+	if err != nil {
+		cfg := s.currentConfig()
+		if _, ok := cfg.GetServer(serverName); !ok {
+			return serverClient{}, ErrServerNotFound(serverName)
+		}
+		if existing, ok := cfg.GetServer(serverName); ok && !existing.IsEnabled() {
+			return serverClient{}, NewRPCError(ErrCodeServerNotRunning, "server is disabled: "+serverName, nil)
+		}
+		return serverClient{}, ErrServerFailedToStart(serverName, err.Error())
+	}
+	client := handle.Client()
+	if client == nil {
+		return serverClient{}, ErrServerNotRunning(serverName)
+	}
+	return serverClient{
+		handle: handle, client: client,
+		timeout:      time.Duration(srv.ToolTimeout()) * time.Second,
+		capabilities: handle.Capabilities(),
+	}, nil
 }
 
 func (s *Session) setSubscription(key resourceSubscriptionKey) {
@@ -461,7 +563,6 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	}
 	activeNamespaceName := s.activeNamespaceName
 	activeServerNames := s.activeServerNames
-	aggregator := s.currentAggregator()
 	cfg := s.currentConfig()
 	s.mu.RUnlock()
 
@@ -474,15 +575,15 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	}
 	graceCtx, cancel := context.WithTimeout(context.Background(), gracePeriod)
 	defer cancel()
-	tools, _ := aggregator.ListTools(graceCtx, activeServerNames)
+	tools := s.listTools(graceCtx, activeServerNames)
 	if s.opts.ExposeManagerTools {
-		tools = append(tools, aggregator.ManagerTools()...)
+		tools = append(tools, s.currentAggregator().ManagerTools()...)
 	}
 
 	// If any servers didn't finish in time, continue in the background.
 	// Pass the caller's snapshot of activeServerNames so the goroutine
 	// doesn't re-read state that a concurrent reload could change.
-	stillPending := aggregator.PendingServers(activeServerNames)
+	stillPending := s.pendingServers(activeServerNames)
 	if len(stillPending) > 0 && s.bgDiscovering.CompareAndSwap(false, true) {
 		go s.discoverAndNotify(stillPending)
 	}
@@ -509,6 +610,46 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	return toolsListResult{Tools: tools}, nil
 }
 
+func (s *Session) splitServersBySharing(serverNames []string) (shared, private []string) {
+	for _, name := range serverNames {
+		if s.instanceID(name).IsShared() {
+			shared = append(shared, name)
+		} else {
+			private = append(private, name)
+		}
+	}
+	return shared, private
+}
+
+func (s *Session) listTools(ctx context.Context, serverNames []string) []AggregatedTool {
+	shared, private := s.splitServersBySharing(serverNames)
+	var sharedTools, privateTools []AggregatedTool
+	var wg sync.WaitGroup
+	if len(shared) > 0 {
+		wg.Go(func() { sharedTools, _ = s.currentAggregator().ListTools(ctx, shared) })
+	}
+	if len(private) > 0 {
+		wg.Go(func() { privateTools, _ = s.privateAggregatorSnapshot().ListTools(ctx, private) })
+	}
+	wg.Wait()
+
+	byServer := make(map[string][]AggregatedTool, len(serverNames))
+	for _, tool := range append(sharedTools, privateTools...) {
+		byServer[tool.serverName] = append(byServer[tool.serverName], tool)
+	}
+	result := make([]AggregatedTool, 0, len(sharedTools)+len(privateTools))
+	for _, name := range serverNames {
+		result = append(result, byServer[name]...)
+	}
+	return result
+}
+
+func (s *Session) pendingServers(serverNames []string) []string {
+	shared, private := s.splitServersBySharing(serverNames)
+	pending := s.currentAggregator().PendingServers(shared)
+	return append(pending, s.privateAggregatorSnapshot().PendingServers(private)...)
+}
+
 // sendNotification sends a JSON-RPC notification (no ID, no response expected).
 func (s *Server) sendNotification(method string) {
 	s.sendNotificationWithParams(method, nil)
@@ -533,6 +674,9 @@ func (s *Server) sendNotificationWithParams(method string, params any) {
 // upstream client's reader goroutine — must not block on stdout writes, so
 // any downstream emission happens in a goroutine.
 func (s *Server) OnUpstreamNotification(notification process.UpstreamNotification) {
+	if !s.ownsInstance(notification.Instance) {
+		return
+	}
 	serverName := notification.Instance.Server
 	switch notification.Method {
 	case "notifications/resources/updated":
@@ -588,10 +732,6 @@ func (s *Server) discoverAndNotify(pendingNames []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultToolDiscoveryTimeout)
 	defer cancel()
 
-	s.mu.RLock()
-	aggregator := s.currentAggregator()
-	s.mu.RUnlock()
-
 	// Channel signals when any single server finishes discovery successfully.
 	notify := make(chan struct{}, 1)
 	notified := false
@@ -602,7 +742,7 @@ func (s *Server) discoverAndNotify(pendingNames []string) {
 		go func(serverName string) {
 			defer wg.Done()
 
-			tools, err := aggregator.DiscoverServer(ctx, serverName)
+			tools, err := s.aggregatorForServer(serverName).DiscoverServer(ctx, serverName)
 			if err != nil {
 				log.Printf("Background discovery failed for %s: %v", serverName, err)
 				return
@@ -713,9 +853,8 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 	sem := make(chan struct{}, MaxConcurrentDiscovery)
 	var wg sync.WaitGroup
 
-	aggregator := s.currentAggregator()
 	for index, name := range activeServerNames {
-		if !aggregator.shouldQueryCapability(name, catalogResources) {
+		if !s.aggregatorForServer(name).shouldQueryCapability(name, catalogResources) {
 			continue
 		}
 		wg.Add(1)
@@ -749,7 +888,7 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 	owners := make(map[string]process.InstanceID)
 	for index, result := range results {
 		serverName := activeServerNames[index]
-		instance := process.SharedInstanceID(serverName)
+		instance := s.instanceID(serverName)
 		for _, r := range result.resources {
 			if firstOwner, exists := owners[r.URI]; exists {
 				log.Printf("resources/list URI collision for %q: keeping %s, omitting %s", r.URI, firstOwner, serverName)
@@ -946,9 +1085,8 @@ func (s *Server) handlePromptsList(ctx context.Context) (any, *RPCError) {
 	sem := make(chan struct{}, MaxConcurrentDiscovery)
 	var wg sync.WaitGroup
 
-	aggregator := s.currentAggregator()
 	for index, name := range activeServerNames {
-		if !aggregator.shouldQueryCapability(name, catalogPrompts) {
+		if !s.aggregatorForServer(name).shouldQueryCapability(name, catalogPrompts) {
 			continue
 		}
 		wg.Add(1)
@@ -1119,11 +1257,11 @@ func (s *Server) startEagerServers(ctx context.Context) {
 	s.mu.RUnlock()
 	log.Printf("Starting %d servers eagerly", len(names))
 	for _, name := range names {
-		srv, ok := s.currentConfig().GetServer(name)
+		_, ok := s.currentConfig().GetServer(name)
 		if !ok {
 			continue
 		}
-		if _, err := s.supervisor.Start(ctx, name, srv); err != nil {
+		if _, _, err := s.getOrStartHandle(ctx, name); err != nil {
 			log.Printf("Failed to start server %s: %v", name, err)
 		}
 	}
@@ -1262,20 +1400,15 @@ func (c *Core) applyReload(ctx context.Context, newCfg *config.Config, initiator
 		// the internal applyReload hook correct for that legacy arrangement.
 		sessions = append(sessions, initiator)
 	}
-	eagerServers := make(map[string]struct{})
+	eagerSessions := make([]*Session, 0, len(sessions))
 	for _, session := range sessions {
-		for _, name := range session.applyReloadConfig(newCfg) {
-			eagerServers[name] = struct{}{}
+		if len(session.applyReloadConfig(newCfg)) > 0 {
+			eagerSessions = append(eagerSessions, session)
 		}
 	}
 
-	if len(eagerServers) > 0 {
-		names := make([]string, 0, len(eagerServers))
-		for name := range eagerServers {
-			names = append(names, name)
-		}
-		slices.Sort(names)
-		go c.startEagerServers(ctx, names)
+	for _, session := range eagerSessions {
+		go session.startEagerServers(ctx)
 	}
 
 	for _, session := range sessions {
@@ -1342,7 +1475,8 @@ func (s *Session) applyReloadConfig(newCfg *config.Config) []string {
 	// Rebuild aggregator and router with new config. Swap under the write
 	// lock so concurrently-running handlers see either the whole old pair or
 	// the whole new pair, never a torn read.
-	newRouter := NewRouter(s.Core)
+	s.replacePrivateAggregator()
+	newRouter := NewRouter(s)
 
 	s.router = newRouter
 	activeNsName := s.activeNamespaceName
@@ -1353,15 +1487,6 @@ func (s *Session) applyReloadConfig(newCfg *config.Config) []string {
 		return nil
 	}
 	return slices.Clone(s.activeServerNames)
-}
-
-func (c *Core) startEagerServers(ctx context.Context, names []string) {
-	log.Printf("Starting %d servers eagerly after reload", len(names))
-	for _, name := range names {
-		if _, _, err := c.getOrStartHandle(ctx, name); err != nil {
-			log.Printf("Failed to start server %s after reload: %v", name, err)
-		}
-	}
 }
 
 // sendResult sends a successful JSON-RPC response.

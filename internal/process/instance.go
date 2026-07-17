@@ -15,6 +15,12 @@ func SharedInstanceID(server string) InstanceID {
 	return InstanceID{Server: server}
 }
 
+// PrivateInstanceID returns the identity for a server owned by one downstream
+// session. session must be stable and unique within the owning Supervisor.
+func PrivateInstanceID(server, session string) InstanceID {
+	return InstanceID{Server: server, Session: session}
+}
+
 // IsShared reports whether the instance is shared across sessions.
 func (id InstanceID) IsShared() bool {
 	return id.Session == ""
