@@ -29,6 +29,9 @@ const (
 	// MaxInitRetries is the maximum number of MCP initialization attempts.
 	MaxInitRetries = 3
 
+	// InitAttemptTimeout is the maximum duration of one MCP initialization attempt.
+	InitAttemptTimeout = 30 * time.Second
+
 	// InitRetryBaseDelay is the base delay between retry attempts.
 	InitRetryBaseDelay = 500 * time.Millisecond
 )
@@ -51,6 +54,8 @@ type Supervisor struct {
 	lifecycleMu             sync.Mutex
 	lifecycleLocks          map[InstanceID]*sync.Mutex
 	generations             map[InstanceID]uint64
+	initAttemptTimeout      time.Duration
+	initRetryBaseDelay      time.Duration
 
 	// observer receives immutable discovery/lifecycle results and upstream
 	// notifications. Set before clients start; read under observerMu.
@@ -107,6 +112,14 @@ type SupervisorOptions struct {
 	// GlobalOAuthCallbackPort is the global fallback OAuth callback port.
 	// Per-server oauth.callback_port takes precedence over this.
 	GlobalOAuthCallbackPort *int
+
+	// InitAttemptTimeout overrides the timeout for each MCP initialization
+	// attempt. If non-positive, the package default is used.
+	InitAttemptTimeout time.Duration
+
+	// InitRetryBaseDelay overrides the base exponential backoff between MCP
+	// initialization attempts. If non-positive, the package default is used.
+	InitRetryBaseDelay time.Duration
 }
 
 // NewSupervisor creates a new process supervisor.
@@ -117,6 +130,15 @@ func NewSupervisor(bus *events.Bus) *Supervisor {
 
 // NewSupervisorWithOptions creates a new process supervisor with options.
 func NewSupervisorWithOptions(bus *events.Bus, opts SupervisorOptions) *Supervisor {
+	initAttemptTimeout := opts.InitAttemptTimeout
+	if initAttemptTimeout <= 0 {
+		initAttemptTimeout = InitAttemptTimeout
+	}
+	initRetryBaseDelay := opts.InitRetryBaseDelay
+	if initRetryBaseDelay <= 0 {
+		initRetryBaseDelay = InitRetryBaseDelay
+	}
+
 	var pidTracker *PIDTracker
 	var err error
 	if opts.PIDTrackerDir != "" {
@@ -163,6 +185,8 @@ func NewSupervisorWithOptions(bus *events.Bus, opts SupervisorOptions) *Supervis
 		globalOAuthCallbackPort: opts.GlobalOAuthCallbackPort,
 		lifecycleLocks:          make(map[InstanceID]*sync.Mutex),
 		generations:             make(map[InstanceID]uint64),
+		initAttemptTimeout:      initAttemptTimeout,
+		initRetryBaseDelay:      initRetryBaseDelay,
 	}
 }
 
@@ -402,7 +426,7 @@ func (s *Supervisor) initAndDiscoverAsync(handle *Handle, client *mcp.Client, na
 	var initErr error
 initLoop:
 	for attempt := 1; attempt <= MaxInitRetries; attempt++ {
-		initCtx, cancel := context.WithTimeout(handle.ctx, 30*time.Second)
+		initCtx, cancel := context.WithTimeout(handle.ctx, s.initAttemptTimeout)
 		initErr = client.Initialize(initCtx)
 		cancel()
 
@@ -414,7 +438,7 @@ initLoop:
 
 		if attempt < MaxInitRetries {
 			// Exponential backoff: 500ms, 1s, 2s... (context-aware)
-			delay := InitRetryBaseDelay * time.Duration(1<<(attempt-1))
+			delay := s.initRetryBaseDelay * time.Duration(1<<(attempt-1))
 			log.Printf("Retrying in %v", delay)
 			select {
 			case <-handle.ctx.Done():

@@ -58,6 +58,7 @@ type lifecycleTestCase struct {
 	mustObserve    events.RuntimeState // if non-zero, this state must appear somewhere in observed states
 	skipFinalCheck bool                // skip final state check (for cases where final state is non-deterministic)
 	waitTimeout    time.Duration       // how long to wait for final state (0 = default 5s)
+	supervisorOpts process.SupervisorOptions
 }
 
 func TestSupervisor_Lifecycle(t *testing.T) {
@@ -109,7 +110,11 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			expectError:    true,
 			mustObserve:    events.StateError, // error must be observed, but final state may be stopped
 			skipFinalCheck: true,              // final state is non-deterministic (error or stopped)
-			waitTimeout:    10 * time.Second,  // needs time for retry attempts
+			waitTimeout:    time.Second,
+			supervisorOpts: process.SupervisorOptions{
+				InitAttemptTimeout: 50 * time.Millisecond,
+				InitRetryBaseDelay: 10 * time.Millisecond,
+			},
 		},
 		{
 			name:          "notification_before_response",
@@ -154,7 +159,7 @@ func TestSupervisor_Lifecycle(t *testing.T) {
 			collector := testutil.NewEventCollector()
 			bus.Subscribe(collector.Handler)
 
-			supervisor := process.NewSupervisor(bus)
+			supervisor := process.NewSupervisorWithOptions(bus, tc.supervisorOpts)
 			defer supervisor.StopAll()
 
 			serverID := "test-" + tc.name
