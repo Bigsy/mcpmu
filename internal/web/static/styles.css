@@ -197,7 +197,7 @@ code, .mono {
   gap: 12px;
 }
 
-.main { padding: 24px; max-width: 1200px; margin: 0 auto; width: 100%; }
+.main { padding: 24px; max-width: 1680px; margin: 0 auto; width: 100%; }
 
 [data-preserve-scroll] {
   overflow-anchor: none;
