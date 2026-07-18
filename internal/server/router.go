@@ -240,14 +240,12 @@ func (r *Router) handleServersRestart(ctx context.Context, arguments json.RawMes
 	}
 
 	serverName := args.ServerID
-	cfg := r.session.currentConfig()
-	srv, ok := cfg.GetServer(serverName)
-	if !ok {
+	if _, ok := r.session.currentConfig().GetServer(serverName); !ok {
 		return nil, ErrServerNotFound(serverName)
 	}
 
 	// Stop and start under one per-instance lifecycle lock.
-	handle, err := r.session.restartHandle(ctx, serverName, srv)
+	handle, err := r.session.restartHandle(ctx, serverName)
 	if err != nil {
 		return nil, ErrServerFailedToStart(serverName, err.Error())
 	}

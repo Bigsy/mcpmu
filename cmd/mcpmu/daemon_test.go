@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,5 +137,22 @@ func TestDaemonCLI_InvalidLogLevel(t *testing.T) {
 	output, err := command.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "invalid log level") {
 		t.Fatalf("daemon run error = %v, output = %s", err, output)
+	}
+}
+
+func TestDaemonErrorLogLevelRetainsDiagnostics(t *testing.T) {
+	previousOutput := log.Writer()
+	previousFlags := log.Flags()
+	defer func() {
+		log.SetOutput(previousOutput)
+		log.SetFlags(previousFlags)
+	}()
+	var output strings.Builder
+	if err := configureDaemonLogging("error", &output); err != nil {
+		t.Fatal(err)
+	}
+	log.Print("daemon diagnostic sentinel")
+	if !strings.Contains(output.String(), "daemon diagnostic sentinel") {
+		t.Fatalf("error-level daemon logging discarded diagnostics: %q", output.String())
 	}
 }

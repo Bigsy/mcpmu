@@ -181,6 +181,51 @@ func TestDaemonSessionHandshakeAndMCP(t *testing.T) {
 	}
 }
 
+func TestSessionHandshakeWriteFailureClosesConnection(t *testing.T) {
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(makeShortTempDir(t), "ack.sock"), Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	accepted := make(chan *net.UnixConn, 1)
+	go func() {
+		conn, _ := listener.AcceptUnix()
+		accepted <- conn
+	}()
+	client, err := net.DialUnix("unix", nil, listener.Addr().(*net.UnixAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverConn := <-accepted
+	if serverConn == nil {
+		t.Fatal("listener did not accept connection")
+	}
+	_ = client.Close()
+
+	lifetime := t.Context()
+	d := &Daemon{
+		opts:     Options{Build: "test-build", Linger: time.Hour},
+		lifetime: lifetime, sessions: make(map[uint64]*liveSession),
+		stopCh: make(chan struct{}),
+	}
+	d.handleSession(serverConn, bufio.NewReader(serverConn), Handshake{
+		Protocol: SessionProtocol,
+		Build:    "test-build",
+	})
+	d.mu.Lock()
+	if d.idle != nil {
+		d.idle.Stop()
+	}
+	sessions := len(d.sessions)
+	d.mu.Unlock()
+	if sessions != 0 {
+		t.Fatalf("failed handshake retained %d sessions", sessions)
+	}
+	if err := serverConn.SetDeadline(time.Now()); err == nil {
+		t.Fatal("failed handshake left server connection open")
+	}
+}
+
 func TestDaemonRejectsMalformedHandshake(t *testing.T) {
 	d := startTestDaemon(t, nil)
 	conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: d.paths.Socket, Net: "unix"})

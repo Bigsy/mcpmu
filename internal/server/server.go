@@ -224,13 +224,13 @@ func (s *Session) getOrStartSessionInstance(ctx context.Context, id process.Inst
 	return s.getOrStartInstance(ctx, id, serverName)
 }
 
-func (s *Session) restartHandle(ctx context.Context, serverName string, srv config.ServerConfig) (*process.Handle, error) {
+func (s *Session) restartHandle(ctx context.Context, serverName string) (*process.Handle, error) {
 	s.instanceMu.RLock()
 	defer s.instanceMu.RUnlock()
 	if s.closed.Load() {
 		return nil, fmt.Errorf("session is closed")
 	}
-	return s.supervisor.RestartInstance(ctx, s.instanceID(serverName), srv)
+	return s.restartInstance(ctx, s.instanceID(serverName), serverName)
 }
 
 func (s *Session) getOrStartServer(ctx context.Context, serverName string) (serverClient, *RPCError) {

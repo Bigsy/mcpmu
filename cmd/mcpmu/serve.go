@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -68,6 +69,10 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	serveLogLevel = strings.ToLower(serveLogLevel)
+	if !validDaemonLogLevel(serveLogLevel) {
+		return fmt.Errorf("invalid log level %q: expected debug, info, warn, or error", serveLogLevel)
+	}
 	// In stdio mode, all output must go to stderr except MCP protocol
 	// Configure logging based on log level
 	switch serveLogLevel {

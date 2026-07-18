@@ -29,5 +29,9 @@ func spawnDetached(executable string, args []string, logPath string) error {
 	if err := command.Start(); err != nil {
 		return err
 	}
-	return command.Process.Release()
+	// Reap an early daemon failure while this shim is still alive. The wait
+	// goroutine does not keep the shim process running; a healthy detached
+	// daemon is reparented normally when the shim exits.
+	go func() { _ = command.Wait() }()
+	return nil
 }

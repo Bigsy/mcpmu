@@ -343,3 +343,42 @@ func TestPumpReturnsOnDaemonEOFWithOpenInput(t *testing.T) {
 		t.Fatal("Pump did not return on daemon EOF")
 	}
 }
+
+func TestPumpDrainTimeoutAfterInputEOF(t *testing.T) {
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(shortRuntimeDir(t), "drain.sock"), Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	serverDone := make(chan struct{})
+	go func() {
+		conn, acceptErr := listener.AcceptUnix()
+		if acceptErr != nil {
+			close(serverDone)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = io.ReadAll(conn)
+		<-serverDone
+	}()
+	conn, err := net.DialUnix("unix", nil, listener.Addr().(*net.UnixAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer close(serverDone)
+
+	started := time.Now()
+	err = pumpWithDrainTimeout(
+		context.Background(),
+		&Connection{Conn: conn, Reader: bufio.NewReader(conn)},
+		strings.NewReader(""),
+		io.Discard,
+		50*time.Millisecond,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < 40*time.Millisecond || elapsed > time.Second {
+		t.Fatalf("drain timeout elapsed = %v, want prompt bounded exit", elapsed)
+	}
+}

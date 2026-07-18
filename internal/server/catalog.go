@@ -102,6 +102,11 @@ func (c *verifiedCatalog) apply(result process.DiscoveryResult) (changed, hadPri
 }
 
 func (c *verifiedCatalog) fail(id process.InstanceID, generation uint64, err error) {
+	if generation == 0 {
+		c.mu.RLock()
+		generation = c.entries[id].generation
+		c.mu.RUnlock()
+	}
 	c.apply(process.DiscoveryResult{Instance: id, Generation: generation, Err: err})
 }
 

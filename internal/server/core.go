@@ -122,6 +122,12 @@ type serverClient struct {
 	capabilities mcp.ServerCapabilities
 }
 
+type serverConfigSnapshot struct {
+	generation uint64
+	config     config.ServerConfig
+	normalized []byte
+}
+
 // getOrStartHandle is the one lazy-start/readiness path used by tools,
 // resources, prompts, and discovery. It snapshots the complete server config,
 // then revalidates it under the instance lifecycle lock before a start.
@@ -130,50 +136,19 @@ func (c *Core) getOrStartHandle(ctx context.Context, serverName string) (*proces
 }
 
 func (c *Core) getOrStartInstance(ctx context.Context, id process.InstanceID, serverName string) (*process.Handle, config.ServerConfig, error) {
-	c.coreMu.RLock()
-	snapshotGeneration := c.configGeneration
-	srv, ok := c.cfg.GetServer(serverName)
-	c.coreMu.RUnlock()
-	if !ok {
-		return nil, config.ServerConfig{}, fmt.Errorf("server not found: %s", serverName)
-	}
-	if !srv.IsEnabled() {
-		return nil, config.ServerConfig{}, fmt.Errorf("server is disabled: %s", serverName)
-	}
-	if srv.IsShared() != id.IsShared() {
-		return nil, config.ServerConfig{}, fmt.Errorf("server sharing mode changed: %s", serverName)
-	}
-	snapshot, err := normalizedServerConfig(srv)
+	snapshot, err := c.snapshotServerConfig(id, serverName)
 	if err != nil {
 		return nil, config.ServerConfig{}, err
 	}
 
-	startCtx, cancel := context.WithTimeout(ctx, time.Duration(srv.StartupTimeout())*time.Second)
+	startCtx, cancel := context.WithTimeout(ctx, time.Duration(snapshot.config.StartupTimeout())*time.Second)
 	defer cancel()
 
 	handle, err := c.supervisor.StartInstance(
 		startCtx,
 		id,
-		srv,
-		func() error {
-			c.coreMu.RLock()
-			defer c.coreMu.RUnlock()
-			if c.configGeneration == snapshotGeneration {
-				return nil
-			}
-			current, exists := c.cfg.GetServer(serverName)
-			if !exists {
-				return fmt.Errorf("server removed during config reload: %s", serverName)
-			}
-			currentNormalized, normalizeErr := normalizedServerConfig(current)
-			if normalizeErr != nil {
-				return normalizeErr
-			}
-			if !bytes.Equal(snapshot, currentNormalized) {
-				return fmt.Errorf("server config changed during reload: %s", serverName)
-			}
-			return nil
-		},
+		snapshot.config,
+		func() error { return c.validateServerConfigSnapshot(id, serverName, snapshot) },
 	)
 	if err != nil {
 		return nil, config.ServerConfig{}, fmt.Errorf("start server: %w", err)
@@ -181,7 +156,66 @@ func (c *Core) getOrStartInstance(ctx context.Context, id process.InstanceID, se
 	if err := handle.WaitForTools(startCtx); err != nil {
 		return nil, config.ServerConfig{}, fmt.Errorf("wait for tools: %w", err)
 	}
-	return handle, srv, nil
+	return handle, snapshot.config, nil
+}
+
+func (c *Core) restartInstance(ctx context.Context, id process.InstanceID, serverName string) (*process.Handle, error) {
+	snapshot, err := c.snapshotServerConfig(id, serverName)
+	if err != nil {
+		return nil, err
+	}
+	restartCtx, cancel := context.WithTimeout(ctx, time.Duration(snapshot.config.StartupTimeout())*time.Second)
+	defer cancel()
+	return c.supervisor.RestartInstanceValidated(
+		restartCtx,
+		id,
+		snapshot.config,
+		func() error { return c.validateServerConfigSnapshot(id, serverName, snapshot) },
+	)
+}
+
+func (c *Core) snapshotServerConfig(id process.InstanceID, serverName string) (serverConfigSnapshot, error) {
+	c.coreMu.RLock()
+	snapshotGeneration := c.configGeneration
+	srv, ok := c.cfg.GetServer(serverName)
+	c.coreMu.RUnlock()
+	if !ok {
+		return serverConfigSnapshot{}, fmt.Errorf("server not found: %s", serverName)
+	}
+	if !srv.IsEnabled() {
+		return serverConfigSnapshot{}, fmt.Errorf("server is disabled: %s", serverName)
+	}
+	if srv.IsShared() != id.IsShared() {
+		return serverConfigSnapshot{}, fmt.Errorf("server sharing mode changed: %s", serverName)
+	}
+	normalized, err := normalizedServerConfig(srv)
+	if err != nil {
+		return serverConfigSnapshot{}, err
+	}
+	return serverConfigSnapshot{generation: snapshotGeneration, config: srv, normalized: normalized}, nil
+}
+
+func (c *Core) validateServerConfigSnapshot(id process.InstanceID, serverName string, snapshot serverConfigSnapshot) error {
+	c.coreMu.RLock()
+	defer c.coreMu.RUnlock()
+	if c.configGeneration == snapshot.generation {
+		return nil
+	}
+	current, exists := c.cfg.GetServer(serverName)
+	if !exists {
+		return fmt.Errorf("server removed during config reload: %s", serverName)
+	}
+	if current.IsShared() != id.IsShared() {
+		return fmt.Errorf("server sharing mode changed during reload: %s", serverName)
+	}
+	currentNormalized, err := normalizedServerConfig(current)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(snapshot.normalized, currentNormalized) {
+		return fmt.Errorf("server config changed during reload: %s", serverName)
+	}
+	return nil
 }
 
 func normalizedServerConfig(srv config.ServerConfig) ([]byte, error) {

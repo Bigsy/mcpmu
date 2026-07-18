@@ -157,3 +157,50 @@ func TestCoreAcquireRejectsConfigChangedWhileWaitingForLifecycle(t *testing.T) {
 		t.Fatalf("stale config unexpectedly started handle %p", handle)
 	}
 }
+
+func TestCoreRestartRejectsConfigChangedWhileWaitingForLifecycle(t *testing.T) {
+	t.Parallel()
+	oldServer := phase2AServerConfig(t, mcptest.DefaultConfig())
+	core, err := NewCore(Options{
+		Config:        &config.Config{Servers: map[string]config.ServerConfig{"changing": oldServer}},
+		PIDTrackerDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewCore: %v", err)
+	}
+	t.Cleanup(core.Close)
+	id := process.SharedInstanceID("changing")
+
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	blockerDone := make(chan struct{})
+	go func() {
+		defer close(blockerDone)
+		_, _ = core.supervisor.StartInstance(context.Background(), id, oldServer, func() error {
+			close(locked)
+			<-release
+			return errors.New("test lifecycle blocker")
+		})
+	}()
+	<-locked
+
+	result := make(chan error, 1)
+	go func() {
+		_, restartErr := core.restartInstance(context.Background(), id, "changing")
+		result <- restartErr
+	}()
+	time.Sleep(50 * time.Millisecond)
+	changed := oldServer
+	changed.Args = append(append([]string(nil), oldServer.Args...), "changed")
+	core.replaceConfig(&config.Config{Servers: map[string]config.ServerConfig{"changing": changed}})
+	close(release)
+	<-blockerDone
+
+	err = <-result
+	if err == nil || !strings.Contains(err.Error(), "config changed during reload") {
+		t.Fatalf("restart error = %v, want config-generation rejection", err)
+	}
+	if handle := core.supervisor.Get("changing"); handle != nil {
+		t.Fatalf("stale restart unexpectedly started handle %p", handle)
+	}
+}

@@ -130,7 +130,10 @@ func configureDaemonLogging(level string, output io.Writer) error {
 		log.SetOutput(output)
 		log.SetFlags(log.LstdFlags)
 	case "error":
-		log.SetOutput(io.Discard)
+		// The standard logger has no severity filtering. Preserve daemon errors,
+		// panics, and lifecycle diagnostics in the per-config log rather than
+		// making the primary recovery artifact empty.
+		log.SetOutput(output)
 		log.SetFlags(log.LstdFlags)
 	default:
 		return fmt.Errorf("invalid log level %q: expected debug, info, warn, or error", level)

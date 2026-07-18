@@ -681,9 +681,25 @@ func (s *Supervisor) Restart(ctx context.Context, name string, srv config.Server
 
 // RestartInstance stops and starts one instance as one serialized lifecycle operation.
 func (s *Supervisor) RestartInstance(ctx context.Context, id InstanceID, srv config.ServerConfig) (*Handle, error) {
+	return s.RestartInstanceValidated(ctx, id, srv, nil)
+}
+
+// RestartInstanceValidated stops and starts one instance only after validate
+// succeeds while holding the same lifecycle lock used by start and stop.
+func (s *Supervisor) RestartInstanceValidated(
+	ctx context.Context,
+	id InstanceID,
+	srv config.ServerConfig,
+	validate func() error,
+) (*Handle, error) {
 	lock := s.lifecycleLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	if validate != nil {
+		if err := validate(); err != nil {
+			return nil, err
+		}
+	}
 
 	s.mu.RLock()
 	_, exists := s.handles[id]

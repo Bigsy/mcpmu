@@ -65,6 +65,38 @@ func TestVerifiedCatalogRetainsLastGoodAndRejectsOldGeneration(t *testing.T) {
 	}
 }
 
+func TestCatalogUnknownGenerationFailureWakesJoinersWithError(t *testing.T) {
+	catalog := newVerifiedCatalog()
+	id := process.SharedInstanceID("crashed")
+	catalog.apply(process.DiscoveryResult{
+		Instance: id, Generation: 7, Initialized: true,
+		Tools: []mcp.Tool{{Name: "last_good"}},
+	})
+	catalog.invalidate(id, 7)
+	ownerFlight, owner := catalog.begin(id)
+	if !owner {
+		t.Fatal("first caller did not own discovery flight")
+	}
+	joinedFlight, joinedOwner := catalog.begin(id)
+	if joinedOwner || joinedFlight != ownerFlight {
+		t.Fatal("concurrent caller did not join discovery flight")
+	}
+
+	wantErr := errors.New("restart executable missing")
+	catalog.fail(id, 0, wantErr)
+	catalog.finish(id, ownerFlight)
+	if err := waitForFlight(context.Background(), joinedFlight); err != nil {
+		t.Fatal(err)
+	}
+	entry := catalog.snapshot(id)
+	if entry.state != catalogFailed || !errors.Is(catalogError(entry), wantErr) {
+		t.Fatalf("catalog state = %s, error = %v", entry.state, catalogError(entry))
+	}
+	if _, ok := entry.tools["last_good"]; !ok {
+		t.Fatal("failed restart erased last-good tools")
+	}
+}
+
 func TestVerifiedCatalogDistinguishesVerifiedEmptyFromUnknown(t *testing.T) {
 	catalog := newVerifiedCatalog()
 	unknownID := process.SharedInstanceID("unknown")

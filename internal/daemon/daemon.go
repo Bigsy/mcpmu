@@ -239,7 +239,11 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 		_ = conn.Close()
 		return
 	}
-	defer d.removeSession(id)
+	defer func() {
+		cancel()
+		_ = conn.Close()
+		d.removeSession(id)
+	}()
 
 	response, _ := marshalLine(HandshakeResponse{OK: true})
 	if err := writeAll(conn, response); err != nil {

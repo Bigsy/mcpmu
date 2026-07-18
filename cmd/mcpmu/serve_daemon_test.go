@@ -388,12 +388,21 @@ func TestServeDaemonFailureFallsBackToEmbedded(t *testing.T) {
 	}
 }
 
+func TestServeRejectsInvalidLogLevelBeforeDaemonStartup(t *testing.T) {
+	command := exec.Command(testBinary, "serve", "--log-level", "verbose")
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), `invalid log level "verbose"`) {
+		t.Fatalf("serve error = %v, output = %s", err, output)
+	}
+}
+
 func TestServeAbsentConfigWithAbsentParent(t *testing.T) {
 	runtimeRoot, err := os.MkdirTemp("/tmp", "mu-absent-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeRoot) })
+	t.Setenv("XDG_RUNTIME_DIR", runtimeRoot)
 	missing := filepath.Join(t.TempDir(), "not-created", "config.json")
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

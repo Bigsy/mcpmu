@@ -18,6 +18,7 @@ import (
 const (
 	defaultStartupTimeout   = 5 * time.Second
 	defaultHandshakeTimeout = 5 * time.Second
+	defaultDrainTimeout     = 5 * time.Second
 	maxHandshakeLine        = 64 * 1024
 )
 
@@ -195,6 +196,16 @@ func dialSession(ctx context.Context, socket, build string, opts Options) (*Conn
 // and returns promptly even if stdin remains open. Stdin EOF half-closes the
 // socket so the daemon can finish emitting buffered responses.
 func Pump(ctx context.Context, connection *Connection, stdin io.Reader, stdout io.Writer) error {
+	return pumpWithDrainTimeout(ctx, connection, stdin, stdout, defaultDrainTimeout)
+}
+
+func pumpWithDrainTimeout(
+	ctx context.Context,
+	connection *Connection,
+	stdin io.Reader,
+	stdout io.Writer,
+	drainTimeout time.Duration,
+) error {
 	if connection == nil || connection.Conn == nil || connection.Reader == nil {
 		return fmt.Errorf("invalid daemon shim connection")
 	}
@@ -204,22 +215,45 @@ func Pump(ctx context.Context, connection *Connection, stdin io.Reader, stdout i
 		_, err := io.Copy(stdout, connection.Reader)
 		outputDone <- err
 	}()
+	inputDone := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(conn, stdin)
 		_ = conn.CloseWrite()
+		close(inputDone)
 	}()
 
-	select {
-	case err := <-outputDone:
-		_ = conn.Close()
-		if err != nil && !errors.Is(err, net.ErrClosed) {
-			return fmt.Errorf("copy daemon output: %w", err)
+	var drainTimer *time.Timer
+	var drainDone <-chan time.Time
+	for {
+		select {
+		case err := <-outputDone:
+			if drainTimer != nil {
+				drainTimer.Stop()
+			}
+			_ = conn.Close()
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				return fmt.Errorf("copy daemon output: %w", err)
+			}
+			return nil
+		case <-inputDone:
+			inputDone = nil
+			if drainTimeout <= 0 {
+				drainTimeout = defaultDrainTimeout
+			}
+			drainTimer = time.NewTimer(drainTimeout)
+			drainDone = drainTimer.C
+		case <-drainDone:
+			_ = conn.Close()
+			<-outputDone
+			return nil
+		case <-ctx.Done():
+			if drainTimer != nil {
+				drainTimer.Stop()
+			}
+			_ = conn.Close()
+			<-outputDone
+			return ctx.Err()
 		}
-		return nil
-	case <-ctx.Done():
-		_ = conn.Close()
-		<-outputDone
-		return ctx.Err()
 	}
 }
 

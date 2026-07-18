@@ -151,8 +151,8 @@ serving compatible clients.
 
 Once connected, the shim copies MCP bytes without interpreting them. Daemon
 EOF ends the shim even while client stdin is open; client stdin EOF half-closes
-the socket so queued responses can drain. The daemon writer uses an ordered
-flush marker before closing such a completed Session.
+the socket so queued responses can drain for at most five seconds. The daemon
+writer uses an ordered flush marker before closing such a completed Session.
 
 The daemon inherits the environment and working directory of the shim that won
 the spawn race. Server configs should therefore use absolute `cwd` values and
