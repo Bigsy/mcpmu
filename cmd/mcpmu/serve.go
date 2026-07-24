@@ -120,6 +120,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	log.Printf("Loaded config with %d servers, %d namespaces", len(cfg.Servers), len(cfg.Namespaces))
 
+	// A config written before the name was reserved, or edited by hand, can
+	// still contain a server whose tools the aggregator can never route. Loading
+	// does not fail on it — that would take every other server down too — so say
+	// so on stderr, where it reaches the user rather than only the debug log.
+	for _, name := range cfg.ReservedNameConflicts() {
+		_, _ = fmt.Fprintf(os.Stderr,
+			"mcpmu: server %q uses a reserved name; its tools cannot be called or filtered. "+
+				"Rename it with: mcpmu rename %s <new-name>\n", name, name)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sigCh := make(chan os.Signal, 1)

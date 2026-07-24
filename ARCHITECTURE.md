@@ -360,6 +360,19 @@ mcpmu.namespaces_list
 
 `serverId` is a stable internal identifier (auto-generated short `[a-z0-9]`, no `.`), not the human display name.
 
+Because the `mcpmu.` prefix is claimed by the manager tools, `mcpmu` is a
+reserved server name: `ValidateServerName` rejects it in `AddServer` and
+`RenameServer`, which every CLI, TUI and web add/rename path goes through.
+Namespaces are unaffected — a namespace name never appears in a qualified tool
+name — so they still use `ValidateName`.
+
+Loading a config that already contains such a server deliberately does *not*
+fail; refusing the whole file would take every other server down over one bad
+name. Instead `Config.ReservedNameConflicts()` reports them and `mcpmu serve`
+warns on stderr with the `mcpmu rename` command that fixes it. Left unrenamed,
+that server's tools are listed but skip the permission filter and always fail to
+call with "tool not found".
+
 ## Registry Browser
 
 The TUI includes a registry browser for discovering and installing servers from the official MCP registry (`registry.modelcontextprotocol.io`). Press `a` on the server list to open an add-method selector:

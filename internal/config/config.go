@@ -133,6 +133,17 @@ func SaveTo(cfg *Config, path string) error {
 	return nil
 }
 
+// ReservedServerName is the one server name that cannot be used, because the
+// serve-mode aggregator gives it a different meaning.
+//
+// Tools are exposed to clients as "<server>.<tool>", and anything under the
+// "mcpmu." prefix is claimed by the built-in manager tools. A server called
+// mcpmu therefore lands in a state with no way out: its tools are listed, they
+// skip the permission filter that would let a deny rule hide them, and calling
+// one resolves to a manager tool that does not exist, so it always fails with
+// "tool not found".
+const ReservedServerName = "mcpmu"
+
 // ValidateName checks if a server or namespace name is valid.
 // Names cannot be empty or contain '.' or ':'.
 func ValidateName(name string) error {
@@ -148,11 +159,41 @@ func ValidateName(name string) error {
 	return nil
 }
 
+// ValidateServerName checks a server name. Server names have one restriction
+// beyond ValidateName's: ReservedServerName is not allowed. Namespace names are
+// unaffected — they never appear in a qualified tool name — so they keep using
+// ValidateName.
+func ValidateServerName(name string) error {
+	if err := ValidateName(name); err != nil {
+		return err
+	}
+	if name == ReservedServerName {
+		return fmt.Errorf("name %q is reserved for mcpmu's own manager tools", ReservedServerName)
+	}
+	return nil
+}
+
+// ReservedNameConflicts reports server names in this config that
+// ValidateServerName would now reject. Configs written before the name was
+// reserved, or edited by hand, can still contain one; loading deliberately does
+// not fail on it, since refusing the whole file would take every other server
+// down with it.
+func (c *Config) ReservedNameConflicts() []string {
+	var conflicts []string
+	for name := range c.Servers {
+		if ValidateServerName(name) != nil {
+			conflicts = append(conflicts, name)
+		}
+	}
+	slices.Sort(conflicts)
+	return conflicts
+}
+
 // AddServer adds a new server to the config with the given name.
 // Returns an error if a server with that name already exists or if the config is invalid.
 func (c *Config) AddServer(name string, srv ServerConfig) error {
 	// Validate name
-	if err := ValidateName(name); err != nil {
+	if err := ValidateServerName(name); err != nil {
 		return fmt.Errorf("invalid name: %w", err)
 	}
 
@@ -226,7 +267,7 @@ func (c *Config) RenameServer(oldName, newName string) error {
 	if _, exists := c.Servers[newName]; exists {
 		return fmt.Errorf("server %q already exists", newName)
 	}
-	if err := ValidateName(newName); err != nil {
+	if err := ValidateServerName(newName); err != nil {
 		return fmt.Errorf("invalid name: %w", err)
 	}
 
