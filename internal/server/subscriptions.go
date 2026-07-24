@@ -27,16 +27,71 @@ type resourceSubscriptions struct {
 	mu      sync.RWMutex
 	entries map[resourceSubscriptionKey]*resourceSubscription
 	epoch   uint64
-	locks   sync.Map // resourceSubscriptionKey -> *sync.Mutex
+
+	// lockGuard guards the locks map and the entries' refs counters. It is only
+	// ever held for the few instructions needed to find or drop an entry, never
+	// across a key lock acquisition or upstream I/O.
+	lockGuard sync.Mutex
+	locks     map[resourceSubscriptionKey]*keyLockEntry
+}
+
+// keyLockEntry is the per-key mutex plus a count of the operations that need it.
+//
+// The count exists so the map cannot grow without bound: keys are
+// (InstanceID, URI) with client-supplied URIs, and hasSubscribers mints one for
+// every notification URI too, so in a daemon running for hours a map that only
+// ever grew would retain a mutex for every URI ever mentioned. Retention now
+// tracks concurrent operations instead.
+//
+// Dropping the entry cannot simply happen when an operation finishes: another
+// goroutine may already be blocked on this mutex, and replacing it would let two
+// operations on one key run at once — exactly the serialization hasSubscribers
+// relies on. refs is therefore incremented under lockGuard *before* the mutex is
+// taken, so an entry reachable by any operation always has refs > 0 and only the
+// last one out removes it.
+type keyLockEntry struct {
+	mu   sync.Mutex
+	refs int
 }
 
 func newResourceSubscriptions() *resourceSubscriptions {
-	return &resourceSubscriptions{entries: make(map[resourceSubscriptionKey]*resourceSubscription)}
+	return &resourceSubscriptions{
+		entries: make(map[resourceSubscriptionKey]*resourceSubscription),
+		locks:   make(map[resourceSubscriptionKey]*keyLockEntry),
+	}
 }
 
-func (r *resourceSubscriptions) keyLock(key resourceSubscriptionKey) *sync.Mutex {
-	lock, _ := r.locks.LoadOrStore(key, &sync.Mutex{})
-	return lock.(*sync.Mutex)
+// lockKey acquires the lock for one key. Every call must be paired with
+// unlockKey on the returned entry.
+func (r *resourceSubscriptions) lockKey(key resourceSubscriptionKey) *keyLockEntry {
+	r.lockGuard.Lock()
+	entry := r.locks[key]
+	if entry == nil {
+		entry = &keyLockEntry{}
+		r.locks[key] = entry
+	}
+	entry.refs++
+	r.lockGuard.Unlock()
+
+	entry.mu.Lock()
+	return entry
+}
+
+// unlockKey releases the key lock and discards the entry once no operation
+// still refers to it.
+func (r *resourceSubscriptions) unlockKey(key resourceSubscriptionKey, entry *keyLockEntry) {
+	entry.mu.Unlock()
+
+	r.lockGuard.Lock()
+	entry.refs--
+	if entry.refs == 0 {
+		// Only delete the entry still registered under this key. clear() may
+		// have replaced the map, in which case this one is already unreachable.
+		if current := r.locks[key]; current == entry {
+			delete(r.locks, key)
+		}
+	}
+	r.lockGuard.Unlock()
 }
 
 // subscribe applies a transition for one downstream session. The upstream
@@ -50,9 +105,8 @@ func (r *resourceSubscriptions) subscribe(
 	generation uint64,
 	upstream func() error,
 ) (dropped []*Session, err error) {
-	lock := r.keyLock(key)
-	lock.Lock()
-	defer lock.Unlock()
+	lock := r.lockKey(key)
+	defer r.unlockKey(key, lock)
 
 	r.mu.RLock()
 	epoch := r.epoch
@@ -113,9 +167,8 @@ func (r *resourceSubscriptions) unsubscribe(
 	key resourceSubscriptionKey,
 	upstream func(generation uint64) error,
 ) error {
-	lock := r.keyLock(key)
-	lock.Lock()
-	defer lock.Unlock()
+	lock := r.lockKey(key)
+	defer r.unlockKey(key, lock)
 
 	r.mu.RLock()
 	entry := r.entries[key]
@@ -158,9 +211,8 @@ func (r *resourceSubscriptions) replay(
 	generation uint64,
 	upstream func() error,
 ) (dropped []*Session, err error) {
-	lock := r.keyLock(key)
-	lock.Lock()
-	defer lock.Unlock()
+	lock := r.lockKey(key)
+	defer r.unlockKey(key, lock)
 
 	r.mu.RLock()
 	epoch := r.epoch
@@ -211,9 +263,8 @@ func (r *resourceSubscriptions) keysForInstance(id process.InstanceID) []resourc
 // hasSubscribers synchronizes with subscribe/unsubscribe RPC transitions so
 // notifications emitted immediately after a response see committed state.
 func (r *resourceSubscriptions) hasSubscribers(key resourceSubscriptionKey) bool {
-	lock := r.keyLock(key)
-	lock.Lock()
-	defer lock.Unlock()
+	lock := r.lockKey(key)
+	defer r.unlockKey(key, lock)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	entry := r.entries[key]
@@ -223,6 +274,12 @@ func (r *resourceSubscriptions) hasSubscribers(key resourceSubscriptionKey) bool
 // clear invalidates every in-flight operation and drops all retained intent.
 // Closing transports during reload removes the corresponding upstream state,
 // so no unsubscribe RPCs are sent here.
+//
+// The key locks are deliberately left alone. They are refcounted, so the map
+// holds only what in-flight operations are using and drains by itself as those
+// finish. Replacing it here would hand a new operation a different mutex for a
+// key an older one is still holding, which is the one way to get two concurrent
+// operations on a single key.
 func (r *resourceSubscriptions) clear() {
 	r.mu.Lock()
 	r.epoch++
