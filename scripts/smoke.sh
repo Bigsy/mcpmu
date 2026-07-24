@@ -20,6 +20,12 @@
 #   3. Each check is responsible for its own setup, cleanup, and isolation
 #      from the user's real config (use mktemp configs — never write to
 #      ~/.config/mcpmu/config.json).
+#   4. Secrets come from the environment, never from the script. A check may
+#      read a credential out of the real config as a *fallback* when the env
+#      var is unset (see cf_access_creds_from_local_config) — read-only, and it
+#      must still build its own mktemp config to test against. A check whose
+#      prereqs are genuinely absent must SKIP rather than fail, so the script
+#      stays useful on machines and in CI that cannot run everything.
 
 set -uo pipefail
 
@@ -58,14 +64,48 @@ mcp_tool_call() {
 
 # --- Smoke checks ----------------------------------------------------------
 
+# Best-effort discovery of the CF-Access creds from the local mcpmu config, used
+# only when they are not already in the environment.
+#
+# Without this, a plain ./scripts/smoke.sh silently skips the one check that
+# exercises a real third-party endpoint, which reads as full coverage when it is
+# not. The credential for this exact server already lives in the config, so
+# there is no reason to make the developer re-supply it by hand.
+#
+# This is the one place a check reads the real config, and it is strictly
+# read-only: it never writes there, and the check itself still builds its own
+# mktemp config. No value is printed. Nothing is hardcoded, so the script stays
+# safe to commit.
+cf_access_creds_from_local_config() {
+  local cfg="${HOME}/.config/mcpmu/config.json"
+  [[ -r "$cfg" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  # Match on the headers rather than a server name, so renaming the server does
+  # not quietly turn this back into a skip.
+  local id secret
+  id=$(jq -r 'first(.servers[]? | select((.http_headers["CF-Access-Client-Id"] // "") != "" and (.http_headers["CF-Access-Client-Secret"] // "") != "")) | .http_headers["CF-Access-Client-Id"] // empty' "$cfg" 2>/dev/null)
+  secret=$(jq -r 'first(.servers[]? | select((.http_headers["CF-Access-Client-Id"] // "") != "" and (.http_headers["CF-Access-Client-Secret"] // "") != "")) | .http_headers["CF-Access-Client-Secret"] // empty' "$cfg" 2>/dev/null)
+
+  [[ -n "$id" && -n "$secret" ]] || return 0
+  export CF_ACCESS_CLIENT_ID="$id"
+  export CF_ACCESS_CLIENT_SECRET="$secret"
+}
+
 # Verifies the --header / --env-header CLI flow and the end-to-end CF-Access
 # wire path (PLAN-headers.md's "Required test before merging" non-negotiable).
 #
-# Requires the Cloudflare Access creds for the bigsy.uk searxng MCP. Reads
-# them from the environment so they never land in the repo.
+# Needs the Cloudflare Access creds for the bigsy.uk searxng MCP. The
+# environment wins, so CI and other machines can supply them however they like;
+# otherwise they are read from the local mcpmu config. Either way they are never
+# stored in the repo.
 smoke_cf_access_headers() {
   if [[ -z "${CF_ACCESS_CLIENT_ID:-}" || -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
-    echo "SKIP: set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET to run smoke_cf_access_headers"
+    cf_access_creds_from_local_config
+  fi
+  if [[ -z "${CF_ACCESS_CLIENT_ID:-}" || -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
+    echo "SKIP: no CF-Access creds; set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET" \
+      "or configure a server with CF-Access http_headers"
     return 0
   fi
 
