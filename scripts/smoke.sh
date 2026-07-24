@@ -404,10 +404,76 @@ EOF
   return "$rc"
 }
 
+# Verifies that an upstream stdio server's final frame is still delivered when
+# it is written without a trailing newline and the process then exits.
+#
+# bufio.ReadBytes hands back the bytes it read alongside io.EOF. The stdio
+# transport used to check the error first and discard those bytes, so this exact
+# shape — last response, no newline, immediate exit — lost the reply and the
+# tool call failed. Only reproducible across a real process boundary.
+smoke_stdio_trailing_frame() {
+  local tmp cfg fake response rc=0
+  tmp=$(mktemp -d -t mcpmu-smoke-trailing.XXXXXX)
+  cfg="$tmp/config.json"
+  fake="$tmp/fake-mcp.sh"
+
+  cat > "$fake" <<'EOF'
+#!/usr/bin/env bash
+# Answers initialize and tools/list normally, then writes the tools/call reply
+# with NO trailing newline and exits immediately.
+while IFS= read -r line; do
+  method=$(printf '%s' "$line" | jq -r '.method // empty')
+  id=$(printf '%s' "$line" | jq -r '.id // empty')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"smoke-trailing","version":"1"}}}\n' "$id"
+      ;;
+    tools/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","description":"ping","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    tools/call)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong-no-newline"}]}}' "$id"
+      exit 0
+      ;;
+  esac
+done
+EOF
+  chmod 0700 "$fake"
+
+  jq -n --arg command "$fake" '{
+    schemaVersion: 1,
+    servers: {
+      trailing: {
+        command: $command,
+        startup_timeout_sec: 5
+      }
+    },
+    namespaces: {}
+  }' > "$cfg"
+
+  response=$({
+    printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}\n'
+    printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
+    printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"trailing.ping","arguments":{}}}\n'
+    sleep 5
+  } | ./mcpmu serve --stdio --isolated --config "$cfg" 2>/dev/null)
+
+  if ! printf '%s\n' "$response" \
+    | jq -e 'select(.id == 2) | select(.result.content[0].text == "pong-no-newline")' >/dev/null; then
+    echo "FAIL: final frame without a trailing newline was not delivered"
+    printf '%s\n' "$response" | head -5
+    rc=1
+  fi
+
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # Register new smoke checks here.
 SMOKE_CHECKS=(
   smoke_cf_access_headers
   smoke_process_group_cleanup
+  smoke_stdio_trailing_frame
   smoke_daemon_control
   smoke_daemon_shim_fallback
   smoke_daemon_private_instances
