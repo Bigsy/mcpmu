@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -458,25 +459,62 @@ func openBrowser(url string) error {
 // WarningHandler is called when a non-fatal error occurs that should be surfaced to the user.
 type WarningHandler func(serverURL string, warning error)
 
-// TokenManager handles automatic token refresh.
+// TokenManager handles automatic token refresh. One instance is shared by every
+// HTTP upstream in a process, and GetAccessToken runs on arbitrary request
+// goroutines (once per outbound POST), so all of its state is mutex-guarded and
+// refreshes are single-flighted per server URL.
 type TokenManager struct {
-	store     CredentialStore
-	metadata  map[string]*AuthorizationServerMetadata // cached by server URL
-	onWarning WarningHandler
+	store CredentialStore
+
+	// mu guards metadata, refreshing and onWarning. It is never held across
+	// network I/O — discovery and the token request run outside it.
+	mu         sync.Mutex
+	metadata   map[string]*AuthorizationServerMetadata // cached by server URL
+	refreshing map[string]*refreshCall                 // in-flight refresh per server URL
+	onWarning  WarningHandler
+}
+
+// refreshCall is one in-flight refresh that later arrivals for the same server
+// URL wait on instead of starting a competing refresh.
+type refreshCall struct {
+	done  chan struct{}
+	token string
+	err   error
+}
+
+// wait blocks until the leader publishes a result, or until the caller's own
+// context expires — a hung refresh must not pin unrelated request goroutines
+// past their deadlines.
+func (c *refreshCall) wait(ctx context.Context) (string, error) {
+	select {
+	case <-c.done:
+		return c.token, c.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }
 
 // NewTokenManager creates a new token manager.
 func NewTokenManager(store CredentialStore) *TokenManager {
 	return &TokenManager{
-		store:    store,
-		metadata: make(map[string]*AuthorizationServerMetadata),
+		store:      store,
+		metadata:   make(map[string]*AuthorizationServerMetadata),
+		refreshing: make(map[string]*refreshCall),
 	}
 }
 
 // SetWarningHandler sets a callback for non-fatal warnings (e.g., token storage failures).
 // This allows callers to surface warnings to users without failing the operation.
 func (m *TokenManager) SetWarningHandler(handler WarningHandler) {
+	m.mu.Lock()
 	m.onWarning = handler
+	m.mu.Unlock()
+}
+
+func (m *TokenManager) warningHandler() WarningHandler {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.onWarning
 }
 
 // GetAccessToken returns a valid access token for a server, refreshing if needed.
@@ -499,18 +537,61 @@ func (m *TokenManager) GetAccessToken(ctx context.Context, serverURL string) (st
 		return "", fmt.Errorf("token expired and no refresh token available")
 	}
 
-	// Get or discover metadata for token endpoint
-	metadata, ok := m.metadata[serverURL]
-	if !ok {
-		result, err := Discover(ctx, serverURL)
-		if err != nil {
-			return "", fmt.Errorf("discover metadata: %w", err)
-		}
-		metadata = result.Metadata
-		m.metadata[serverURL] = metadata
+	return m.refreshOnce(ctx, serverURL)
+}
+
+// refreshOnce elects a single leader per server URL and lets every other caller
+// wait on that leader's result. Concurrent refreshes must not overlap: a server
+// that rotates refresh tokens (the common case) treats a replayed refresh token
+// as a breach signal and can revoke the entire grant.
+func (m *TokenManager) refreshOnce(ctx context.Context, serverURL string) (string, error) {
+	m.mu.Lock()
+	if inFlight := m.refreshing[serverURL]; inFlight != nil {
+		m.mu.Unlock()
+		return inFlight.wait(ctx)
+	}
+	call := &refreshCall{done: make(chan struct{})}
+	m.refreshing[serverURL] = call
+	m.mu.Unlock()
+
+	token, err := m.refreshHoldingSlot(ctx, serverURL)
+
+	// Publish the result and release the slot together so a caller that sees an
+	// empty slot is guaranteed to be starting a genuinely new refresh.
+	m.mu.Lock()
+	call.token, call.err = token, err
+	delete(m.refreshing, serverURL)
+	close(call.done)
+	m.mu.Unlock()
+
+	return token, err
+}
+
+// refreshHoldingSlot performs the refresh for the elected leader. It re-reads
+// the credential rather than trusting the caller's copy: a refresh that landed
+// while this goroutine was waiting for the slot has already rotated the stored
+// refresh token, and replaying the stale one is exactly what we must avoid.
+func (m *TokenManager) refreshHoldingSlot(ctx context.Context, serverURL string) (string, error) {
+	cred, err := m.store.Get(serverURL)
+	if err != nil {
+		return "", fmt.Errorf("get credential: %w", err)
+	}
+	if cred == nil {
+		return "", fmt.Errorf("no credentials for %s", serverURL)
+	}
+	if !cred.NeedsRefresh() {
+		// Another refresh renewed it while we waited for the slot.
+		return cred.AccessToken, nil
+	}
+	if cred.RefreshToken == "" {
+		return "", fmt.Errorf("token expired and no refresh token available")
 	}
 
-	// Refresh the token
+	metadata, err := m.serverMetadata(ctx, serverURL)
+	if err != nil {
+		return "", err
+	}
+
 	tokens, err := RefreshToken(ctx, metadata.TokenEndpoint, cred.ClientID, cred.ClientSecret, cred.RefreshToken, metadata)
 	if err != nil {
 		return "", fmt.Errorf("refresh token: %w", err)
@@ -530,12 +611,38 @@ func (m *TokenManager) GetAccessToken(ctx context.Context, serverURL string) (st
 		// Log but don't fail - we have the token in memory
 		log.Printf("Warning: failed to store refreshed token: %v", err)
 		// Surface to user if handler is set - they need to know re-auth will be required on restart
-		if m.onWarning != nil {
-			m.onWarning(serverURL, fmt.Errorf("failed to save refreshed token (re-login required on restart): %w", err))
+		if onWarning := m.warningHandler(); onWarning != nil {
+			onWarning(serverURL, fmt.Errorf("failed to save refreshed token (re-login required on restart): %w", err))
 		}
 	}
 
 	return cred.AccessToken, nil
+}
+
+// serverMetadata returns cached authorization-server metadata for serverURL,
+// discovering it on first use. Discovery runs outside mu so a slow endpoint
+// cannot block refreshes for other servers.
+func (m *TokenManager) serverMetadata(ctx context.Context, serverURL string) (*AuthorizationServerMetadata, error) {
+	m.mu.Lock()
+	cached, ok := m.metadata[serverURL]
+	m.mu.Unlock()
+	if ok {
+		return cached, nil
+	}
+
+	result, err := Discover(ctx, serverURL)
+	if err != nil {
+		return nil, fmt.Errorf("discover metadata: %w", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Prefer a concurrently-cached entry so every caller shares one instance.
+	if existing, ok := m.metadata[serverURL]; ok {
+		return existing, nil
+	}
+	m.metadata[serverURL] = result.Metadata
+	return result.Metadata, nil
 }
 
 // Logout removes credentials for a server.
