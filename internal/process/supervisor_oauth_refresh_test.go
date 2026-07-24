@@ -59,6 +59,12 @@ func TestSupervisor_HTTPOAuthRefreshesTokenDuringRuntime(t *testing.T) {
 			})
 
 		case "/mcp":
+			// Decline the standalone SSE stream. This test is about token
+			// refresh on RPCs, and a GET carries no body to unmarshal.
+			if r.Method == http.MethodGet {
+				return textResponse(r, http.StatusMethodNotAllowed, "no stream"), nil
+			}
+
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				return textResponse(r, http.StatusInternalServerError, "read body failed"), nil

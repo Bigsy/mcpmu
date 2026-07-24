@@ -32,6 +32,12 @@ const (
 
 	// SSEReconnectMaxDelay is the maximum delay for SSE reconnection.
 	SSEReconnectMaxDelay = 30 * time.Second
+
+	// SSEReconnectMinUptime is how long a standalone SSE stream must stay up to
+	// count as working when it delivered no events. Below this, a server that
+	// accepts the GET and immediately closes it is treated as a failure so the
+	// backoff keeps growing instead of reconnecting every base delay forever.
+	SSEReconnectMinUptime = 5 * time.Second
 )
 
 // SupportedProtocolVersions lists the MCP protocol versions we support,
@@ -76,23 +82,27 @@ type StreamableHTTPTransport struct {
 	lastEventID       string
 	negotiatedVersion string // Protocol version negotiated with server
 
-	// SSE stream
-	sseCancel context.CancelFunc
-	sseConn   io.ReadCloser
+	// Standalone server→client SSE stream (the GET stream). Opened once, after
+	// the first successful POST has settled the protocol version and session ID.
+	sseCancel context.CancelFunc // cancels just the stream, derived from baseCtx
+	sseConn   io.ReadCloser      // active stream body, so Close can unblock the read
+	sseOnce   sync.Once
 
 	// Message queue for received messages from SSE
 	msgQueue chan []byte
-	errChan  chan error
 
 	// Ready signal - closed when session ID is received (for legacy HTTP+SSE)
 	readyChan chan struct{}
 	readyOnce sync.Once
 
-	// Shutdown coordination
-	done   chan struct{}
-	wg     sync.WaitGroup
-	mu     sync.Mutex
-	closed bool
+	// Shutdown coordination. baseCtx is cancelled by Close and is the parent of
+	// every background stream, so no reader can outlive the transport.
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
+	done       chan struct{}
+	wg         sync.WaitGroup
+	mu         sync.Mutex
+	closed     bool
 }
 
 // NewStreamableHTTPTransport creates a new HTTP transport for MCP.
@@ -107,14 +117,17 @@ func NewStreamableHTTPTransport(config StreamableHTTPConfig) *StreamableHTTPTran
 	sseClient := cloneHTTPClient(baseClient)
 	rpcClient := cloneHTTPClient(baseClient)
 
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+
 	return &StreamableHTTPTransport{
-		config:    config,
-		sseClient: sseClient,
-		rpcClient: rpcClient,
-		msgQueue:  make(chan []byte, 100),
-		errChan:   make(chan error, 1),
-		readyChan: make(chan struct{}),
-		done:      make(chan struct{}),
+		config:     config,
+		sseClient:  sseClient,
+		rpcClient:  rpcClient,
+		msgQueue:   make(chan []byte, 100),
+		readyChan:  make(chan struct{}),
+		baseCtx:    baseCtx,
+		baseCancel: baseCancel,
+		done:       make(chan struct{}),
 	}
 }
 
@@ -276,13 +289,20 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 			log.Printf("HTTP negotiated protocol version: %s", version)
 		}
 
+		// The version and session ID are settled, so the server→client stream can
+		// be opened now. Without it there is nowhere for notifications/
+		// resources/updated or notifications/tools/list_changed to arrive.
+		t.startStandaloneSSE()
+
 		// Handle response based on content type
 		contentType := resp.Header.Get("Content-Type")
 		if strings.HasPrefix(contentType, "text/event-stream") {
-			// Response is streamed via SSE - read any inline events
-			err = t.handleSSEResponse(ctx, resp.Body)
-			_ = resp.Body.Close()
-			return err
+			// Drain in the background. The spec allows a server to keep this
+			// stream open after the response event to push further messages, and
+			// reading it here would block Send — which holds Client.sendMu, so
+			// every other RPC on this transport would queue behind it.
+			t.drainResponseStream(ctx, resp.Body)
+			return nil
 		} else if strings.HasPrefix(contentType, "application/json") {
 			// Direct JSON response - queue it
 			err = t.handleJSONResponse(ctx, resp.Body)
@@ -308,32 +328,247 @@ func isVersionRejection(body string) bool {
 		strings.Contains(bodyLower, "protocolversion")
 }
 
-// handleSSEResponse processes an SSE stream response.
-func (t *StreamableHTTPTransport) handleSSEResponse(ctx context.Context, body io.Reader) error {
+// pumpSSE reads an SSE stream and queues each message event for Receive. It
+// returns the number of messages queued, which the standalone stream uses to
+// decide whether a connection was worth resetting its backoff for.
+//
+// Every event ID is recorded so a reconnect can resume with Last-Event-ID.
+func (t *StreamableHTTPTransport) pumpSSE(ctx context.Context, body io.Reader) (int, error) {
 	scanner := newSSEScanner(body, MaxSSEEventSize)
+	delivered := 0
 	for {
 		event, err := scanner.Next()
 		if err != nil {
 			if err == io.EOF {
-				return nil
+				return delivered, nil
 			}
-			return fmt.Errorf("read SSE response: %w", err)
+			return delivered, fmt.Errorf("read SSE stream: %w", err)
 		}
 		if event.ID != "" {
 			t.mu.Lock()
 			t.lastEventID = event.ID
 			t.mu.Unlock()
 		}
+
+		// Legacy HTTP+SSE servers announce the POST endpoint on the stream
+		// rather than accepting posts to the base URL. Send resolves this
+		// against the base URL when it is set.
+		if event.Event == "endpoint" {
+			if endpoint := strings.TrimSpace(string(event.Data)); endpoint != "" {
+				t.mu.Lock()
+				t.endpointURL = endpoint
+				t.mu.Unlock()
+				log.Printf("HTTP transport learned POST endpoint from SSE stream: %s", endpoint)
+			}
+			continue
+		}
+
 		if len(event.Data) > 0 && (event.Event == "" || event.Event == "message") {
 			select {
 			case <-t.done:
-				return errors.New("transport closed")
+				return delivered, errors.New("transport closed")
 			case t.msgQueue <- event.Data:
+				delivered++
 			case <-ctx.Done():
-				return ctx.Err()
+				return delivered, ctx.Err()
 			}
 		}
 	}
+}
+
+// drainResponseStream consumes an SSE POST response without blocking Send.
+//
+// The stream is tied to the caller's context, so it ends when that request's
+// context does. That is the right lifetime for a response stream: the reply has
+// already been queued, and the standalone GET stream is the channel for
+// server-initiated messages.
+func (t *StreamableHTTPTransport) drainResponseStream(ctx context.Context, body io.ReadCloser) {
+	if !t.trackGoroutine() {
+		_ = body.Close()
+		return
+	}
+
+	go func() {
+		defer t.wg.Done()
+		// Closing the body is what unblocks a scanner parked on a stream the
+		// server is holding open, so Close cannot be made to wait on it.
+		stop := context.AfterFunc(t.baseCtx, func() { _ = body.Close() })
+		defer stop()
+		defer func() { _ = body.Close() }()
+
+		if _, err := t.pumpSSE(ctx, body); err != nil && DebugLogging {
+			log.Printf("HTTP POST response stream ended: %v", err)
+		}
+	}()
+}
+
+// trackGoroutine registers a background reader with the shutdown WaitGroup,
+// reporting false if the transport is already closing. Because Close sets
+// closed under mu before it waits, an Add that observed closed==false is
+// guaranteed to be visible to that Wait.
+func (t *StreamableHTTPTransport) trackGoroutine() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
+	t.wg.Add(1)
+	return true
+}
+
+// startStandaloneSSE opens the server→client SSE stream, once per transport.
+//
+// This is the only channel for messages the server originates rather than sends
+// in reply: notifications/resources/updated for a subscribed resource, and
+// notifications/tools/list_changed. Without it, resources/subscribe succeeds
+// against an HTTP upstream and then never delivers anything.
+func (t *StreamableHTTPTransport) startStandaloneSSE() {
+	t.sseOnce.Do(func() {
+		t.mu.Lock()
+		if t.closed {
+			t.mu.Unlock()
+			return
+		}
+		streamCtx, cancel := context.WithCancel(t.baseCtx)
+		t.sseCancel = cancel
+		t.wg.Add(1)
+		t.mu.Unlock()
+
+		go func() {
+			defer t.wg.Done()
+			t.runStandaloneSSE(streamCtx)
+		}()
+	})
+}
+
+// runStandaloneSSE keeps the stream up, backing off between attempts. It stops
+// for good once openStandaloneSSE reports the server has no stream to give.
+func (t *StreamableHTTPTransport) runStandaloneSSE(ctx context.Context) {
+	delay := SSEReconnectBaseDelay
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		productive, retry := t.openStandaloneSSE(ctx)
+		if !retry {
+			return
+		}
+		if productive {
+			// The stream worked; treat the next failure as a fresh one rather
+			// than continuing to escalate from a long-past problem.
+			delay = SSEReconnectBaseDelay
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.done:
+			return
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, SSEReconnectMaxDelay)
+	}
+}
+
+// openStandaloneSSE runs one GET attempt. productive reports whether the stream
+// did any useful work; retry reports whether reconnecting could ever help.
+func (t *StreamableHTTPTransport) openStandaloneSSE(ctx context.Context) (productive, retry bool) {
+	t.mu.Lock()
+	sessionID := t.sessionID
+	version := t.negotiatedVersion
+	lastEventID := t.lastEventID
+	t.mu.Unlock()
+	if version == "" {
+		version = SupportedProtocolVersions[0]
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.config.URL, nil)
+	if err != nil {
+		log.Printf("SSE stream request for %s could not be built: %v", t.config.URL, err)
+		return false, false
+	}
+	if err := t.setCommonHeaders(ctx, req, version); err != nil {
+		// Usually a token that could not be resolved; it may resolve later.
+		log.Printf("SSE stream headers for %s: %v", t.config.URL, err)
+		return false, true
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	if sessionID != "" {
+		req.Header.Set("Mcp-Session-Id", sessionID)
+	}
+	if lastEventID != "" {
+		req.Header.Set("Last-Event-ID", lastEventID)
+	}
+
+	resp, err := t.sseClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, false
+		}
+		if DebugLogging {
+			log.Printf("SSE stream connect to %s failed: %v", t.config.URL, err)
+		}
+		return false, true
+	}
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// Fall through to streaming below.
+	case http.StatusMethodNotAllowed, http.StatusNotFound, http.StatusNotImplemented:
+		// A server entitled to decline the stream. Retrying would just repeat.
+		_ = resp.Body.Close()
+		log.Printf("Server %s offers no SSE stream (HTTP %d); server-initiated "+
+			"notifications such as resources/updated will not arrive",
+			t.config.URL, resp.StatusCode)
+		return false, false
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// The POST path owns authentication and its own 401 handling; retrying
+		// here would hammer the endpoint with the same rejected credentials.
+		_ = resp.Body.Close()
+		log.Printf("SSE stream for %s rejected with HTTP %d; not retrying",
+			t.config.URL, resp.StatusCode)
+		return false, false
+	default:
+		_ = resp.Body.Close()
+		if DebugLogging {
+			log.Printf("SSE stream for %s returned HTTP %d", t.config.URL, resp.StatusCode)
+		}
+		return false, true
+	}
+
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "text/event-stream") {
+		_ = resp.Body.Close()
+		log.Printf("SSE stream for %s answered with Content-Type %q, not text/event-stream; not retrying",
+			t.config.URL, contentType)
+		return false, false
+	}
+
+	t.mu.Lock()
+	t.sseConn = resp.Body
+	t.mu.Unlock()
+
+	startedAt := time.Now()
+	delivered, pumpErr := t.pumpSSE(ctx, resp.Body)
+
+	t.mu.Lock()
+	if t.sseConn == resp.Body {
+		t.sseConn = nil
+	}
+	t.mu.Unlock()
+	_ = resp.Body.Close()
+
+	if ctx.Err() != nil {
+		return false, false
+	}
+	if pumpErr != nil && DebugLogging {
+		log.Printf("SSE stream for %s ended: %v", t.config.URL, pumpErr)
+	}
+
+	// A stream that delivered something, or simply stayed up, was working; one
+	// that connected and immediately ended was not, and should back off.
+	productive = delivered > 0 || time.Since(startedAt) >= SSEReconnectMinUptime
+	return productive, true
 }
 
 // handleJSONResponse processes a JSON response.
@@ -372,11 +607,6 @@ func (t *StreamableHTTPTransport) Receive(ctx context.Context) ([]byte, error) {
 			return nil, errors.New("transport closed")
 		}
 		return msg, nil
-	case err, ok := <-t.errChan:
-		if !ok {
-			return nil, errors.New("transport closed")
-		}
-		return nil, err
 	case <-t.done:
 		return nil, errors.New("transport closed")
 	case <-ctx.Done():
@@ -397,18 +627,25 @@ func (t *StreamableHTTPTransport) Close() error {
 	// Signal shutdown to all goroutines
 	close(t.done)
 
-	// Cancel SSE context
-	if t.sseCancel != nil {
-		t.sseCancel()
-	}
+	// Cancel every background stream. baseCancel also aborts in-flight GETs and,
+	// via the AfterFunc in drainResponseStream, closes POST response bodies the
+	// server is holding open.
+	t.baseCancel()
 
-	// Close SSE connection to unblock reads
 	t.mu.Lock()
-	if t.sseConn != nil {
-		_ = t.sseConn.Close()
-		t.sseConn = nil
-	}
+	sseCancel := t.sseCancel
+	sseConn := t.sseConn
+	t.sseConn = nil
 	t.mu.Unlock()
+
+	if sseCancel != nil {
+		sseCancel()
+	}
+	// Close the active stream body too: cancelling the context unblocks the read
+	// on its own, but this makes the teardown independent of that.
+	if sseConn != nil {
+		_ = sseConn.Close()
+	}
 
 	// Wait for goroutines to finish before closing channels
 	t.wg.Wait()

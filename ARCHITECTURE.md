@@ -223,6 +223,44 @@ state transition. This ensures an update emitted immediately after a
 successful subscribe is not lost, while the upstream client's response-reader
 goroutine still only enqueues notifications and never waits on Core work.
 
+Those per-key mutexes are reference counted and dropped when the last operation
+on a key completes, so the map tracks in-flight operations rather than every URI
+ever seen — the keys are client-supplied, and `hasSubscribers` takes one for each
+notification URI too. The count is what makes recycling a mutex safe: it is
+incremented before the mutex is acquired, so an entry any operation can still
+reach is never removed, and two operations on one key can never end up
+serializing on different mutexes.
+
+### HTTP Transport Streams
+
+`StreamableHTTPTransport` reads server messages from two places, and needs both:
+
+- **POST responses.** A reply may be `application/json` or an SSE stream. SSE
+  responses are drained on a background goroutine, because the spec allows a
+  server to hold that stream open after the response event, and reading it
+  inline would block `Send` — which `Client.call` holds `sendMu` across, so every
+  other RPC on the transport would queue behind it. The stream is tied to the
+  request's context and ends with it.
+- **The standalone GET stream.** Opened once, after the first successful POST has
+  settled the protocol version and session ID, carrying `Accept:
+  text/event-stream` plus the session ID. This is the only channel for messages
+  the server originates rather than sends in reply: `notifications/
+  resources/updated` for a subscribed resource, and `notifications/tools/
+  list_changed`. Without it, `resources/subscribe` succeeds against an HTTP
+  upstream and then silently never delivers anything.
+
+  Drops are reconnected with exponential backoff between
+  `SSEReconnectBaseDelay` and `SSEReconnectMaxDelay`, resuming from
+  `Last-Event-ID`. A stream that delivered nothing and lasted less than
+  `SSEReconnectMinUptime` does not reset the backoff, so a server that accepts
+  the GET and closes it immediately is not reconnected forever at the base delay.
+  `405`, `404` and `501` mean the server has no stream to give and are not
+  retried; so are `401`/`403`, since the POST path owns authentication.
+
+`Close` cancels the transport-wide context, which aborts in-flight GETs and
+closes any POST response body a server is holding open, then waits for both
+kinds of reader to exit.
+
 ### Process Lifecycle Foundations
 
 Every upstream is keyed internally by a stable `InstanceID`; current embedded

@@ -208,10 +208,48 @@ func TestStreamableHTTPTransport_SendReceive(t *testing.T) {
 	}
 }
 
+// postRecorder captures the headers of POST requests for tests that assert on
+// what the transport sends with an RPC.
+//
+// Synchronization is required, not incidental: since the transport opens the
+// standalone SSE stream, a GET arrives on its own goroutine concurrently with
+// the POSTs, so an unguarded capture is a data race the detector will flag. The
+// GET is declined with 405 so the stream stops after one attempt and does not
+// outlive the test.
+type postRecorder struct {
+	mu      sync.Mutex
+	headers []http.Header
+}
+
+// record notes a POST and reports whether the caller should serve it. GETs are
+// declined here.
+func (p *postRecorder) record(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return false
+	}
+	p.mu.Lock()
+	p.headers = append(p.headers, r.Header.Clone())
+	p.mu.Unlock()
+	return true
+}
+
+// last returns the most recent POST's headers, or nil if there were none.
+func (p *postRecorder) last() http.Header {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.headers) == 0 {
+		return nil
+	}
+	return p.headers[len(p.headers)-1]
+}
+
 func TestStreamableHTTPTransport_BearerAuth(t *testing.T) {
-	var receivedAuth string
+	var recorder postRecorder
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedAuth = r.Header.Get("Authorization")
+		if !recorder.record(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
@@ -223,6 +261,7 @@ func TestStreamableHTTPTransport_BearerAuth(t *testing.T) {
 		BearerToken: "test-token-123",
 	}
 	transport := NewStreamableHTTPTransport(config)
+	defer func() { _ = transport.Close() }()
 
 	ctx := context.Background()
 	err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`))
@@ -230,15 +269,17 @@ func TestStreamableHTTPTransport_BearerAuth(t *testing.T) {
 		t.Fatalf("Send failed: %v", err)
 	}
 
-	if receivedAuth != "Bearer test-token-123" {
-		t.Errorf("expected 'Bearer test-token-123', got %q", receivedAuth)
+	if got := recorder.last().Get("Authorization"); got != "Bearer test-token-123" {
+		t.Errorf("expected 'Bearer test-token-123', got %q", got)
 	}
 }
 
 func TestStreamableHTTPTransport_CustomHeaders(t *testing.T) {
-	var receivedHeaders http.Header
+	var recorder postRecorder
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedHeaders = r.Header.Clone()
+		if !recorder.record(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
@@ -253,6 +294,7 @@ func TestStreamableHTTPTransport_CustomHeaders(t *testing.T) {
 		},
 	}
 	transport := NewStreamableHTTPTransport(config)
+	defer func() { _ = transport.Close() }()
 
 	ctx := context.Background()
 	err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`))
@@ -260,6 +302,7 @@ func TestStreamableHTTPTransport_CustomHeaders(t *testing.T) {
 		t.Fatalf("Send failed: %v", err)
 	}
 
+	receivedHeaders := recorder.last()
 	if receivedHeaders.Get("X-Custom-Header") != "custom-value" {
 		t.Errorf("expected 'custom-value', got %q", receivedHeaders.Get("X-Custom-Header"))
 	}
@@ -272,15 +315,34 @@ func TestStreamableHTTPTransport_CustomHeaders(t *testing.T) {
 // CF-Access-* headers must be applied to *every* request the transport makes,
 // not just the first. Sends multiple requests and asserts the headers are
 // present on each one.
+//
+// "Every request" now includes the standalone GET SSE stream the transport opens
+// after its first successful POST. A GET without the CF-Access headers is
+// rejected by the edge before it reaches the MCP server, so the stream — and
+// with it every server-initiated notification — would silently never connect.
 func TestStreamableHTTPTransport_CFAccessHeadersOnEveryRequest(t *testing.T) {
 	var (
 		mu       sync.Mutex
 		received []http.Header
+		gets     int
 	)
+	sawGet := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		received = append(received, r.Header.Clone())
+		if r.Method == http.MethodGet {
+			gets++
+			if gets == 1 {
+				close(sawGet)
+			}
+		}
 		mu.Unlock()
+
+		if r.Method == http.MethodGet {
+			// Decline the stream so the transport stops after one attempt.
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
@@ -294,6 +356,7 @@ func TestStreamableHTTPTransport_CFAccessHeadersOnEveryRequest(t *testing.T) {
 			"CF-Access-Client-Secret": "access-secret",
 		},
 	})
+	defer func() { _ = transport.Close() }()
 
 	ctx := context.Background()
 	for i := 1; i <= 3; i++ {
@@ -303,10 +366,28 @@ func TestStreamableHTTPTransport_CFAccessHeadersOnEveryRequest(t *testing.T) {
 		}
 	}
 
+	// The stream is opened on a background goroutine, so wait for it rather than
+	// racing it.
+	select {
+	case <-sawGet:
+	case <-time.After(5 * time.Second):
+		t.Fatal("transport never attempted the standalone SSE GET stream")
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
-	if len(received) != 3 {
-		t.Fatalf("expected 3 requests, got %d", len(received))
+	posts := 0
+	for _, h := range received {
+		if h.Get("Accept") == "text/event-stream" {
+			continue
+		}
+		posts++
+	}
+	if posts != 3 {
+		t.Errorf("expected 3 POST requests, got %d", posts)
+	}
+	if len(received) < 4 {
+		t.Fatalf("expected at least 4 requests (3 POST + the SSE GET), got %d", len(received))
 	}
 	for i, h := range received {
 		if got := h.Get("Cf-Access-Client-Id"); got != "access-id.access" {
@@ -319,9 +400,11 @@ func TestStreamableHTTPTransport_CFAccessHeadersOnEveryRequest(t *testing.T) {
 }
 
 func TestStreamableHTTPTransport_MCPProtocolVersion(t *testing.T) {
-	var receivedVersion string
+	var recorder postRecorder
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedVersion = r.Header.Get("MCP-Protocol-Version")
+		if !recorder.record(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
@@ -330,13 +413,14 @@ func TestStreamableHTTPTransport_MCPProtocolVersion(t *testing.T) {
 
 	config := StreamableHTTPConfig{URL: server.URL}
 	transport := NewStreamableHTTPTransport(config)
+	defer func() { _ = transport.Close() }()
 
 	ctx := context.Background()
 	_ = transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`))
 
 	// Server accepts all versions, so we should get the first (newest) version
 	expectedVersion := SupportedProtocolVersions[0]
-	if receivedVersion != expectedVersion {
+	if receivedVersion := recorder.last().Get("MCP-Protocol-Version"); receivedVersion != expectedVersion {
 		t.Errorf("expected MCP-Protocol-Version %q, got %q", expectedVersion, receivedVersion)
 	}
 
@@ -349,10 +433,12 @@ func TestStreamableHTTPTransport_MCPProtocolVersion(t *testing.T) {
 func TestStreamableHTTPTransport_VersionNegotiation_Fallback(t *testing.T) {
 	// Simulate a server that only accepts the legacy version (2024-11-05)
 	// This tests the automatic fallback behavior
-	var attemptedVersions []string
+	var recorder postRecorder
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !recorder.record(w, r) {
+			return
+		}
 		version := r.Header.Get("MCP-Protocol-Version")
-		attemptedVersions = append(attemptedVersions, version)
 
 		// Reject all versions except the legacy one
 		if version != "2024-11-05" {
@@ -368,8 +454,26 @@ func TestStreamableHTTPTransport_VersionNegotiation_Fallback(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// attemptedVersions reads the recorded POSTs; the GET stream is declined by
+	// the recorder, so it cannot be mistaken for a version attempt.
+	attemptedVersions := func() []string {
+		recorder.mu.Lock()
+		defer recorder.mu.Unlock()
+		versions := make([]string, 0, len(recorder.headers))
+		for _, h := range recorder.headers {
+			versions = append(versions, h.Get("MCP-Protocol-Version"))
+		}
+		return versions
+	}
+	resetAttempts := func() {
+		recorder.mu.Lock()
+		recorder.headers = nil
+		recorder.mu.Unlock()
+	}
+
 	config := StreamableHTTPConfig{URL: server.URL}
 	transport := NewStreamableHTTPTransport(config)
+	defer func() { _ = transport.Close() }()
 
 	ctx := context.Background()
 	err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"test"}`))
@@ -378,9 +482,9 @@ func TestStreamableHTTPTransport_VersionNegotiation_Fallback(t *testing.T) {
 	}
 
 	// Should have tried all versions until finding 2024-11-05
-	if len(attemptedVersions) != len(SupportedProtocolVersions) {
+	if attempts := attemptedVersions(); len(attempts) != len(SupportedProtocolVersions) {
 		t.Errorf("expected %d version attempts, got %d: %v",
-			len(SupportedProtocolVersions), len(attemptedVersions), attemptedVersions)
+			len(SupportedProtocolVersions), len(attempts), attempts)
 	}
 
 	// Should have negotiated the legacy version
@@ -389,17 +493,18 @@ func TestStreamableHTTPTransport_VersionNegotiation_Fallback(t *testing.T) {
 	}
 
 	// Subsequent requests should use the negotiated version directly
-	attemptedVersions = nil
+	resetAttempts()
 	err = transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":2,"method":"test"}`))
 	if err != nil {
 		t.Fatalf("Second Send failed: %v", err)
 	}
 
-	if len(attemptedVersions) != 1 {
-		t.Errorf("expected 1 version attempt on subsequent request, got %d", len(attemptedVersions))
+	attempts := attemptedVersions()
+	if len(attempts) != 1 {
+		t.Errorf("expected 1 version attempt on subsequent request, got %d", len(attempts))
 	}
-	if attemptedVersions[0] != "2024-11-05" {
-		t.Errorf("expected version '2024-11-05' on subsequent request, got %q", attemptedVersions[0])
+	if len(attempts) > 0 && attempts[0] != "2024-11-05" {
+		t.Errorf("expected version '2024-11-05' on subsequent request, got %q", attempts[0])
 	}
 }
 
@@ -549,6 +654,14 @@ func TestStreamableHTTPTransport_SessionIDUpdatedOnError_AllowsRetry(t *testing.
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Decline the standalone SSE stream. It also carries the session ID, so
+		// left to reach the rotation logic below it would consume the single
+		// rotation this test reserves for the second POST.
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
 		// First request succeeds and establishes a session.
 		gotSID := r.Header.Get("Mcp-Session-Id")
 		if gotSID == "" {

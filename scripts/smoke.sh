@@ -469,11 +469,170 @@ EOF
   return "$rc"
 }
 
+# Verifies that a resource-update notification from an HTTP upstream reaches a
+# downstream client through `mcpmu serve`.
+#
+# This is the end-to-end path that used to be a silent dead end: the transport
+# only ever issued POSTs, so although serve advertised subscribe:true and
+# resources/subscribe succeeded, notifications/resources/updated had no channel
+# to arrive on. It only works if the transport opens the standalone GET SSE
+# stream, which needs a real HTTP server and a real serve process to exercise.
+smoke_http_sse_notification() {
+  local tmp cfg upstream port response rc=0 server_pid=""
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "SKIP: python3 not available for smoke_http_sse_notification"
+    return 0
+  fi
+
+  tmp=$(mktemp -d -t mcpmu-smoke-sse.XXXXXX)
+  cfg="$tmp/config.json"
+  upstream="$tmp/upstream.py"
+
+  cat > "$upstream" <<'PYEOF'
+import json, sys, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+RESOURCE = "file:///watched.txt"
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        # Only /mcp is the SSE stream. Everything else must 404 — in particular
+        # the OAuth discovery probes (/.well-known/...), which would otherwise be
+        # answered with an unterminated event stream and wedge the keep-alive
+        # connection the following POST reuses.
+        if self.path != "/mcp":
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        # A stream has no Content-Length, so it must close the connection rather
+        # than be reused for a later request.
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        note = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "notifications/resources/updated",
+            "params": {"uri": RESOURCE},
+        })
+        try:
+            # Keep-alives while serve finishes subscribing, then one event.
+            for _ in range(10):
+                time.sleep(0.1)
+                self.wfile.write(b": keep-alive\n\n")
+                self.wfile.flush()
+            self.wfile.write(("id: ev-1\ndata: %s\n\n" % note).encode())
+            self.wfile.flush()
+            # Hold the stream open so the transport does not reconnect.
+            time.sleep(10)
+        except Exception:
+            pass
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        req = json.loads(self.rfile.read(length) or b"{}")
+        method = req.get("method")
+        rid = req.get("id")
+
+        if rid is None:
+            self.send_response(202)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {
+                    "resources": {"subscribe": True, "listChanged": True},
+                    "tools": {},
+                },
+                "serverInfo": {"name": "smoke-sse-upstream", "version": "1"},
+            }
+        elif method == "resources/list":
+            result = {"resources": [{"uri": RESOURCE, "name": "watched"}]}
+        elif method == "tools/list":
+            result = {"tools": []}
+        elif method in ("resources/subscribe", "resources/unsubscribe"):
+            result = {}
+        else:
+            result = {}
+
+        body = json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Mcp-Session-Id", "smoke-session")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+server.daemon_threads = True
+print(server.server_address[1], flush=True)
+server.serve_forever()
+PYEOF
+
+  # Start the upstream and learn its port.
+  exec 3< <(python3 "$upstream" 2>/dev/null)
+  read -r port <&3 || true
+  if [[ -z "${port:-}" ]]; then
+    echo "FAIL: upstream HTTP server did not start"
+    exec 3<&-
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  jq -n --arg url "http://127.0.0.1:$port/mcp" '{
+    schemaVersion: 1,
+    servers: { watcher: { url: $url, startup_timeout_sec: 10 } },
+    namespaces: {}
+  }' > "$cfg"
+
+  response=$({
+    printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}\n'
+    printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
+    printf '{"jsonrpc":"2.0","id":2,"method":"resources/list","params":{}}\n'
+    sleep 1
+    printf '{"jsonrpc":"2.0","id":3,"method":"resources/subscribe","params":{"uri":"file:///watched.txt"}}\n'
+    sleep 4
+  } | ./mcpmu serve --stdio --isolated --resources --config "$cfg" 2>/dev/null)
+
+  # Stop the upstream.
+  exec 3<&-
+  pkill -f "$upstream" 2>/dev/null || true
+
+  if ! printf '%s\n' "$response" | jq -e 'select(.id == 3 and .result)' >/dev/null; then
+    echo "FAIL: resources/subscribe did not succeed"
+    printf '%s\n' "$response" | head -5
+    rc=1
+  elif ! printf '%s\n' "$response" \
+    | jq -e 'select(.method == "notifications/resources/updated")' >/dev/null; then
+    echo "FAIL: resources/updated from the HTTP upstream never reached the client"
+    printf '%s\n' "$response" | head -5
+    rc=1
+  fi
+
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # Register new smoke checks here.
 SMOKE_CHECKS=(
   smoke_cf_access_headers
   smoke_process_group_cleanup
   smoke_stdio_trailing_frame
+  smoke_http_sse_notification
   smoke_daemon_control
   smoke_daemon_shim_fallback
   smoke_daemon_private_instances
