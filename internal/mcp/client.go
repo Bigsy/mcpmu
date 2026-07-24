@@ -47,11 +47,24 @@ type Client struct {
 
 	notifHandler atomic.Pointer[NotificationHandler]
 
-	// Server info from initialization
+	// negotiated holds what the initialize handshake settled on. Supervisor.Start
+	// publishes a Handle before running the handshake on another goroutine, so
+	// readers (Core.processNotification, Aggregator.shouldQueryCapability,
+	// Router.handleServersList) can call the accessors while Initialize is still
+	// writing. It is stored as one immutable struct so those readers always see a
+	// consistent set rather than a half-updated one, and is nil until Initialize
+	// succeeds.
+	negotiated atomic.Pointer[negotiated]
+}
+
+// negotiated is the immutable result of a successful initialize handshake.
+// Fields are never mutated after the struct is published; a re-initialize
+// replaces the whole value.
+type negotiated struct {
 	serverName      string
 	serverVersion   string
-	protocolVersion string             // Negotiated protocol version
-	capabilities    ServerCapabilities // Typed capabilities from initialize.
+	protocolVersion string
+	capabilities    ServerCapabilities
 }
 
 // rpcRequest is a JSON-RPC 2.0 request.
@@ -258,11 +271,14 @@ func (c *Client) Initialize(ctx context.Context) error {
 			return fmt.Errorf("initialize: %w", err)
 		}
 
-		// Success!
-		c.serverName = result.ServerInfo.Name
-		c.serverVersion = result.ServerInfo.Version
-		c.protocolVersion = version
-		c.capabilities = result.Capabilities
+		// Success! Publish all four values at once so a concurrent reader cannot
+		// observe, say, a server name without its capabilities.
+		c.negotiated.Store(&negotiated{
+			serverName:      result.ServerInfo.Name,
+			serverVersion:   result.ServerInfo.Version,
+			protocolVersion: version,
+			capabilities:    result.Capabilities,
+		})
 
 		// Send initialized notification
 		if err := c.notify(ctx, "notifications/initialized", nil); err != nil {
@@ -290,15 +306,22 @@ func isProtocolVersionError(err error) bool {
 		strings.Contains(errStr, "unsupported version")
 }
 
-// ProtocolVersion returns the negotiated protocol version.
+// ProtocolVersion returns the negotiated protocol version, or the empty string
+// if Initialize has not completed.
 func (c *Client) ProtocolVersion() string {
-	return c.protocolVersion
+	if n := c.negotiated.Load(); n != nil {
+		return n.protocolVersion
+	}
+	return ""
 }
 
 // Capabilities returns the capabilities advertised by the server during
 // initialize, or the zero value if Initialize has not completed.
 func (c *Client) Capabilities() ServerCapabilities {
-	return c.capabilities
+	if n := c.negotiated.Load(); n != nil {
+		return n.capabilities
+	}
+	return ServerCapabilities{}
 }
 
 // ListTools retrieves the list of tools from the server.
@@ -368,9 +391,13 @@ func (c *Client) GetPrompt(ctx context.Context, name string, arguments map[strin
 	return result.Messages, nil
 }
 
-// ServerInfo returns information about the connected server.
+// ServerInfo returns information about the connected server. Both values are
+// empty if Initialize has not completed.
 func (c *Client) ServerInfo() (name, version string) {
-	return c.serverName, c.serverVersion
+	if n := c.negotiated.Load(); n != nil {
+		return n.serverName, n.serverVersion
+	}
+	return "", ""
 }
 
 // CallTool invokes a tool on the MCP server.

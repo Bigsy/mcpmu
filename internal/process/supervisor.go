@@ -600,13 +600,11 @@ func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, generation ui
 			}
 
 			if oauthMeta != nil {
-				// Server supports OAuth - put handle in "needs login" state
-				handle.authStatus = mcp.AuthStatusOAuthNeeds
-				handle.oauthMeta = oauthMeta
-				handle.authChallenge = unauthErr.Challenge
-				handle.client = nil // No client until authenticated
+				// Server supports OAuth - put handle in "needs login" state.
+				// The handle is already published, so publish the whole state
+				// change atomically and close the transport afterwards.
+				_ = handle.setNeedsLogin(oauthMeta, unauthErr.Challenge)
 				_ = httpTransport.Close()
-				handle.httpTransport = nil
 				needsLoginErr := fmt.Errorf("%w for server %s", ErrNeedsLogin, name)
 				handle.setInitError(needsLoginErr)
 				s.publishDiscovery(DiscoveryResult{
@@ -968,17 +966,26 @@ type Handle struct {
 	onGroupRetired func()
 
 	// HTTP-specific fields
+	serverURL    string
+	serverConfig config.ServerConfig // Cached for retry after OAuth
+
+	// authMu guards the fields below plus client. startHTTP publishes the handle
+	// into Supervisor.handles before running the handshake, then rewrites all of
+	// them on the OAuth-401 path, so readers on other goroutines (web's
+	// AuthStatus(), serve mode's Client()) can be mid-read while it does.
+	// Snapshot under the lock and do any I/O — client.Close(), transport.Close()
+	// — after releasing it.
+	authMu        sync.RWMutex
 	httpTransport *mcp.StreamableHTTPTransport
 	authStatus    mcp.AuthStatus
-	serverURL     string
-	serverConfig  config.ServerConfig                // Cached for retry after OAuth
 	oauthMeta     *oauth.AuthorizationServerMetadata // Cached OAuth metadata for login
 	authChallenge *oauth.BearerChallenge             // Cached WWW-Authenticate challenge
 
 	// Common fields
-	ctx          context.Context    // cancelled when server stops
-	ctxCancel    context.CancelFunc // cancels ctx
-	client       *mcp.Client
+	ctx       context.Context    // cancelled when server stops
+	ctxCancel context.CancelFunc // cancels ctx
+	client    *mcp.Client        // guarded by authMu; startHTTP clears it on the OAuth path
+
 	tools        []mcp.Tool
 	toolsMu      sync.RWMutex
 	toolsReady   chan struct{} // closed when init + tool discovery complete
@@ -1016,8 +1023,11 @@ func (h *Handle) Generation() uint64 {
 	return h.generation
 }
 
-// Client returns the MCP client.
+// Client returns the MCP client, or nil if the handle has no usable connection
+// (needs-auth HTTP handles clear it).
 func (h *Handle) Client() *mcp.Client {
+	h.authMu.RLock()
+	defer h.authMu.RUnlock()
 	return h.client
 }
 
@@ -1025,10 +1035,11 @@ func (h *Handle) Client() *mcp.Client {
 // initialize time. Returns the zero value if the handle has no client yet
 // (e.g., before initialization completes or for needs-auth HTTP handles).
 func (h *Handle) Capabilities() mcp.ServerCapabilities {
-	if h.client == nil {
+	client := h.Client()
+	if client == nil {
 		return mcp.ServerCapabilities{}
 	}
-	return h.client.Capabilities()
+	return client.Capabilities()
 }
 
 // Tools returns the discovered tools.
@@ -1141,6 +1152,8 @@ func (h *Handle) Kind() HandleKind {
 
 // AuthStatus returns the authentication status (for HTTP handles).
 func (h *Handle) AuthStatus() mcp.AuthStatus {
+	h.authMu.RLock()
+	defer h.authMu.RUnlock()
 	return h.authStatus
 }
 
@@ -1209,9 +1222,14 @@ func (h *Handle) Stop() error {
 		h.ctxCancel()
 	}
 
-	// Close MCP client first (may be nil for needs-auth state)
-	if h.client != nil {
-		_ = h.client.Close()
+	// Close MCP client first (may be nil for needs-auth state). Snapshot both
+	// under authMu and close outside it, so a slow Close cannot stall readers.
+	h.authMu.RLock()
+	client, httpTransport := h.client, h.httpTransport
+	h.authMu.RUnlock()
+
+	if client != nil {
+		_ = client.Close()
 	}
 
 	if h.kind == HandleKindStdio {
@@ -1232,8 +1250,8 @@ func (h *Handle) Stop() error {
 		}
 	} else {
 		// HTTP: close transport
-		if h.httpTransport != nil {
-			_ = h.httpTransport.Close()
+		if httpTransport != nil {
+			_ = httpTransport.Close()
 		}
 		// Signal done
 		close(h.done)
@@ -1336,7 +1354,36 @@ func (h *Handle) watchProcess() {
 
 // OAuthMeta returns the cached OAuth metadata for servers needing login.
 func (h *Handle) OAuthMeta() *oauth.AuthorizationServerMetadata {
+	h.authMu.RLock()
+	defer h.authMu.RUnlock()
 	return h.oauthMeta
+}
+
+// setNeedsLogin records the needs-OAuth-login state discovered during startHTTP
+// and returns the transport the caller must close. The client and transport are
+// dropped because neither is usable until the user authenticates; closing is
+// left to the caller so it happens outside the lock.
+func (h *Handle) setNeedsLogin(
+	meta *oauth.AuthorizationServerMetadata,
+	challenge *oauth.BearerChallenge,
+) *mcp.StreamableHTTPTransport {
+	h.authMu.Lock()
+	defer h.authMu.Unlock()
+	h.authStatus = mcp.AuthStatusOAuthNeeds
+	h.oauthMeta = meta
+	h.authChallenge = challenge
+	h.client = nil
+	transport := h.httpTransport
+	h.httpTransport = nil
+	return transport
+}
+
+// loginState snapshots the fields LoginOAuth needs in one critical section, so
+// it cannot mix a stale status with a newer challenge.
+func (h *Handle) loginState() (mcp.AuthStatus, *oauth.BearerChallenge, *oauth.AuthorizationServerMetadata) {
+	h.authMu.RLock()
+	defer h.authMu.RUnlock()
+	return h.authStatus, h.authChallenge, h.oauthMeta
 }
 
 // LoginOAuth triggers the OAuth login flow for a server that needs authentication.
@@ -1350,8 +1397,9 @@ func (s *Supervisor) LoginOAuth(ctx context.Context, name string) error {
 	}
 	s.mu.Unlock()
 
-	if handle.authStatus != mcp.AuthStatusOAuthNeeds {
-		return fmt.Errorf("server %s doesn't need OAuth login (status: %s)", name, handle.authStatus)
+	authStatus, authChallenge, oauthMeta := handle.loginState()
+	if authStatus != mcp.AuthStatusOAuthNeeds {
+		return fmt.Errorf("server %s doesn't need OAuth login (status: %s)", name, authStatus)
 	}
 
 	if s.credStore == nil {
@@ -1362,7 +1410,7 @@ func (s *Supervisor) LoginOAuth(ctx context.Context, name string) error {
 	flowConfig := resolveOAuthFlowConfig(
 		handle.serverURL, name, s.credStore,
 		handle.serverConfig.OAuth, s.globalOAuthCallbackPort,
-		handle.authChallenge, handle.oauthMeta,
+		authChallenge, oauthMeta,
 	)
 
 	// Run OAuth flow
