@@ -16,6 +16,10 @@ const (
 	DefaultTimeout = 30 * time.Second
 	// MaxRetries is the maximum number of retries for connection.
 	MaxRetries = 3
+	// cancelNotifyTimeout bounds the best-effort notifications/cancelled write
+	// that follows an abandoned request. The request's own context is already
+	// done by then, so this needs a deadline of its own.
+	cancelNotifyTimeout = 5 * time.Second
 )
 
 // NotificationHandler is invoked for each JSON-RPC notification received from
@@ -402,9 +406,18 @@ func (c *Client) ServerInfo() (name, version string) {
 
 // CallTool invokes a tool on the MCP server.
 func (c *Client) CallTool(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
+	return c.CallToolWithMeta(ctx, name, arguments, nil)
+}
+
+// CallToolWithMeta invokes a tool, attaching the caller's `_meta` object to the
+// request. mcpmu forwards the client's `_meta` verbatim except for
+// progressToken, which it rewrites first — see the Session progress table for
+// why a shared upstream cannot be handed two sessions' tokens unchanged.
+func (c *Client) CallToolWithMeta(ctx context.Context, name string, arguments, meta json.RawMessage) (*ToolResult, error) {
 	params := toolCallParams{
 		Name:      name,
 		Arguments: arguments,
+		Meta:      meta,
 	}
 
 	var result toolCallResult
@@ -413,8 +426,10 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments json.RawMe
 	}
 
 	return &ToolResult{
-		Content: result.Content,
-		IsError: result.IsError,
+		Content:           result.Content,
+		StructuredContent: result.StructuredContent,
+		IsError:           result.IsError,
+		Meta:              result.Meta,
 	}, nil
 }
 
@@ -449,18 +464,25 @@ type promptGetResult struct {
 type toolCallParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
+	Meta      json.RawMessage `json:"_meta,omitempty"`
 }
 
-// toolCallResult is the result of tools/call.
+// toolCallResult is the result of tools/call. StructuredContent is the other
+// half of a tool's outputSchema contract; dropping it while forwarding the
+// schema would leave the server advertising a promise mcpmu had erased.
 type toolCallResult struct {
-	Content []ContentBlock `json:"content"`
-	IsError bool           `json:"isError,omitempty"`
+	Content           []ContentBlock  `json:"content"`
+	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
+	IsError           bool            `json:"isError,omitempty"`
+	Meta              json.RawMessage `json:"_meta,omitempty"`
 }
 
 // ToolResult represents the result of a tool call.
 type ToolResult struct {
-	Content []ContentBlock `json:"content"`
-	IsError bool           `json:"isError,omitempty"`
+	Content           []ContentBlock  `json:"content"`
+	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
+	IsError           bool            `json:"isError,omitempty"`
+	Meta              json.RawMessage `json:"_meta,omitempty"`
 }
 
 // ContentBlock represents a content block in a tool result.
@@ -550,12 +572,36 @@ func (c *Client) call(ctx context.Context, method string, params any, result any
 		}
 		return nil
 	case <-ctx.Done():
+		c.cancelUpstream(id, ctx)
 		return ctx.Err()
 	case <-c.readerDone:
 		if errVal, ok := c.readerErr.Load().(error); ok && errVal != nil {
 			return fmt.Errorf("transport closed: %w", errVal)
 		}
 		return fmt.Errorf("transport closed")
+	}
+}
+
+// cancelUpstream tells the server that an in-flight request has been abandoned.
+//
+// Without this, cancelling only unblocks mcpmu: the server keeps working, keeps
+// holding whatever the call reserved, and still performs the side effect the
+// user was trying to stop. The cancellation spec asks both for cancelled and
+// for timed-out requests to be withdrawn, so this covers deadline expiry too.
+//
+// Best effort by design — the request's own context is already done, so the
+// notification goes out under a short independent deadline, and a failure to
+// deliver it is not worth surfacing over the cancellation itself.
+func (c *Client) cancelUpstream(id int64, ctx context.Context) {
+	params := map[string]any{"requestId": id}
+	if cause := context.Cause(ctx); cause != nil {
+		params["reason"] = cause.Error()
+	}
+
+	sendCtx, cancel := context.WithTimeout(context.Background(), cancelNotifyTimeout)
+	defer cancel()
+	if err := c.notify(sendCtx, "notifications/cancelled", params); err != nil && DebugLogging {
+		log.Printf("MCP Send: cancellation for request %d not delivered: %v", id, err)
 	}
 }
 

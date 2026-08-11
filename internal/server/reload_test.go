@@ -34,14 +34,13 @@ func TestServer_ApplyReload_SwapsConfig(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          oldCfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        oldCfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -92,15 +91,14 @@ func TestServer_ApplyReload_KeepsNamespaceIfStillValid(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          oldCfg,
-		PIDTrackerDir:   t.TempDir(),
-		Namespace:       "ns1", // Explicit namespace selection via flag
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        oldCfg,
+		PIDTrackerDir: t.TempDir(),
+		Namespace:     "ns1", // Explicit namespace selection via flag
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -164,14 +162,13 @@ func TestServer_ApplyReload_ReSelectsNamespaceIfRemoved(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          oldCfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        oldCfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -228,14 +225,13 @@ func TestServer_ApplyReload_KeepsPreviousNamespaceOnResolutionFailure(t *testing
 `)
 
 	srv, err := New(Options{
-		Config:          oldCfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        oldCfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -298,14 +294,13 @@ func TestServer_ApplyReload_RebuildAggregatorAndRouter(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          oldCfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        oldCfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -360,14 +355,13 @@ func TestServer_ReloadChannel_ReceivesNewConfig(t *testing.T) {
 
 	var stdout bytes.Buffer
 	srv, err := New(Options{
-		Config:          oldCfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           pipeReader,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        oldCfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         pipeReader,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -453,16 +447,15 @@ func TestServer_WatchConfig_DetectsFileChange(t *testing.T) {
 
 	var stdout bytes.Buffer
 	srv, err := New(Options{
-		Config:          initialCfg,
-		ConfigPath:      configPath, // Enable watching
-		PIDTrackerDir:   t.TempDir(),
-		DebounceDelay:   testDebounceDelay,
-		Stdin:           pipeReader,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        initialCfg,
+		ConfigPath:    configPath, // Enable watching
+		PIDTrackerDir: t.TempDir(),
+		DebounceDelay: testDebounceDelay,
+		Stdin:         pipeReader,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -546,16 +539,15 @@ func TestServer_WatchConfig_IgnoresParseErrors(t *testing.T) {
 
 	var stdout bytes.Buffer
 	srv, err := New(Options{
-		Config:          initialCfg,
-		ConfigPath:      configPath,
-		PIDTrackerDir:   t.TempDir(),
-		DebounceDelay:   testDebounceDelay,
-		Stdin:           pipeReader,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        initialCfg,
+		ConfigPath:    configPath,
+		PIDTrackerDir: t.TempDir(),
+		DebounceDelay: testDebounceDelay,
+		Stdin:         pipeReader,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

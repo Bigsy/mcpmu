@@ -852,23 +852,26 @@ func (s *Supervisor) discoverInitialTools(handle *Handle, client *mcp.Client, na
 func (s *Supervisor) publishToolsUpdated(name string, tools []mcp.Tool) {
 	mcpTools := make([]events.McpTool, len(tools))
 	for i, t := range tools {
-		var schema json.RawMessage
-		if t.InputSchema != nil {
-			schema, _ = json.Marshal(t.InputSchema)
-		}
 		mcpTools[i] = events.McpTool{
 			Name:        t.Name,
 			Description: t.Description,
-			InputSchema: schema,
+			InputSchema: t.InputSchema,
+			Annotations: t.Annotations,
 		}
 	}
 	if s.toolCache != nil {
-		cacheInputs := make([]config.CachedToolInput, len(mcpTools))
-		for i, t := range mcpTools {
+		cacheInputs := make([]config.CachedToolInput, len(tools))
+		for i, t := range tools {
 			cacheInputs[i] = config.CachedToolInput{
-				Name:        t.Name,
-				Description: t.Description,
-				InputSchema: t.InputSchema,
+				Name:         t.Name,
+				Title:        t.Title,
+				Description:  t.Description,
+				InputSchema:  t.InputSchema,
+				OutputSchema: t.OutputSchema,
+				Annotations:  t.Annotations,
+				Icons:        t.Icons,
+				Meta:         t.Meta,
+				Extra:        t.Extra,
 			}
 		}
 		if err := s.toolCache.Update(name, cacheInputs); err != nil {

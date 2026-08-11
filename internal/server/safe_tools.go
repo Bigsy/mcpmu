@@ -1,9 +1,12 @@
 package server
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/Bigsy/mcpmu/internal/mcp"
 )
 
 // ToolClassification represents the safety classification of a tool.
@@ -53,7 +56,37 @@ var unsafePatterns = []string{
 //
 // If the input has a server prefix (e.g., "filesystem.read_file"),
 // it is automatically stripped before classification.
+//
+// Prefer ClassifyToolWithAnnotations wherever the upstream `annotations`
+// object is on hand: the name heuristic is a guess, and the server's own
+// readOnlyHint is not.
 func ClassifyTool(toolName string) ToolClassification {
+	return ClassifyToolWithAnnotations(toolName, nil)
+}
+
+// ClassifyToolWithAnnotations classifies a tool, preferring the hints the
+// server declared over the name heuristic.
+//
+// Per the 2025-11-25 tools spec, readOnlyHint means the tool does not modify
+// its environment; its absence is not a claim either way, so an absent hint
+// falls back to the name heuristic rather than being read as "not read-only".
+// destructiveHint is only consulted when readOnlyHint is silent, and only in
+// the direction that adds caution.
+func ClassifyToolWithAnnotations(toolName string, annotations json.RawMessage) ToolClassification {
+	if parsed, ok := mcp.ParseToolAnnotations(annotations); ok {
+		if parsed.ReadOnlyHint != nil {
+			if *parsed.ReadOnlyHint {
+				return ToolSafe
+			}
+			// The server said this tool may modify its environment. That is
+			// ground truth and outranks a reassuring-looking name.
+			return ToolUnsafe
+		}
+		if parsed.DestructiveHint != nil && *parsed.DestructiveHint {
+			return ToolUnsafe
+		}
+	}
+
 	// Strip server prefix if present
 	name := stripServerPrefix(toolName)
 

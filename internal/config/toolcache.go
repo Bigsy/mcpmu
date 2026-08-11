@@ -3,8 +3,10 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -12,7 +14,13 @@ import (
 	"github.com/tiktoken-go/tokenizer"
 )
 
-const ToolCacheVersion = 1
+// ToolCacheVersion is bumped whenever CachedTool's shape changes. load()
+// discards a cache written at any other version, so the migration is
+// self-healing: the next discovery repopulates it.
+//
+//	1 → 2: tools carry title/outputSchema/annotations/icons/_meta and the
+//	       unknown-field catch-all, and token counts include them.
+const ToolCacheVersion = 2
 
 // ToolCache stores tool definitions and token counts for servers.
 // It is persisted alongside the active config file.
@@ -33,12 +41,20 @@ type ServerToolCache struct {
 	UpdatedAt time.Time    `json:"updatedAt"`
 }
 
-// CachedTool stores a tool definition with its precomputed token count.
+// CachedTool stores a tool definition with its precomputed token count. The
+// field set mirrors what mcpmu actually sends downstream, so TokenCount stays
+// an honest measure of the tool's context cost.
 type CachedTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
-	TokenCount  int             `json:"tokenCount"`
+	Name         string                     `json:"name"`
+	Title        string                     `json:"title,omitempty"`
+	Description  string                     `json:"description,omitempty"`
+	InputSchema  json.RawMessage            `json:"inputSchema,omitempty"`
+	OutputSchema json.RawMessage            `json:"outputSchema,omitempty"`
+	Annotations  json.RawMessage            `json:"annotations,omitempty"`
+	Icons        json.RawMessage            `json:"icons,omitempty"`
+	Meta         json.RawMessage            `json:"_meta,omitempty"`
+	Extra        map[string]json.RawMessage `json:"extra,omitempty"`
+	TokenCount   int                        `json:"tokenCount"`
 }
 
 // ToolCachePath returns the cache file path co-located with the active config.
@@ -78,11 +94,18 @@ func NewToolCache(configPath string) (*ToolCache, error) {
 	return tc, nil
 }
 
-// CachedToolInput is the input for updating cached tools (avoids importing events in config).
+// CachedToolInput is the input for updating cached tools (avoids importing
+// events in config). It mirrors mcp.Tool minus the fields mcpmu strips.
 type CachedToolInput struct {
-	Name        string
-	Description string
-	InputSchema json.RawMessage
+	Name         string
+	Title        string
+	Description  string
+	InputSchema  json.RawMessage
+	OutputSchema json.RawMessage
+	Annotations  json.RawMessage
+	Icons        json.RawMessage
+	Meta         json.RawMessage
+	Extra        map[string]json.RawMessage
 }
 
 // Update caches tools for a server, computing token counts in aggregated format.
@@ -93,10 +116,16 @@ func (tc *ToolCache) Update(serverID string, tools []CachedToolInput) error {
 	cached := make([]CachedTool, len(tools))
 	for i, t := range tools {
 		cached[i] = CachedTool{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-			TokenCount:  CountAggregatedToolTokens(serverID, t.Name, t.Description, t.InputSchema),
+			Name:         t.Name,
+			Title:        t.Title,
+			Description:  t.Description,
+			InputSchema:  t.InputSchema,
+			OutputSchema: t.OutputSchema,
+			Annotations:  t.Annotations,
+			Icons:        t.Icons,
+			Meta:         t.Meta,
+			Extra:        maps.Clone(t.Extra),
+			TokenCount:   CountAggregatedToolTokens(serverID, t),
 		}
 	}
 	tc.cache.Servers[serverID] = ServerToolCache{
@@ -143,7 +172,7 @@ func (tc *ToolCache) Rename(oldID, newID string) error {
 
 	// Recompute token counts with new server name
 	for i, t := range entry.Tools {
-		entry.Tools[i].TokenCount = CountAggregatedToolTokens(newID, t.Name, t.Description, t.InputSchema)
+		entry.Tools[i].TokenCount = CountAggregatedToolTokens(newID, t.input())
 	}
 	entry.UpdatedAt = time.Now()
 
@@ -204,26 +233,58 @@ func (tc *ToolCache) save() error {
 	return nil
 }
 
+// input reconstructs the counting input for an already-cached tool.
+func (t CachedTool) input() CachedToolInput {
+	return CachedToolInput{
+		Name:         t.Name,
+		Title:        t.Title,
+		Description:  t.Description,
+		InputSchema:  t.InputSchema,
+		OutputSchema: t.OutputSchema,
+		Annotations:  t.Annotations,
+		Icons:        t.Icons,
+		Meta:         t.Meta,
+		Extra:        t.Extra,
+	}
+}
+
 // CountAggregatedToolTokens counts tokens for a tool in aggregated format
-// (matches what tools/list returns to clients via aggregator.go).
-func CountAggregatedToolTokens(serverID, toolName, toolDescription string, inputSchema json.RawMessage) int {
-	qualifiedName := serverID + "." + toolName
+// (matches what tools/list returns to clients via aggregator.go). Every field
+// mcpmu forwards is counted — an outputSchema or an icons array is real
+// context cost, and omitting it would make the TUI's per-server figures
+// under-report exactly the servers that cost the most.
+func CountAggregatedToolTokens(serverID string, tool CachedToolInput) int {
+	qualifiedName := serverID + "." + tool.Name
 
 	aggregatedDesc := "[" + serverID + "]"
-	if toolDescription != "" {
-		aggregatedDesc = "[" + serverID + "] " + toolDescription
+	if tool.Description != "" {
+		aggregatedDesc = "[" + serverID + "] " + tool.Description
+	}
+
+	texts := make([]string, 0, 8)
+	texts = append(texts, qualifiedName, aggregatedDesc)
+	if tool.Title != "" {
+		texts = append(texts, tool.Title)
+	}
+	for _, raw := range []json.RawMessage{
+		tool.InputSchema, tool.OutputSchema, tool.Annotations, tool.Icons, tool.Meta,
+	} {
+		if len(raw) > 0 {
+			texts = append(texts, string(raw))
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(tool.Extra)) {
+		texts = append(texts, key, string(tool.Extra[key]))
 	}
 
 	codec, err := tokenizer.Get(tokenizer.Cl100kBase)
 	if err != nil {
-		return estimateFallback(qualifiedName, aggregatedDesc, inputSchema)
+		return estimateFallback(texts)
 	}
 
 	total := 0
-	total += countOrZero(codec, qualifiedName)
-	total += countOrZero(codec, aggregatedDesc)
-	if len(inputSchema) > 0 {
-		total += countOrZero(codec, string(inputSchema))
+	for _, text := range texts {
+		total += countOrZero(codec, text)
 	}
 	return total
 }
@@ -236,10 +297,10 @@ func countOrZero(codec tokenizer.Codec, text string) int {
 	return len(tokens)
 }
 
-func estimateFallback(name, desc string, schema json.RawMessage) int {
-	total := len(name) + len(desc)
-	if len(schema) > 0 {
-		total += len(schema)
+func estimateFallback(texts []string) int {
+	total := 0
+	for _, text := range texts {
+		total += len(text)
 	}
 	return total / 4
 }

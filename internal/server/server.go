@@ -42,7 +42,6 @@ type Options struct {
 	Stderr             io.Writer
 	ServerName         string
 	ServerVersion      string
-	ProtocolVersion    string
 }
 
 // SelectionMethod indicates how the active namespace was selected.
@@ -76,9 +75,12 @@ type Session struct {
 	activeServerNames   []string        // Server names in the active namespace (or all if no namespace)
 	selectionMethod     SelectionMethod // How the namespace was selected
 
-	// Protocol state
-	initialized bool
-	mu          sync.RWMutex
+	// Protocol state. protocolVersion is the revision this session settled on
+	// during initialize — per-session, not per-process, because two daemon
+	// sessions against one Core may negotiate different revisions.
+	initialized     bool
+	protocolVersion string
+	mu              sync.RWMutex
 
 	// IO
 	reader  *bufio.Reader
@@ -89,6 +91,13 @@ type Session struct {
 	// to drain before returning (otherwise stdout writes may race with the
 	// caller reading the buffer after Run exits).
 	handlersWG sync.WaitGroup
+
+	// Per-session request lifecycle: cancellable upstream calls keyed by the
+	// client's JSON-RPC id, and the progress-token substitutions in force.
+	// Both are session-scoped so a shared upstream instance can never let one
+	// agent cancel — or eavesdrop on the progress of — another's call.
+	inflight *inflightCalls
+	progress *progressRoutes
 
 	// Background discovery
 	bgDiscovering        atomic.Bool
@@ -135,6 +144,8 @@ func NewSession(core *Core, opts Options) (*Session, error) {
 		writer:      opts.Stdout,
 		subs:        make(map[string]process.InstanceID),
 		resourceMap: make(map[string]process.InstanceID),
+		inflight:    newInflightCalls(),
+		progress:    newProgressRoutes(),
 	}
 	s.privateAggregator = s.newPrivateAggregator()
 	s.router = NewRouter(s)
@@ -152,6 +163,12 @@ func NewSession(core *Core, opts Options) (*Session, error) {
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
 		s.closed.Store(true)
+		// Abandoning in-flight calls at disconnect would leave the upstream
+		// working on results nobody will read. Only this session's calls are
+		// cancelled; another session against the same shared instance keeps
+		// running.
+		s.inflight.cancelAll(errSessionClosed)
+		s.progress.clear()
 		s.resourceStateMu.RLock()
 		s.cleanupSessionSubscriptions(s)
 		s.resourceStateMu.RUnlock()
@@ -402,8 +419,12 @@ func (s *Server) handleMessage(ctx context.Context, data []byte) error {
 	// JSON-RPC correlates responses by id and send() serializes stdout
 	// writes via writeMu, so concurrent handlers are safe.
 	if isUpstreamMethod(msg.Method) {
+		// Register the call before the goroutine starts so a cancellation that
+		// arrives immediately after the request cannot miss it.
+		callCtx, release := s.inflight.track(ctx, msg.ID)
 		s.handlersWG.Go(func() {
-			result, rpcErr := s.handleRequest(ctx, msg.Method, msg.Params)
+			defer release()
+			result, rpcErr := s.handleRequest(callCtx, msg.Method, msg.Params)
 			if rpcErr != nil {
 				s.sendError(msg.ID, rpcErr)
 			} else {
@@ -486,12 +507,44 @@ func (s *Server) handleNotification(ctx context.Context, method string, params j
 			go s.startEagerServers(ctx)
 		}
 	case "notifications/cancelled":
-		// Handle cancellation - for now just log it
-		log.Printf("Received cancellation notification: %s", string(params))
+		s.handleCancelled(params)
 	default:
 		log.Printf("Unknown notification: %s", method)
 	}
 	return nil
+}
+
+// handleCancelled acts on notifications/cancelled from the client.
+//
+// Cancelling the local context is only half the job: the upstream server is
+// still working, still holding whatever the call reserved, and still on course
+// to produce the side effect the user was trying to stop. mcp.Client sends its
+// own notifications/cancelled upstream when a call's context ends, so
+// cancelling here reaches the far end too.
+func (s *Server) handleCancelled(params json.RawMessage) {
+	var req struct {
+		RequestID json.RawMessage `json:"requestId"`
+		Reason    string          `json:"reason,omitempty"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil || len(req.RequestID) == 0 {
+		log.Printf("Ignoring malformed cancellation notification: %s", string(params))
+		return
+	}
+	if s.inflight.cancel(req.RequestID, &cancelledError{reason: req.Reason}) {
+		log.Printf("Cancelled request %s (reason: %s)", string(req.RequestID), reasonOrNone(req.Reason))
+		return
+	}
+	// Not an error: the spec expects races here — the response may already
+	// have been sent, or the id may never have named an upstream request.
+	log.Printf("Cancellation for unknown or already-finished request %s (reason: %s)",
+		string(req.RequestID), reasonOrNone(req.Reason))
+}
+
+func reasonOrNone(reason string) string {
+	if reason == "" {
+		return "none given"
+	}
+	return reason
 }
 
 // handleInitialize handles the initialize request.
@@ -521,6 +574,7 @@ func (s *Server) handleInitialize(ctx context.Context, params json.RawMessage) (
 	// Update router with active namespace info
 	s.router.SetActiveNamespace(s.activeNamespaceName, s.selectionMethod)
 
+	s.protocolVersion = negotiateProtocolVersion(req.ProtocolVersion)
 	s.initialized = true
 
 	// Build capabilities
@@ -540,13 +594,21 @@ func (s *Server) handleInitialize(ctx context.Context, params json.RawMessage) (
 
 	// Return server capabilities
 	return initializeResult{
-		ProtocolVersion: s.opts.ProtocolVersion,
+		ProtocolVersion: s.protocolVersion,
 		ServerInfo: serverInfo{
 			Name:    s.opts.ServerName,
 			Version: s.opts.ServerVersion,
 		},
 		Capabilities: caps,
 	}, nil
+}
+
+// NegotiatedProtocolVersion returns the MCP revision this session settled on
+// during initialize, or the empty string before initialize completes.
+func (s *Session) NegotiatedProtocolVersion() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.protocolVersion
 }
 
 // handlePing handles the ping request.
@@ -707,6 +769,18 @@ func (s *Server) OnUpstreamNotification(notification process.UpstreamNotificatio
 		s.handlersWG.Go(func() {
 			s.sendNotificationWithParams("notifications/resources/updated", map[string]string{"uri": p.URI})
 		})
+	case "notifications/progress":
+		// Filtered at the sink rather than routed by the broadcaster: only the
+		// session that minted the token has it, so a fan-out to every session
+		// still lands in exactly one place, and the broadcaster's ordering
+		// guarantees are preserved.
+		params, ok := s.progressNotificationForSession(notification.Params)
+		if !ok {
+			return
+		}
+		s.handlersWG.Go(func() {
+			s.sendNotificationWithParams("notifications/progress", params)
+		})
 	default:
 		if notification.Method == "notifications/tools/list_changed" ||
 			(notification.Method == "notifications/resources/list_changed" && s.opts.ExposeResources) ||
@@ -814,8 +888,15 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 		}
 	}
 
+	// Forward the client's `_meta` upstream, substituting a unique token for
+	// any progressToken it carried. Without this the server is never asked for
+	// progress at all, because the whole `_meta` object used to be dropped
+	// here at unmarshal time.
+	meta, releaseProgress := s.rewriteRequestMeta(req.Meta)
+	defer releaseProgress()
+
 	// Route the call through the router
-	result, rpcErr := router.CallTool(ctx, req.Name, req.Arguments)
+	result, rpcErr := router.CallTool(ctx, req.Name, req.Arguments, meta)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -844,6 +925,8 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 		MimeType    string          `json:"mimeType,omitempty"`
 		Size        *int64          `json:"size,omitempty"`
 		Annotations json.RawMessage `json:"annotations,omitempty"`
+		Icons       json.RawMessage `json:"icons,omitempty"`
+		Meta        json.RawMessage `json:"_meta,omitempty"`
 	}
 
 	type serverResources struct {
@@ -903,6 +986,8 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 				MimeType:    r.MimeType,
 				Size:        r.Size,
 				Annotations: r.Annotations,
+				Icons:       r.Icons,
+				Meta:        r.Meta,
 			})
 		}
 	}
@@ -1598,4 +1683,8 @@ type toolsListResult struct {
 type toolsCallRequest struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
+	// Meta is the request envelope's `_meta`, most importantly progressToken.
+	// It is forwarded upstream (with progressToken rewritten) rather than
+	// dropped — a server that is never told a token can never report progress.
+	Meta json.RawMessage `json:"_meta,omitempty"`
 }

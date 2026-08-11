@@ -166,7 +166,6 @@ func newDirectResourceSession(t *testing.T, core *Core, cfg *config.Config, name
 		Stdout:          out,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 	})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)

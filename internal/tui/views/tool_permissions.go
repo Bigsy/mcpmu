@@ -1,6 +1,7 @@
 package views
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
@@ -37,6 +38,10 @@ type toolPermItem struct {
 	serverName  string
 	toolName    string
 	description string
+	// annotations is the upstream `annotations` object, used by the bulk
+	// "enable safe" action so it follows readOnlyHint rather than guessing
+	// from the tool's name. Nil when the server declared none.
+	annotations json.RawMessage
 	enabled     bool
 	isHeader    bool // True for server headers
 }
@@ -204,6 +209,7 @@ func (m *ToolPermissionsModel) Show(
 				serverName:  serverName,
 				toolName:    tool.Name,
 				description: tool.Description,
+				annotations: tool.Annotations,
 				enabled:     enabled,
 				isHeader:    false,
 			})
@@ -314,6 +320,7 @@ func (m *ToolPermissionsModel) FinishDiscovery(
 				serverName:  serverName,
 				toolName:    tool.Name,
 				description: tool.Description,
+				annotations: tool.Annotations,
 				enabled:     enabled,
 				isHeader:    false,
 			})
@@ -538,8 +545,9 @@ func (m *ToolPermissionsModel) applyBulkEnableSafe() {
 			continue
 		}
 
-		// Only modify tools classified as safe
-		classification := server.ClassifyTool(ti.toolName)
+		// Only modify tools classified as safe. Annotations win where the
+		// server supplied them; the name heuristic covers the rest.
+		classification := server.ClassifyToolWithAnnotations(ti.toolName, ti.annotations)
 		if classification != server.ToolSafe {
 			continue
 		}

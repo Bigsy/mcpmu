@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 )
@@ -231,5 +232,41 @@ func TestIsUnsafe(t *testing.T) {
 	}
 	if IsUnsafe("foo") {
 		t.Error("expected foo not to be unsafe (unknown)")
+	}
+}
+
+// The server's own hints outrank the name heuristic. A tool called
+// "get_account" that declares readOnlyHint:false is not read-only, whatever
+// its name suggests.
+func TestClassifyToolWithAnnotations(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		toolName    string
+		annotations string
+		expected    ToolClassification
+	}{
+		{"readOnlyHint true beats an unsafe-looking name", "delete_stale_cache", `{"readOnlyHint":true}`, ToolSafe},
+		{"readOnlyHint false beats a safe-looking name", "get_account", `{"readOnlyHint":false}`, ToolUnsafe},
+		{"destructiveHint true is honoured when readOnly is silent", "list_things", `{"destructiveHint":true}`, ToolUnsafe},
+		{"destructiveHint false alone is not a read-only claim", "reticulate_splines", `{"destructiveHint":false}`, ToolUnknown},
+		{"annotations without hints fall back to the name", "read_file", `{"title":"Read File"}`, ToolSafe},
+		{"absent annotations fall back to the name", "write_file", ``, ToolUnsafe},
+		{"empty annotations fall back to the name", "read_file", `{}`, ToolSafe},
+		{"malformed annotations fall back to the name", "read_file", `not json`, ToolSafe},
+		{"malformed annotations do not mask an unsafe name", "delete_file", `[1,2,3]`, ToolUnsafe},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var annotations json.RawMessage
+			if tt.annotations != "" {
+				annotations = json.RawMessage(tt.annotations)
+			}
+			if got := ClassifyToolWithAnnotations(tt.toolName, annotations); got != tt.expected {
+				t.Errorf("ClassifyToolWithAnnotations(%q, %s) = %v, want %v",
+					tt.toolName, tt.annotations, got, tt.expected)
+			}
+		})
 	}
 }

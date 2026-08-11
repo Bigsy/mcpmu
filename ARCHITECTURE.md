@@ -354,6 +354,81 @@ the catalog before they are relayed downstream.
 
 This keeps `tools/list` responsive for clients with tight request timeouts while still converging to the full aggregated tool set.
 
+Change detection compares **every field `mcpmu` exposes downstream**, not just
+`name`/`description`/`inputSchema`: `title`, `outputSchema`, `annotations`,
+`icons`, `_meta`, and any member of a future revision captured by the
+unknown-field catch-all. A server that changes only its `annotations` (say, from
+`readOnlyHint: true` to `false`) still fires
+`notifications/tools/list_changed` — otherwise an agent would hold a stale
+definition indefinitely and keep auto-approving a tool that is no longer
+read-only.
+
+## Protocol Revision Negotiation
+
+`mcpmu` negotiates independently on each side of the proxy.
+
+- **Upstream**, `internal/mcp` offers `SupportedProtocolVersions` newest-first
+  (`2025-11-25` … `2024-11-05`) and takes the first revision a server accepts.
+- **Downstream**, `handleInitialize` echoes the client's requested revision when
+  it appears in `server.DownstreamProtocolVersions`, and otherwise answers with
+  `mcpmu`'s newest, per the lifecycle spec. The result is stored per **Session**,
+  not per process: in daemon mode two clients on one Core may legitimately settle
+  on different revisions.
+
+Field passthrough is **permissive**: `mcpmu` forwards every field an upstream
+sent regardless of the revision the downstream session negotiated. Unknown
+object members are ignored by clients in practice, whereas a field→revision
+strip table would need maintaining for every future revision. If a real client
+is ever found that chokes, the strict path belongs in
+`negotiateProtocolVersion`'s neighbourhood in `internal/server/protocol_version.go`.
+
+### What mcpmu preserves and what it strips
+
+Preserved verbatim on tools: `title`, `inputSchema` (as raw bytes, so large
+integers in a schema are not mangled by a float64 round trip), `outputSchema`,
+`annotations`, `icons`, `_meta`, and unknown members. On a `tools/call` result:
+content blocks, `structuredContent`, `isError`, and `_meta`. On the request:
+`_meta`, so a client that asks for progress actually gets it.
+
+Stripped deliberately: **`execution`** (`execution.taskSupport`). It advertises
+that a tool supports task-augmented execution; forwarding it while `mcpmu`
+implements no `tasks/*` methods would invite an agent to make a call `mcpmu`
+cannot service. Forward it when tasks are supported. The same reasoning applies
+to any future field that promises behaviour the proxy must itself provide —
+passthrough is the default, but not for capability-implying fields.
+
+Only `annotations` is interpreted rather than merely carried: `readOnlyHint` and
+`destructiveHint` feed tool safety classification
+(`ClassifyToolWithAnnotations`), where the server's declaration outranks the
+name-substring heuristic. The heuristic remains as the fallback for servers that
+declare nothing.
+
+## Request Lifecycle: Cancellation and Progress
+
+Both are tracked per **Session**, keyed so that several sessions sharing one
+upstream instance cannot interfere with each other.
+
+- **Cancellation.** Each request that dispatches upstream is registered in the
+  Session's in-flight table under its JSON-RPC id (canonicalised, so `1` and
+  `"1"` stay distinct). `notifications/cancelled` cancels that context with the
+  client's stated `reason` as the cause; `mcp.Client` then emits its own
+  `notifications/cancelled` upstream, so the server stops too rather than
+  finishing work nobody will read. The same upstream withdrawal covers deadline
+  expiry, which the cancellation spec also asks for. Closing a session cancels
+  that session's calls and leaves another session's calls on the same shared
+  instance running.
+- **Progress.** Tokens must be unique across active requests, and two sessions
+  are free to pick the same one, so `mcpmu` substitutes a token of its own
+  (`mcpmu/{session}/{n}`) on the way up and reverses the substitution on the way
+  down. Every other member of `_meta` is forwarded untouched. Delivery is exact
+  rather than a guess: a `notifications/progress` whose token is not in the
+  session's table did not come from that session's request and is dropped.
+  Filtering happens at the notification sink rather than in the broadcaster, so
+  the existing fan-out ordering is preserved. A mapping outlives its call by a
+  short grace window because progress and the result travel different paths
+  downstream — without it, a progress frame already in flight would lose a race
+  it should never have been in.
+
 ## HTTP Server Custom Headers
 
 For `streamable_http` servers, two map fields on `ServerConfig` flow from the CLI (`--header`/`--env-header`), TUI form, and web form through `internal/config` (parsed and validated by `ParseHeaderLines`) into `supervisor.go`'s `StreamableHTTPConfig.HTTPHeaders` and out through `streamable_http_transport.Send` on every request. Static headers (`http_headers`) are stored verbatim in `~/.config/mcpmu/config.json`; env-backed headers (`env_http_headers`) are resolved from the named env var at request time so secrets stay out of the file. The two maps are merged at request build time with env-backed entries taking precedence on name collision; missing env vars are silently omitted (a no-op when the header is optional). Used in practice for Cloudflare Access (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) on top of any auth mode.
@@ -362,7 +437,7 @@ For `streamable_http` servers, two map fields on `ServerConfig` flow from the CL
 
 Serve mode passes through `resources/*` and `prompts/*` MCP methods from upstream servers (enabled by default, disable with `--resources=false` or `--prompts=false`).
 
-- **Resources**: URIs are passed through unmodified from upstream servers. A per-Session reverse map (URI → `InstanceID`) is rebuilt atomically during `resources/list` and used to route `resources/read`, subscribe, and unsubscribe calls to the correct upstream instance. Results are merged in stable namespace server order; if two upstreams expose the same raw URI, the first owner wins and later duplicates are omitted and logged. Different Sessions may therefore resolve the same URI to different upstreams without sharing subscription state. All MCP resource fields are preserved, including `annotations`, `title`, and `size`. `resources/templates/list` is also supported (returns an empty list if no upstream servers provide templates).
+- **Resources**: URIs are passed through unmodified from upstream servers. A per-Session reverse map (URI → `InstanceID`) is rebuilt atomically during `resources/list` and used to route `resources/read`, subscribe, and unsubscribe calls to the correct upstream instance. Results are merged in stable namespace server order; if two upstreams expose the same raw URI, the first owner wins and later duplicates are omitted and logged. Different Sessions may therefore resolve the same URI to different upstreams without sharing subscription state. All MCP resource fields are preserved, including `annotations`, `title`, `size`, `icons`, and `_meta`. `resources/templates/list` is also supported (returns an empty list if no upstream servers provide templates).
 - **Prompts**: Names are qualified as `serverName.promptName` (same as tools). Descriptions are prefixed with `[serverName]`. On `prompts/get`, the prefix is stripped before forwarding upstream.
 - **No caching**: Resource and prompt payloads are fetched on demand. Their fan-out consults initialize-time catalog capabilities so a verified stopped server that lacks the relevant capability can be skipped without starting it.
 - **No permissions**: Unlike tools, resources and prompts have no permission layer — they are read-only and user-initiated.

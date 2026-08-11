@@ -31,7 +31,6 @@ func TestServer_ResourcesList_FlagOff(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: false, // default
 	})
@@ -76,15 +75,14 @@ func TestServer_PromptsList_FlagOff(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
-		ExposePrompts:   false,
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
+		ExposePrompts: false,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -133,7 +131,6 @@ func TestServer_ResourcesList_FlagOn_NoServers(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: true,
 	})
@@ -181,15 +178,14 @@ func TestServer_PromptsList_FlagOn_NoServers(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
-		ExposePrompts:   true,
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
+		ExposePrompts: true,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -241,7 +237,6 @@ func TestServer_ResourcesRead_FlagOff(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: false,
 	})
@@ -285,15 +280,14 @@ func TestServer_PromptsGet_FlagOff(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
-		ExposePrompts:   false,
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
+		ExposePrompts: false,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -341,7 +335,6 @@ func TestServer_ResourcesRead_InvalidURI(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: true,
 	})
@@ -385,15 +378,14 @@ func TestServer_PromptsGet_InvalidName(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
-		ExposePrompts:   true,
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
+		ExposePrompts: true,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -440,7 +432,6 @@ func TestServer_Initialize_CapabilitiesWithFlags(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: true,
 		ExposePrompts:   true,
@@ -506,7 +497,6 @@ func TestServer_Initialize_CapabilitiesWithoutFlags(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: false,
 		ExposePrompts:   false,
@@ -593,7 +583,6 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: true,
 	})
@@ -757,15 +746,14 @@ func TestServer_PromptsList_EndToEnd(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
-		ExposePrompts:   true,
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
+		ExposePrompts: true,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -907,7 +895,6 @@ func TestServer_ResourcesList_PartialFailure(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: true,
 	})
@@ -989,15 +976,14 @@ func TestServer_PromptsList_PartialFailure(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
-		ExposePrompts:   true,
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
+		ExposePrompts: true,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1064,7 +1050,6 @@ func TestServer_ResourcesRead_UnknownURI(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: true,
 	})
@@ -1115,16 +1100,15 @@ func TestServer_PromptsGet_ServerNotInNamespace(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Namespace:       "ns1",
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
-		ExposePrompts:   true,
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Namespace:     "ns1",
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
+		ExposePrompts: true,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

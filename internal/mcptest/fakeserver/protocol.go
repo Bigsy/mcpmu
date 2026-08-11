@@ -7,8 +7,16 @@ import (
 	"time"
 )
 
+// DefaultProtocolVersion is the revision the fake server reports when the
+// initialize request carried none and Config.ProtocolVersion is unset.
+const DefaultProtocolVersion = "2025-11-25"
+
 // Config controls the fake server's behavior.
 type Config struct {
+	// ProtocolVersion pins the revision reported from initialize. Empty echoes
+	// whatever the client requested.
+	ProtocolVersion string `json:"protocolVersion,omitempty"`
+
 	// Tools to return from tools/list
 	Tools []Tool `json:"tools"`
 	// AdvertiseTools controls the initialize capability independently of the
@@ -60,6 +68,17 @@ type Config struct {
 	ToolHandler   ToolHandler `json:"-"`             // Custom handler for tools/call (not JSON-serializable)
 	EchoToolCalls bool        `json:"echoToolCalls"` // If true, tools/call returns the tool name and arguments as text
 
+	// ToolResultStructured and ToolResultMeta are attached to every tools/call
+	// result, for asserting that the result envelope survives the proxy hop.
+	ToolResultStructured json.RawMessage `json:"toolResultStructured,omitempty"`
+	ToolResultMeta       json.RawMessage `json:"toolResultMeta,omitempty"`
+
+	// ProgressUpdatesPerCall emits this many notifications/progress frames,
+	// carrying the caller's `_meta.progressToken`, before answering a
+	// tools/call. Zero (the default) emits none. A call that arrives without a
+	// progressToken never produces progress, exactly as the spec requires.
+	ProgressUpdatesPerCall int `json:"progressUpdatesPerCall,omitempty"`
+
 	// Resource subscription support (tests for resources/subscribe passthrough).
 	// If true, the server advertises resources.subscribe: true and accepts
 	// resources/subscribe and resources/unsubscribe requests.
@@ -108,11 +127,43 @@ type Config struct {
 	OnUnsubscribe func(uri string) `json:"-"`
 }
 
-// Tool represents an MCP tool definition.
+// Tool represents an MCP tool definition. It carries the full 2025-11-25 field
+// set (plus an Extra escape hatch) so tests can assert what survives the proxy
+// hop. InputSchema stays `any` for the convenience of test literals.
 type Tool struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	InputSchema any    `json:"inputSchema,omitempty"`
+	Name         string          `json:"name"`
+	Title        string          `json:"title,omitempty"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  any             `json:"inputSchema,omitempty"`
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
+	Annotations  json.RawMessage `json:"annotations,omitempty"`
+	Icons        json.RawMessage `json:"icons,omitempty"`
+	Execution    json.RawMessage `json:"execution,omitempty"`
+	Meta         json.RawMessage `json:"_meta,omitempty"`
+
+	// Extra emits members the spec has not defined, for testing the
+	// unknown-field catch-all.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+type toolAlias Tool
+
+// MarshalJSON folds Extra into the emitted object.
+func (t Tool) MarshalJSON() ([]byte, error) {
+	encoded, err := json.Marshal(toolAlias(t))
+	if err != nil || len(t.Extra) == 0 {
+		return encoded, err
+	}
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &merged); err != nil {
+		return nil, err
+	}
+	for key, raw := range t.Extra {
+		if _, exists := merged[key]; !exists {
+			merged[key] = raw
+		}
+	}
+	return json.Marshal(merged)
 }
 
 // JSONRPCError represents a JSON-RPC 2.0 error.
@@ -190,12 +241,15 @@ type ToolsListResult struct {
 type ToolCallParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
+	Meta      json.RawMessage `json:"_meta,omitempty"`
 }
 
 // ToolCallResult is the result of tools/call.
 type ToolCallResult struct {
-	Content []ContentBlock `json:"content"`
-	IsError bool           `json:"isError,omitempty"`
+	Content           []ContentBlock  `json:"content"`
+	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
+	IsError           bool            `json:"isError,omitempty"`
+	Meta              json.RawMessage `json:"_meta,omitempty"`
 }
 
 // ContentBlock represents a content block in a tool result.
@@ -213,6 +267,8 @@ type Resource struct {
 	MimeType    string          `json:"mimeType,omitempty"`
 	Size        *int64          `json:"size,omitempty"`
 	Annotations json.RawMessage `json:"annotations,omitempty"`
+	Icons       json.RawMessage `json:"icons,omitempty"`
+	Meta        json.RawMessage `json:"_meta,omitempty"`
 }
 
 // Prompt represents an MCP prompt definition.

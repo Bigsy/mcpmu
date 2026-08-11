@@ -34,15 +34,51 @@ const (
 // unqualified upstream tool name and `Description` is the upstream string with
 // no prefix. Qualified names (`{server}.{tool}`) and the `[server]` description
 // prefix are applied at the exposure boundary in `ListTools`/`GetTool`.
+//
+// Every field an upstream server sent is carried through verbatim, including
+// members of no interest to mcpmu (Extra). The one deliberate omission is
+// `execution` — see mcp.Tool.Execution for why forwarding it would be a
+// promise mcpmu cannot keep.
 type AggregatedTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	Name         string          `json:"name"`
+	Title        string          `json:"title,omitempty"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"inputSchema,omitempty"`
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
+	Annotations  json.RawMessage `json:"annotations,omitempty"`
+	Icons        json.RawMessage `json:"icons,omitempty"`
+	Meta         json.RawMessage `json:"_meta,omitempty"`
+
+	// Extra holds upstream members mcpmu does not model, keyed by JSON name.
+	Extra map[string]json.RawMessage `json:"-"`
 
 	// Internal metadata (not serialized to MCP)
 	serverID   string
 	serverName string
 	origName   string
+}
+
+type aggregatedToolAlias AggregatedTool
+
+// MarshalJSON re-emits Extra alongside the modelled fields so a tool member
+// introduced by a future spec revision still reaches the client.
+func (t AggregatedTool) MarshalJSON() ([]byte, error) {
+	return mcp.MarshalWithExtra(aggregatedToolAlias(t), t.Extra)
+}
+
+// UnmarshalJSON keeps the type round-trippable for tests and cached payloads.
+func (t *AggregatedTool) UnmarshalJSON(data []byte) error {
+	var alias aggregatedToolAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	*t = AggregatedTool(alias)
+	extra, err := mcp.UnknownToolFields(data)
+	if err != nil {
+		return err
+	}
+	t.Extra = extra
+	return nil
 }
 
 // Aggregator collects and manages tools from multiple upstream servers.

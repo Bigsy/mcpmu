@@ -65,9 +65,6 @@ func startSubscribeTestServer(t *testing.T, opts Options) *subscribeTestServer {
 	if opts.ServerVersion == "" {
 		opts.ServerVersion = "1.0.0"
 	}
-	if opts.ProtocolVersion == "" {
-		opts.ProtocolVersion = "2024-11-05"
-	}
 	if opts.LogLevel == "" {
 		opts.LogLevel = "error"
 	}
@@ -169,7 +166,6 @@ func TestServer_Initialize_AdvertisesSubscribeCapability(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: true,
 	})
@@ -297,7 +293,6 @@ func TestServer_ResourcesSubscribe_UnknownURI(t *testing.T) {
 		Stdout:          &stdout,
 		ServerName:      "mcpmu-test",
 		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
 		LogLevel:        "error",
 		ExposeResources: true,
 	})

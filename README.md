@@ -17,6 +17,7 @@ Key differentiators:
 - **Tool permissions** — Block unused tools per-namespace or globally deny dangerous tools at the server level
 - **Defense-in-depth** — Server-level global deny list that overrides all namespace permissions
 - **Resource & prompt passthrough** — Optionally expose upstream resources and prompts via `--resources` and `--prompts` flags
+- **Metadata-faithful** — Tool annotations, output schemas, and result `structuredContent` survive the proxy hop, so `readOnlyHint`-based auto-approve keeps working
 
 
 ### TUI
@@ -186,6 +187,8 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 - **Process-tree cleanup** — Stop wrapper-launched workers with their parent and retain identity-validated crash recovery records
 - **Streamable HTTP/SSE** — Connect to remote MCP endpoints with full SSE support
 - **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`
+- **Faithful proxying** — Tool definitions arrive with `title`, `annotations`, `outputSchema`, `icons`, and `_meta` intact, and results keep `structuredContent`; a tool's `readOnlyHint` reaches your agent instead of being discarded, so auto-approve still works through mcpmu
+- **Protocol revisions up to 2025-11-25** — Negotiated per client connection rather than pinned, with cancellation and `progressToken` progress relayed in both directions
 - **Shared daemon** — Concurrent `serve` clients share one set of upstream processes by default on Unix
 - **OAuth support** — Full OAuth 2.1 with PKCE, dynamic client registration, token management, and automatic scope discovery
 - **Hot-reload** — Serve mode watches the config file and automatically applies changes without restart

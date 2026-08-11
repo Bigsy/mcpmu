@@ -182,7 +182,6 @@ func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPat
 		Stderr:             os.Stderr,
 		ServerName:         "mcpmu",
 		ServerVersion:      version,
-		ProtocolVersion:    "2024-11-05",
 	}
 
 	// Create and run server

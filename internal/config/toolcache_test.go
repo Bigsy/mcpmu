@@ -126,21 +126,44 @@ func TestToolCache_Rename_Nonexistent(t *testing.T) {
 }
 
 func TestCountAggregatedToolTokens(t *testing.T) {
-	tokens := CountAggregatedToolTokens(
-		"myserver",
-		"read_file",
-		"Read a file from disk",
-		json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`),
-	)
+	tokens := CountAggregatedToolTokens("myserver", CachedToolInput{
+		Name:        "read_file",
+		Description: "Read a file from disk",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+	})
 	if tokens <= 0 {
 		t.Errorf("expected positive token count, got %d", tokens)
 	}
 }
 
 func TestCountAggregatedToolTokens_EmptyDescription(t *testing.T) {
-	tokens := CountAggregatedToolTokens("srv", "tool", "", nil)
+	tokens := CountAggregatedToolTokens("srv", CachedToolInput{Name: "tool"})
 	if tokens <= 0 {
 		t.Errorf("expected positive token count, got %d", tokens)
+	}
+}
+
+// The 2025-11-25 fields are real context cost, so they must move the number:
+// a tools/list that carries an outputSchema is not free just because mcpmu
+// used to ignore it.
+func TestCountAggregatedToolTokens_IncludesNewFields(t *testing.T) {
+	base := CachedToolInput{
+		Name:        "read_file",
+		Description: "Read a file from disk",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+	}
+	rich := base
+	rich.Title = "Read File"
+	rich.OutputSchema = json.RawMessage(`{"type":"object","properties":{"contents":{"type":"string"}}}`)
+	rich.Annotations = json.RawMessage(`{"readOnlyHint":true}`)
+	rich.Icons = json.RawMessage(`[{"src":"https://example.test/i.png","mimeType":"image/png"}]`)
+	rich.Meta = json.RawMessage(`{"vendor/tier":"gold"}`)
+	rich.Extra = map[string]json.RawMessage{"futureField": json.RawMessage(`{"a":1}`)}
+
+	baseTokens := CountAggregatedToolTokens("srv", base)
+	richTokens := CountAggregatedToolTokens("srv", rich)
+	if richTokens <= baseTokens {
+		t.Errorf("expected the extra fields to raise the count: base=%d rich=%d", baseTokens, richTokens)
 	}
 }
 
@@ -156,14 +179,18 @@ func TestCountAggregatedToolTokens_LargeSchema(t *testing.T) {
 	}
 	schema.WriteString(`}}`)
 
-	tokens := CountAggregatedToolTokens("srv", "tool", "A tool with a large schema", json.RawMessage(schema.String()))
+	tokens := CountAggregatedToolTokens("srv", CachedToolInput{
+		Name:        "tool",
+		Description: "A tool with a large schema",
+		InputSchema: json.RawMessage(schema.String()),
+	})
 	if tokens < 50 {
 		t.Errorf("expected at least 50 tokens for large schema, got %d", tokens)
 	}
 }
 
 func TestEstimateFallback(t *testing.T) {
-	result := estimateFallback("myserver.tool", "[myserver] desc", json.RawMessage(`{"key":"value"}`))
+	result := estimateFallback([]string{"myserver.tool", "[myserver] desc", `{"key":"value"}`})
 	// ~4 chars per token heuristic
 	expected := (len("myserver.tool") + len("[myserver] desc") + len(`{"key":"value"}`)) / 4
 	if result != expected {
@@ -232,6 +259,66 @@ func TestToolCache_VersionMismatch(t *testing.T) {
 	_, ok := tc.Get("srv")
 	if ok {
 		t.Error("expected version mismatch to discard cache")
+	}
+}
+
+// A cache written before tools carried their full field set must be discarded
+// rather than shown with token counts that under-report the real cost.
+func TestToolCache_DiscardsVersion1AndRegeneratesAtVersion2(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cachePath, _ := ToolCachePath(configPath)
+
+	legacy := `{"version":1,"servers":{"srv":{"tools":[{"name":"tool","tokenCount":42}]}}}`
+	if err := os.WriteFile(cachePath, []byte(legacy), 0600); err != nil {
+		t.Fatalf("seed legacy cache: %v", err)
+	}
+
+	tc, err := NewToolCache(configPath)
+	if err != nil {
+		t.Fatalf("NewToolCache: %v", err)
+	}
+	if _, ok := tc.Get("srv"); ok {
+		t.Error("a version 1 cache was reused instead of discarded")
+	}
+
+	if err := tc.Update("srv", []CachedToolInput{{
+		Name:        "tool",
+		Annotations: json.RawMessage(`{"readOnlyHint":true}`),
+	}}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	written, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	var file struct {
+		Version int `json:"version"`
+		Servers map[string]struct {
+			Tools []CachedTool `json:"tools"`
+		} `json:"servers"`
+	}
+	if err := json.Unmarshal(written, &file); err != nil {
+		t.Fatalf("unmarshal cache: %v", err)
+	}
+	if file.Version != 2 {
+		t.Errorf("cache regenerated at version %d, want 2", file.Version)
+	}
+	tools := file.Servers["srv"].Tools
+	if len(tools) != 1 {
+		t.Fatalf("cache holds %d tools, want 1: %s", len(tools), written)
+	}
+	// The file is written indented, so compare the decoded value rather than
+	// the raw bytes.
+	var annotations struct {
+		ReadOnlyHint bool `json:"readOnlyHint"`
+	}
+	if err := json.Unmarshal(tools[0].Annotations, &annotations); err != nil {
+		t.Fatalf("annotations were not persisted: %s", written)
+	}
+	if !annotations.ReadOnlyHint {
+		t.Errorf("readOnlyHint did not survive the cache round trip: %s", written)
 	}
 }
 

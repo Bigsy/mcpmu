@@ -23,14 +23,13 @@ func TestServer_Initialize(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -111,7 +110,6 @@ func TestServer_ToolsList_NoServers_ManagerToolsHidden(t *testing.T) {
 		Stdout:             &stdout,
 		ServerName:         "mcpmu-test",
 		ServerVersion:      "1.0.0",
-		ProtocolVersion:    "2024-11-05",
 		LogLevel:           "error",
 		ExposeManagerTools: false, // default: hidden
 	})
@@ -174,7 +172,6 @@ func TestServer_ToolsList_NoServers_ManagerToolsExposed(t *testing.T) {
 		Stdout:             &stdout,
 		ServerName:         "mcpmu-test",
 		ServerVersion:      "1.0.0",
-		ProtocolVersion:    "2024-11-05",
 		LogLevel:           "error",
 		ExposeManagerTools: true, // explicitly exposed
 	})
@@ -236,14 +233,13 @@ func TestServer_ToolsList_NotInitialized(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -284,14 +280,13 @@ func TestServer_MethodNotFound(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -337,14 +332,13 @@ func TestServer_Ping(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -396,14 +390,13 @@ func TestServer_NamespaceSelection_NoNamespaces(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -444,14 +437,13 @@ func TestServer_NamespaceSelection_MultipleNamespacesNoDefault(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -497,14 +489,13 @@ func TestServer_NamespaceSelection_WithDefault(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -545,15 +536,14 @@ func TestServer_NamespaceSelection_ExplicitNamespace(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Namespace:       "ns2", // Explicit selection
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Namespace:     "ns2", // Explicit selection
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

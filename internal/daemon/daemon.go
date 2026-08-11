@@ -258,7 +258,6 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 		ExposeResources:    handshake.Resources, ExposePrompts: handshake.Prompts,
 		Stdin: reader, Stdout: writer, Stderr: io.Discard,
 		ServerName: "mcpmu", ServerVersion: d.opts.Version,
-		ProtocolVersion: "2024-11-05",
 	})
 	if err != nil {
 		cancel()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 
@@ -157,16 +158,24 @@ func (c *verifiedCatalog) toolForInstance(id process.InstanceID, toolName string
 	return tool, ok
 }
 
+// aggregateToolMap copies an upstream tool definition into its stored form.
+// Every modelled field plus the unknown-member catch-all comes across
+// unchanged; `execution` is the sole deliberate omission (see
+// mcp.Tool.Execution).
 func aggregateToolMap(serverName string, tools []mcp.Tool) map[string]AggregatedTool {
 	result := make(map[string]AggregatedTool, len(tools))
 	for _, tool := range tools {
-		var schema []byte
-		if tool.InputSchema != nil {
-			schema, _ = json.Marshal(tool.InputSchema)
-		}
 		result[tool.Name] = AggregatedTool{
-			Name: tool.Name, Description: tool.Description, InputSchema: schema,
-			serverID: serverName, serverName: serverName, origName: tool.Name,
+			Name:         tool.Name,
+			Title:        tool.Title,
+			Description:  tool.Description,
+			InputSchema:  tool.InputSchema,
+			OutputSchema: tool.OutputSchema,
+			Annotations:  tool.Annotations,
+			Icons:        tool.Icons,
+			Meta:         tool.Meta,
+			Extra:        maps.Clone(tool.Extra),
+			serverID:     serverName, serverName: serverName, origName: tool.Name,
 		}
 	}
 	return result
@@ -179,23 +188,45 @@ func cloneToolMap(in map[string]AggregatedTool) map[string]AggregatedTool {
 	out := make(map[string]AggregatedTool, len(in))
 	for name, tool := range in {
 		tool.InputSchema = slices.Clone(tool.InputSchema)
+		tool.OutputSchema = slices.Clone(tool.OutputSchema)
+		tool.Annotations = slices.Clone(tool.Annotations)
+		tool.Icons = slices.Clone(tool.Icons)
+		tool.Meta = slices.Clone(tool.Meta)
+		tool.Extra = maps.Clone(tool.Extra)
 		out[name] = tool
 	}
 	return out
 }
 
+// sameToolMap reports whether two catalogs are identical in every field mcpmu
+// exposes downstream. Comparing only name/description/inputSchema would leave
+// an agent holding a stale definition forever when a server changed nothing
+// but, say, its annotations — no list_changed would ever fire.
 func sameToolMap(a, b map[string]AggregatedTool) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for name, left := range a {
 		right, ok := b[name]
-		if !ok || left.Name != right.Name || left.Description != right.Description ||
-			!slices.Equal(left.InputSchema, right.InputSchema) {
+		if !ok || !sameTool(left, right) {
 			return false
 		}
 	}
 	return true
+}
+
+func sameTool(left, right AggregatedTool) bool {
+	return left.Name == right.Name &&
+		left.Title == right.Title &&
+		left.Description == right.Description &&
+		slices.Equal(left.InputSchema, right.InputSchema) &&
+		slices.Equal(left.OutputSchema, right.OutputSchema) &&
+		slices.Equal(left.Annotations, right.Annotations) &&
+		slices.Equal(left.Icons, right.Icons) &&
+		slices.Equal(left.Meta, right.Meta) &&
+		maps.EqualFunc(left.Extra, right.Extra, func(a, b json.RawMessage) bool {
+			return slices.Equal(a, b)
+		})
 }
 
 func waitForFlight(ctx context.Context, flight *discoveryFlight) error {

@@ -63,16 +63,15 @@ func TestServer_ConcurrentToolCalls_SlowUpstreamDoesNotBlockOthers(t *testing.T)
 	stdoutR, stdoutW := io.Pipe()
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Namespace:       "default",
-		EagerStart:      true, // pre-start both upstreams so only tools/call timing matters
-		Stdin:           stdinR,
-		Stdout:          stdoutW,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Namespace:     "default",
+		EagerStart:    true, // pre-start both upstreams so only tools/call timing matters
+		Stdin:         stdinR,
+		Stdout:        stdoutW,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -29,8 +29,11 @@ func (r *Router) SetActiveNamespace(namespaceName string, selection SelectionMet
 	r.selectionMethod = selection
 }
 
-// CallTool routes a tool call to the appropriate server and returns the result.
-func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments json.RawMessage) (*ToolCallResult, *RPCError) {
+// CallTool routes a tool call to the appropriate server and returns the
+// result. meta is the request's `_meta` object as it should reach the upstream
+// server — already rewritten by the caller where mcpmu must not forward a
+// value verbatim (progressToken).
+func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, meta json.RawMessage) (*ToolCallResult, *RPCError) {
 	log.Printf("CallTool: %s", qualifiedName)
 
 	// Parse the tool name
@@ -69,7 +72,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	result, err := client.CallTool(callCtx, toolName, arguments)
+	result, err := client.CallToolWithMeta(callCtx, toolName, arguments, meta)
 	if err != nil {
 		if callCtx.Err() == context.DeadlineExceeded {
 			return nil, ErrToolCallTimeout(serverName, toolName)
@@ -91,7 +94,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 			retryCtx, retryCancel := context.WithTimeout(ctx, timeout)
 			defer retryCancel()
 
-			result, err = client.CallTool(retryCtx, toolName, arguments)
+			result, err = client.CallToolWithMeta(retryCtx, toolName, arguments, meta)
 			if err != nil {
 				return nil, ErrInternalError(fmt.Sprintf("tool call failed after reinit: %v", err))
 			}
@@ -109,8 +112,10 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments j
 	}
 
 	return &ToolCallResult{
-		Content: content,
-		IsError: result.IsError,
+		Content:           content,
+		StructuredContent: result.StructuredContent,
+		IsError:           result.IsError,
+		Meta:              result.Meta,
 	}, nil
 }
 
@@ -356,8 +361,10 @@ type NamespacesListResult struct {
 
 // ToolCallResult represents the result of a tool call.
 type ToolCallResult struct {
-	Content []json.RawMessage `json:"content"`
-	IsError bool              `json:"isError,omitempty"`
+	Content           []json.RawMessage `json:"content"`
+	StructuredContent json.RawMessage   `json:"structuredContent,omitempty"`
+	IsError           bool              `json:"isError,omitempty"`
+	Meta              json.RawMessage   `json:"_meta,omitempty"`
 }
 
 // textResult creates a text content result.

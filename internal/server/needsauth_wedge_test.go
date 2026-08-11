@@ -74,7 +74,7 @@ func TestNeedsAuthToolResourceAndPromptPathsDoNotWedge(t *testing.T) {
 	}
 
 	assertPrompt("tools/call", func(ctx context.Context) *RPCError {
-		_, rpcErr := s.router.CallTool(ctx, "oauth.echo", json.RawMessage(`{}`))
+		_, rpcErr := s.router.CallTool(ctx, "oauth.echo", json.RawMessage(`{}`), nil)
 		return rpcErr
 	})
 

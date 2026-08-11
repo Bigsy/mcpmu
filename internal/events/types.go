@@ -71,6 +71,10 @@ type McpTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	// Annotations is the raw upstream `annotations` object. The TUI reads
+	// readOnlyHint out of it so bulk "enable safe tools" follows what the
+	// server declared rather than guessing from the tool's name.
+	Annotations json.RawMessage `json:"annotations,omitempty"`
 }
 
 // EventType identifies the kind of event.

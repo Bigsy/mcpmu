@@ -91,14 +91,13 @@ func TestServer_ManagerTool_ServersList(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -165,15 +164,14 @@ func TestServer_ManagerTool_NamespacesList(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Namespace:       "work", // Select work namespace to pass init
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Namespace:     "work", // Select work namespace to pass init
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -233,14 +231,13 @@ func TestServer_ToolsCall_UnknownTool(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -297,15 +294,14 @@ func TestServer_ToolsCall_PermissionDenied(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Namespace:       "restricted",
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Namespace:     "restricted",
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -371,14 +367,13 @@ func TestServer_ToolsCall_NoNamespace_AllowsAll(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -629,16 +624,15 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Namespace:       "restricted",
-		EagerStart:      false, // Use lazy start - servers start when tools are called
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Namespace:     "restricted",
+		EagerStart:    false, // Use lazy start - servers start when tools are called
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -869,16 +863,15 @@ func TestServer_NamespaceServerDefaults_EndToEnd(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Namespace:       "mixed",
-		EagerStart:      false,
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Namespace:     "mixed",
+		EagerStart:    false,
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1042,14 +1035,13 @@ func TestServer_ProgressiveDiscovery(t *testing.T) {
 	defer func() { _ = stdoutWriter.Close() }()
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdinReader,
-		Stdout:          stdoutWriter,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdinReader,
+		Stdout:        stdoutWriter,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1310,14 +1302,13 @@ func TestServer_ConcurrentServerInit(t *testing.T) {
 	defer func() { _ = stdoutWriter.Close() }()
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdinReader,
-		Stdout:          stdoutWriter,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdinReader,
+		Stdout:        stdoutWriter,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1511,14 +1502,13 @@ func TestServer_SlowInitNotification(t *testing.T) {
 	defer func() { _ = stdoutWriter.Close() }()
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdinReader,
-		Stdout:          stdoutWriter,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdinReader,
+		Stdout:        stdoutWriter,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1987,14 +1977,13 @@ func TestServer_ToolsCall_GlobalDenyNoNamespace(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -2065,15 +2054,14 @@ func TestServer_ToolsCall_GlobalDenyWithNamespaceAllow(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Namespace:       "ns1",
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		ProtocolVersion: "2024-11-05",
-		LogLevel:        "error",
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Namespace:     "ns1",
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -2145,7 +2133,6 @@ func TestServer_ToolsList_GlobalDenyFiltering(t *testing.T) {
 		Stdout:             &stdout,
 		ServerName:         "mcpmu-test",
 		ServerVersion:      "1.0.0",
-		ProtocolVersion:    "2024-11-05",
 		LogLevel:           "error",
 	})
 	if err != nil {
@@ -2240,7 +2227,6 @@ func TestServer_ToolsList_GlobalDenyNoNamespace(t *testing.T) {
 		Stdout:             &stdout,
 		ServerName:         "mcpmu-test",
 		ServerVersion:      "1.0.0",
-		ProtocolVersion:    "2024-11-05",
 		LogLevel:           "error",
 	})
 	if err != nil {

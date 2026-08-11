@@ -138,7 +138,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				caps.Prompts = &PromptsCapability{}
 			}
 			_ = writeResponse(out, req.ID, InitializeResult{
-				ProtocolVersion: "2024-11-05",
+				ProtocolVersion: negotiatedVersion(cfg, req.Params),
 				ServerInfo:      ServerInfo{Name: "fake-server", Version: "1.0.0"},
 				Capabilities:    caps,
 			}, cfg)
@@ -165,6 +165,8 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				continue
 			}
 
+			emitProgress(syncedOut, cfg, params.Meta)
+
 			// Check if we have a custom handler
 			if cfg.ToolHandler != nil {
 				content, isError, err := cfg.ToolHandler(params.Name, params.Arguments)
@@ -175,8 +177,10 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 					continue
 				}
 				_ = writeResponse(out, req.ID, ToolCallResult{
-					Content: content,
-					IsError: isError,
+					Content:           content,
+					StructuredContent: cfg.ToolResultStructured,
+					IsError:           isError,
+					Meta:              cfg.ToolResultMeta,
 				}, cfg)
 				continue
 			}
@@ -187,15 +191,22 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				if params.Arguments != nil {
 					text += "\nArguments: " + string(params.Arguments)
 				}
+				if params.Meta != nil {
+					text += "\nMeta: " + string(params.Meta)
+				}
 				_ = writeResponse(out, req.ID, ToolCallResult{
-					Content: []ContentBlock{{Type: "text", Text: text}},
+					Content:           []ContentBlock{{Type: "text", Text: text}},
+					StructuredContent: cfg.ToolResultStructured,
+					Meta:              cfg.ToolResultMeta,
 				}, cfg)
 				continue
 			}
 
 			// If no handler and no echo, return success with tool name
 			_ = writeResponse(out, req.ID, ToolCallResult{
-				Content: []ContentBlock{{Type: "text", Text: "Tool executed: " + params.Name}},
+				Content:           []ContentBlock{{Type: "text", Text: "Tool executed: " + params.Name}},
+				StructuredContent: cfg.ToolResultStructured,
+				Meta:              cfg.ToolResultMeta,
 			}, cfg)
 
 		case "resources/list":
@@ -304,6 +315,11 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				cfg.OnUnsubscribe(params.URI)
 			}
 
+		case "notifications/cancelled":
+			// A notification: no response. logRequest above has already
+			// recorded it, which is how tests assert the proxy propagated the
+			// cancellation rather than abandoning the call silently.
+
 		case "notifications/initialized":
 			// Startup-update emission: emit configured URIs after the client
 			// signals it has finished initializing. Tests that exercise stray
@@ -318,6 +334,49 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			}, cfg)
 		}
 	}
+}
+
+// emitProgress sends the configured number of notifications/progress frames
+// for a call, echoing back whatever progressToken the caller supplied. A call
+// with no token gets nothing — the spec makes progress opt-in per request.
+func emitProgress(out io.Writer, cfg Config, meta json.RawMessage) {
+	if cfg.ProgressUpdatesPerCall <= 0 || len(meta) == 0 {
+		return
+	}
+	var parsed struct {
+		ProgressToken json.RawMessage `json:"progressToken"`
+	}
+	if err := json.Unmarshal(meta, &parsed); err != nil || len(parsed.ProgressToken) == 0 {
+		return
+	}
+	for i := 1; i <= cfg.ProgressUpdatesPerCall; i++ {
+		_ = writeFrame(out, rpcNotification{
+			JSONRPC: "2.0",
+			Method:  "notifications/progress",
+			Params: map[string]any{
+				"progressToken": parsed.ProgressToken,
+				"progress":      i,
+				"total":         cfg.ProgressUpdatesPerCall,
+			},
+		})
+	}
+}
+
+// negotiatedVersion mirrors a well-behaved server: echo the revision the
+// client asked for, falling back to the fake's own default when the request
+// carried none. Config.ProtocolVersion pins the answer for tests that need the
+// server to insist on one revision.
+func negotiatedVersion(cfg Config, params json.RawMessage) string {
+	if cfg.ProtocolVersion != "" {
+		return cfg.ProtocolVersion
+	}
+	var p struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if err := json.Unmarshal(params, &p); err == nil && p.ProtocolVersion != "" {
+		return p.ProtocolVersion
+	}
+	return DefaultProtocolVersion
 }
 
 func capabilityEnabled(explicit *bool, inferred bool) bool {

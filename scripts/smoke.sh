@@ -667,12 +667,259 @@ PYEOF
   return "$rc"
 }
 
+# Verifies that a tool definition's 2025-11-25 metadata survives the proxy hop,
+# that the result envelope keeps `structuredContent`, and that `execution` is
+# stripped.
+#
+# Unit tests cover each hop in isolation; only a real `serve` process proves the
+# whole wire path, which is where every one of these fields used to be discarded
+# at unmarshal time.
+smoke_tool_metadata_fidelity() {
+  local tmp cfg fake response tool rc=0
+
+  command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not available"; return 0; }
+
+  tmp=$(mktemp -d -t mcpmu-smoke-fidelity.XXXXXX)
+  cfg="$tmp/config.json"
+  fake="$tmp/fake-mcp.sh"
+
+  cat > "$fake" <<'EOF'
+#!/usr/bin/env bash
+# Serves one tool carrying every field the 2025-11-25 tools spec defines, plus
+# an unknown member standing in for a future revision.
+while IFS= read -r line; do
+  method=$(printf '%s' "$line" | jq -r '.method // empty')
+  id=$(printf '%s' "$line" | jq -r '.id // empty')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"smoke-fidelity","version":"1"}}}\n' "$id"
+      ;;
+    tools/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{' "$id"
+      printf '"name":"read_thing","title":"Read Thing","description":"reads a thing",'
+      printf '"inputSchema":{"type":"object","properties":{"id":{"type":"integer","maximum":9007199254740993}}},'
+      printf '"outputSchema":{"type":"object","properties":{"thing":{"type":"string"}}},'
+      printf '"annotations":{"readOnlyHint":true,"idempotentHint":true},'
+      printf '"icons":[{"src":"https://example.test/i.png","mimeType":"image/png"}],'
+      printf '"execution":{"taskSupport":"required"},'
+      printf '"_meta":{"vendor.example/tier":"gold"},'
+      printf '"futureField":{"revision":"2027-01-01"}'
+      printf '}]}}\n'
+      ;;
+    tools/call)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"ok"}],"structuredContent":{"thing":"value"},"_meta":{"vendor.example/ms":7}}}\n' "$id"
+      ;;
+  esac
+done
+EOF
+  chmod 0700 "$fake"
+
+  jq -n --arg command "$fake" '{
+    schemaVersion: 1,
+    servers: { fidelity: { command: $command, startup_timeout_sec: 5 } },
+    namespaces: {}
+  }' > "$cfg"
+
+  response=$({
+    printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}\n'
+    printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
+    printf '{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n'
+    sleep 2
+    printf '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fidelity.read_thing","arguments":{"id":1}}}\n'
+    sleep 3
+  } | ./mcpmu serve --stdio --isolated --config "$cfg" 2>/dev/null)
+
+  tool=$(printf '%s\n' "$response" | jq -c 'select(.id == 2) | .result.tools[0]' 2>/dev/null)
+  if [[ -z "$tool" ]]; then
+    echo "FAIL: tools/list returned nothing"
+    printf '%s\n' "$response" | head -5
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  local field
+  for field in title outputSchema annotations icons _meta futureField; do
+    if ! printf '%s' "$tool" | jq -e --arg f "$field" 'has($f)' >/dev/null; then
+      echo "FAIL: tools/list dropped $field"
+      printf '%s\n' "$tool"
+      rc=1
+    fi
+  done
+  if ! printf '%s' "$tool" | jq -e '.annotations.readOnlyHint == true' >/dev/null; then
+    echo "FAIL: annotations.readOnlyHint did not survive"
+    rc=1
+  fi
+  if printf '%s' "$tool" | jq -e 'has("execution")' >/dev/null; then
+    echo "FAIL: execution was forwarded downstream (mcpmu implements no tasks/*)"
+    rc=1
+  fi
+  # A float64 round trip would turn this into 9007199254740992.
+  if ! printf '%s' "$tool" | grep -q 9007199254740993; then
+    echo "FAIL: a large integer in inputSchema was mangled by a round trip"
+    printf '%s\n' "$tool"
+    rc=1
+  fi
+  if ! printf '%s\n' "$response" \
+    | jq -e 'select(.id == 3) | select(.result.structuredContent.thing == "value")' >/dev/null; then
+    echo "FAIL: structuredContent did not survive tools/call"
+    printf '%s\n' "$response" | head -5
+    rc=1
+  fi
+  if ! printf '%s\n' "$response" | jq -e 'select(.id == 3) | .result | has("_meta")' >/dev/null; then
+    echo "FAIL: result _meta did not survive tools/call"
+    rc=1
+  fi
+
+  rm -rf "$tmp"
+  return "$rc"
+}
+
+# Verifies downstream protocol version negotiation: the revision the client
+# asked for comes back, not a hard-coded one.
+#
+# mcpmu negotiates up to 2025-11-25 upstream, so presenting a 2024 face to the
+# agent left every field above technically present and practically unused.
+smoke_protocol_negotiation() {
+  local cfg negotiated rc=0
+
+  command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not available"; return 0; }
+
+  cfg=$(new_temp_config)
+
+  ask_version() {
+    local requested="$1"
+    {
+      printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"%s","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}\n' "$requested"
+      sleep 1
+    } | ./mcpmu serve --stdio --isolated --config "$cfg" 2>/dev/null \
+      | jq -r 'select(.id == 1) | .result.protocolVersion' 2>/dev/null
+  }
+
+  local requested
+  for requested in 2025-11-25 2025-06-18 2024-11-05; do
+    negotiated=$(ask_version "$requested")
+    if [[ "$negotiated" != "$requested" ]]; then
+      echo "FAIL: client asked for $requested, mcpmu answered ${negotiated:-<nothing>}"
+      rc=1
+    fi
+  done
+
+  # An unknown future revision must get mcpmu's own newest, not an echo.
+  negotiated=$(ask_version 2099-01-01)
+  if [[ "$negotiated" != "2025-11-25" ]]; then
+    echo "FAIL: unknown revision answered ${negotiated:-<nothing>}, want 2025-11-25"
+    rc=1
+  fi
+
+  rm -f "$cfg"
+  return "$rc"
+}
+
+# Verifies the request lifecycle end to end: a cancelled tool call is withdrawn
+# from the upstream server, and progress notifications reach the client carrying
+# the client's own progressToken.
+#
+# Both used to be dead ends — cancellation was a log line, and the request
+# `_meta` that carries progressToken was dropped before it reached upstream, so
+# no server was ever asked for progress at all.
+smoke_cancel_and_progress() {
+  local tmp cfg fake upstream_log response rc=0
+
+  command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not available"; return 0; }
+
+  tmp=$(mktemp -d -t mcpmu-smoke-lifecycle.XXXXXX)
+  cfg="$tmp/config.json"
+  fake="$tmp/fake-mcp.sh"
+  upstream_log="$tmp/upstream.log"
+
+  cat > "$fake" <<'EOF'
+#!/usr/bin/env bash
+# Logs every method it is sent, emits progress for any call that carries a
+# progressToken, and takes 5s to answer tools/call so there is time to cancel.
+log="$UPSTREAM_LOG"
+while IFS= read -r line; do
+  method=$(printf '%s' "$line" | jq -r '.method // empty')
+  id=$(printf '%s' "$line" | jq -r '.id // empty')
+  printf '%s\n' "$method" >> "$log"
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"smoke-lifecycle","version":"1"}}}\n' "$id"
+      ;;
+    tools/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"slow","description":"slow","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    tools/call)
+      token=$(printf '%s' "$line" | jq -c '.params._meta.progressToken // empty')
+      if [[ -n "$token" ]]; then
+        printf '{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":%s,"progress":1,"total":2}}\n' "$token"
+      fi
+      sleep 5
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"done"}]}}\n' "$id"
+      ;;
+  esac
+done
+EOF
+  chmod 0700 "$fake"
+
+  jq -n --arg command "$fake" --arg log "$upstream_log" '{
+    schemaVersion: 1,
+    servers: {
+      lifecycle: {
+        command: $command,
+        startup_timeout_sec: 10,
+        env: { UPSTREAM_LOG: $log }
+      }
+    },
+    namespaces: {}
+  }' > "$cfg"
+
+  response=$({
+    printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}\n'
+    printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
+    printf '{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n'
+    sleep 3
+    # A call that asks for progress and is then withdrawn.
+    printf '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lifecycle.slow","arguments":{},"_meta":{"progressToken":"smoke-token"}}}\n'
+    sleep 2
+    printf '{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3,"reason":"smoke test"}}\n'
+    sleep 8
+  } | ./mcpmu serve --stdio --isolated --config "$cfg" 2>/dev/null)
+
+  if ! printf '%s\n' "$response" \
+    | jq -e 'select(.method == "notifications/progress") | select(.params.progressToken == "smoke-token")' >/dev/null; then
+    echo "FAIL: no progress notification carrying the client's own token reached the client"
+    printf '%s\n' "$response" | head -8
+    rc=1
+  fi
+  if printf '%s\n' "$response" | grep -q '"progressToken":"mcpmu/'; then
+    echo "FAIL: mcpmu's internal progress token leaked to the client"
+    rc=1
+  fi
+  if ! printf '%s\n' "$response" | jq -e 'select(.id == 3) | has("error")' >/dev/null; then
+    echo "FAIL: a cancelled tools/call did not return an error to the client"
+    printf '%s\n' "$response" | head -8
+    rc=1
+  fi
+  if ! grep -q 'notifications/cancelled' "$upstream_log" 2>/dev/null; then
+    echo "FAIL: the upstream server was never told the call was cancelled"
+    echo "upstream methods seen:"
+    cat "$upstream_log" 2>/dev/null | head -10
+    rc=1
+  fi
+
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # Register new smoke checks here.
 SMOKE_CHECKS=(
   smoke_cf_access_headers
   smoke_process_group_cleanup
   smoke_stdio_trailing_frame
   smoke_http_sse_notification
+  smoke_tool_metadata_fidelity
+  smoke_protocol_negotiation
+  smoke_cancel_and_progress
   smoke_daemon_control
   smoke_daemon_shim_fallback
   smoke_daemon_private_instances
