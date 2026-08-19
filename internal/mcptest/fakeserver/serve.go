@@ -197,6 +197,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				_ = writeResponse(out, req.ID, ToolCallResult{
 					Content:           []ContentBlock{{Type: "text", Text: text}},
 					StructuredContent: cfg.ToolResultStructured,
+					IsError:           cfg.ToolCallIsError,
 					Meta:              cfg.ToolResultMeta,
 				}, cfg)
 				continue
@@ -206,6 +207,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			_ = writeResponse(out, req.ID, ToolCallResult{
 				Content:           []ContentBlock{{Type: "text", Text: "Tool executed: " + params.Name}},
 				StructuredContent: cfg.ToolResultStructured,
+				IsError:           cfg.ToolCallIsError,
 				Meta:              cfg.ToolResultMeta,
 			}, cfg)
 

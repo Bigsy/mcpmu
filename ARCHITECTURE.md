@@ -512,6 +512,7 @@ mcpmu embeds a `SKILL.md` file in the binary (`cmd/mcpmu/skill_data/SKILL.md` vi
 - `actions.go` — Live action handlers (start/stop, OAuth login/logout, denied tools, permissions, server defaults, set default namespace)
 - `handlers.go` — JSON API endpoints (`/api/servers`, `/api/namespaces`, `/api/config/export|import`)
 - `registry.go` — Registry browser page, htmx fragment, and JSON API (`/api/registry/search`)
+- `metrics.go` — Usage-metrics page, htmx fragments, and JSON API (`/metrics`, `/api/metrics`); see Usage Metrics below
 - `fragments.go` — htmx fragment handlers (server table, status pill, registry results)
 - `sse.go` — Server-Sent Events for live log streaming
 - `status.go` — `StatusTracker` subscribes to event bus, maintains last-known status per server
@@ -520,6 +521,24 @@ mcpmu embeds a `SKILL.md` file in the binary (`cmd/mcpmu/skill_data/SKILL.md` vi
 **Data flow**: Browser requests go through middleware to handlers, which read/write config (same `internal/config` package as TUI), interact with the supervisor for start/stop, and subscribe to the event bus for live status and logs.
 
 **Config mutations**: The `mutateConfig` helper reloads config from disk, applies the mutation, and atomically saves — safe for the single-manager design.
+
+## Usage Metrics
+
+Every tool call routed through serve mode is counted into daily usage buckets and surfaced in the web UI's **Metrics** page (plus a compact block on each server detail page). The headline question the feature answers: *"Am I actually using all the tools I've assigned?"* — hence the dedicated unused-tools view.
+
+**Write path** (`internal/metrics`): tool calls are dispatched in serve-mode processes (the shared daemon or an embedded serve), never in the web process, so metrics flow through a file on disk. `Router.CallTool` records one `CallSample` per call at exit — outcome `ok`, `tool_error` (upstream returned `isError`), `error` (transport/startup failure), `timeout`, or `denied` (permission refusal; duration 0). Manager tools record under server `mcpmu`. Misaddressed calls (server not found) are not tool usage and are not recorded; the internal 4xx-reinit retry records only the final outcome. The `Recorder` lives on `Core` (one per process, reached via the Session), accumulates a delta in memory (mutex-only, no I/O on the call path), and flushes every ~30s plus once on `Core.Close`. A nil `*Recorder` is valid and a no-op, so call sites are unconditional.
+
+**Multi-writer story**: a daemon and one or more embedded serves can run concurrently against the same config. Each flush is a read-merge-write of `metrics.json` under an exclusive file lock (`metrics.json.lock`, via `process.LockFileBlocking` on the same flock/LockFileEx primitive as `manager.lock`; the lock file is never deleted, for the same inode-race reason). Because each writer contributes only its own delta since its last flush, no writer clobbers another's counts; a crash costs at most one flush interval of data. Writes land in a temp file, fsync, then atomic rename — so readers (the web process) never need the lock. On flush failure the delta is merged back and retried on the next tick.
+
+**Storage**: `metrics.json` sits next to the active config file, exactly like `toolcache.json` (custom config path → same directory; default → `~/.config/mcpmu/`). Rows are a flat array keyed by `(date, namespace, server, tool)` — daily buckets, local-time dates — holding call counts, per-outcome tallies, duration sum/max, and a fixed-boundary latency histogram (p50/p95 are estimated by interpolating the histogram on the read side). A denied call counts toward `calls` and the outcome tally but stays out of the latency aggregates — it never reached an upstream, and folding its zero duration in would drag p50/p95 toward zero for a mostly-refused tool. The read side therefore reports latency over `TimedCalls` (calls minus denials) and renders an em dash when that is zero. A rolling `recent` feed keeps the last 200 calls. An unparseable file is renamed to `metrics.json.corrupt` and collection restarts fresh — a metrics file never takes serve down.
+
+**Retention**: rows older than `metrics.retentionDays` (default 60) are pruned by each flush that writes; a flush with an empty delta returns without touching the file, so an idle process leaves the sidecar alone. Config: `metrics.enabled` (default true) and `metrics.retentionDays` under a `metrics` block; hot-reload flips the recorder on/off live.
+
+**Privacy rule (hard)**: buckets and the recent feed carry *names, timestamps, durations, and outcomes only* — never tool arguments, results, or error message bodies. Arguments routinely contain secrets and personal data; they must not land in a sidecar file.
+
+**Read path** (`internal/web/metrics.go`): the web process re-reads `metrics.json` per request, cached by file mtime+size so htmx polling stays cheap. The page shows summary tiles, a server-rendered SVG calls-per-day chart, a sortable per-tool table with sparklines, the unused-tools panel, and a recent-calls feed (5s htmx poll); `/api/metrics` returns the same view as JSON. Charts are inline SVG built from precomputed view-models — no JS chart dependencies. The unused-tools computation lives in the web package because it needs config + toolcache + permissions: per namespace, each assigned server's discovered tools (from the shared `ToolCache`) are filtered through `server.IsToolAllowed` and diffed against the called set; "exposed" therefore reflects the last discovery snapshot, and a never-started server reports "no discovery data" rather than "all unused". The same pass produces the coverage tile: `toolsUsed` is the exposed∩called intersection, not every tool with a row, because a denied call records against a tool that is by definition not exposed (`toolsCalled` in the JSON keeps the row-based count). When the config has no namespaces at all, serve exposes every enabled server under the empty namespace — the `(none)` filter reproduces that grouping so rows recorded before the first namespace was created still diff against real exposure. Data lags live activity by up to one flush interval.
+
+**Not in scope (v1)**: OpenTelemetry export (`Recorder.Record` is the seam an exporter would sit behind), a TUI metrics view, per-client dimensions, hourly buckets, and a CLI command (`/api/metrics` + `jq` covers scripting).
 
 ## Key Design Principles
 

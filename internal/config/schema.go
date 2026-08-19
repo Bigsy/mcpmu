@@ -124,6 +124,12 @@ type ToolPermission struct {
 	Enabled   bool   `json:"enabled"`
 }
 
+// MetricsConfig controls usage-metrics collection in serve mode.
+type MetricsConfig struct {
+	Enabled       *bool `json:"enabled,omitempty"`       // nil/true = on
+	RetentionDays int   `json:"retentionDays,omitempty"` // 0 = default 60
+}
+
 // Config is the root configuration structure.
 type Config struct {
 	SchemaVersion    int                        `json:"schemaVersion"`
@@ -132,6 +138,7 @@ type Config struct {
 	Servers          map[string]ServerConfig    `json:"servers"`
 	Namespaces       map[string]NamespaceConfig `json:"namespaces,omitempty"`
 	ToolPermissions  []ToolPermission           `json:"toolPermissions,omitempty"`
+	Metrics          *MetricsConfig             `json:"metrics,omitempty"`
 	LastModified     time.Time                  `json:"lastModified"`
 
 	// OAuth settings (Codex-compatible)
@@ -151,6 +158,25 @@ func (c Config) IsDaemonModeEnabled() bool {
 		return DefaultDaemonMode
 	}
 	return *c.DaemonMode
+}
+
+// DefaultMetricsRetentionDays is how long daily usage buckets are kept when
+// metrics.retentionDays is absent.
+const DefaultMetricsRetentionDays = 60
+
+// MetricsEnabled reports whether usage-metrics collection is on. An absent
+// block or absent enabled field means on.
+func (c *Config) MetricsEnabled() bool {
+	return c.Metrics == nil || c.Metrics.Enabled == nil || *c.Metrics.Enabled
+}
+
+// MetricsRetentionDays returns the metrics retention window in days, with a
+// default of DefaultMetricsRetentionDays.
+func (c *Config) MetricsRetentionDays() int {
+	if c.Metrics == nil || c.Metrics.RetentionDays <= 0 {
+		return DefaultMetricsRetentionDays
+	}
+	return c.Metrics.RetentionDays
 }
 
 // NewConfig creates a new empty configuration with default values.

@@ -1,0 +1,146 @@
+{{define "title"}}Metrics — mcpmu{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Metrics</h1>
+    <p class="subtitle">Tool usage across serve sessions &middot; updated continuously; counters flush every ~30s</p>
+  </div>
+  {{if .Enabled}}
+  <div class="metrics-filter">
+    <form method="GET" action="/metrics" style="margin:0">
+      <input type="hidden" name="days" value="{{.Query.Days}}">
+      <select name="ns" onchange="this.form.submit()">
+        {{range .Namespaces}}
+        <option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>
+        {{end}}
+      </select>
+    </form>
+    <div class="btn-group">
+      {{range .DayChoices}}
+      <a href="{{.URL}}" class="btn btn-sm{{if .Active}} btn-primary{{end}}">{{.Days}}d</a>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+</div>
+
+{{if not .Enabled}}
+<div class="card">
+  <div class="card-body">
+    <div class="empty" style="padding: 32px;">
+      <h3>Metrics are disabled</h3>
+      <p class="text-sm text-faint">Usage metrics are turned off in the config (<span class="mono">metrics.enabled: false</span>). Remove the setting or set it to <span class="mono">true</span> to start collecting.</p>
+    </div>
+  </div>
+</div>
+{{else if not .HasData}}
+<div class="card">
+  <div class="card-body">
+    <div class="empty" style="padding: 32px;">
+      <h3>No usage recorded yet</h3>
+      <p class="text-sm text-faint">Metrics are collected while <span class="mono">mcpmu serve</span> handles tool calls. Route some tool calls through serve mode and check back — counters flush every ~30s.</p>
+    </div>
+  </div>
+</div>
+{{else}}
+
+<div class="stat-tiles">
+  <div class="stat-tile">
+    <div class="stat-value">{{.Summary.TotalCalls}}</div>
+    <div class="stat-label">Total calls</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-value">{{.Summary.ToolsUsed}} <span class="stat-sub">of {{.Summary.ToolsExposed}} exposed</span></div>
+    <div class="stat-label">Tools used</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-value">{{.Summary.Errors}}{{if .Summary.ErrorRate}} <span class="stat-sub">{{.Summary.ErrorRate}}</span>{{end}}</div>
+    <div class="stat-label">Errors{{if gt .Summary.Denied 0}} &middot; {{.Summary.Denied}} denied{{end}}</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-value stat-value-name">{{if .Summary.BusiestTool}}{{.Summary.BusiestTool}}{{else}}&mdash;{{end}}</div>
+    <div class="stat-label">Busiest tool{{if .Summary.BusiestTool}} ({{.Summary.BusiestCalls}} calls){{end}}</div>
+  </div>
+</div>
+
+{{if .Chart}}
+<div class="card section">
+  <div class="card-header">
+    <h2>Calls per day</h2>
+  </div>
+  <div class="card-body">
+    <svg class="metrics-chart" viewBox="0 0 {{.Chart.W}} {{.Chart.H}}" preserveAspectRatio="none" role="img" aria-label="Calls per day">
+      {{range .Chart.Bars}}
+      <g>
+        <title>{{.Title}}</title>
+        <rect class="chart-bar{{if .Stub}} chart-stub{{end}}" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"/>
+        {{if gt .EH 0}}<rect class="chart-bar-err" x="{{.X}}" y="{{.EY}}" width="{{.W}}" height="{{.EH}}"/>{{end}}
+      </g>
+      {{end}}
+    </svg>
+  </div>
+</div>
+{{end}}
+
+<div class="card section">
+  <div class="card-header">
+    <h2>Per-tool usage</h2>
+  </div>
+  <div class="card-body no-pad">
+    <div class="table-wrap" id="metrics-table">
+      {{template "metrics_table" .Table}}
+    </div>
+  </div>
+</div>
+
+<div class="card section">
+  <div class="card-header">
+    <h2>Never called in this window</h2>
+    {{if gt .UnusedTotal 0}}<span class="badge badge-warning">{{.UnusedTotal}}</span>{{end}}
+  </div>
+  <div class="card-body">
+    {{if .Unused}}
+      {{range .Unused}}
+      <div class="unused-group">
+        <div class="unused-ns">
+          <span class="badge badge-ns">{{.Namespace}}</span>
+          <span class="text-sm text-faint">{{.Count}} unused</span>
+        </div>
+        {{range .Servers}}
+        <div class="unused-server">
+          <span class="unused-server-name mono">{{.Server}}</span>
+          {{if .NoDiscovery}}
+            <span class="text-sm text-faint">no discovery data yet — start the server once to cache its tools</span>
+          {{else}}
+            <span class="unused-chips">
+              {{range .Tools}}<span class="chip">{{.}}</span>{{end}}
+            </span>
+          {{end}}
+        </div>
+        {{end}}
+      </div>
+      {{end}}
+    {{else}}
+      <p class="text-sm text-faint">Every exposed tool was called in this window.</p>
+    {{end}}
+    <p class="text-xs text-faint" style="margin-top: 8px;">&ldquo;Exposed&rdquo; reflects the last discovery snapshot in <span class="mono">toolcache.json</span> plus permission rules.</p>
+  </div>
+</div>
+
+<div class="card section">
+  <div class="card-header">
+    <h2>Recent calls</h2>
+  </div>
+  <div class="card-body no-pad">
+    <div class="table-wrap" id="metrics-recent"
+         hx-get="{{.RecentFragURL}}"
+         hx-trigger="every 5s"
+         hx-swap="innerHTML">
+      {{template "metrics_recent" .Recent}}
+    </div>
+  </div>
+</div>
+
+{{end}}
+{{end}}

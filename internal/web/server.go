@@ -15,6 +15,7 @@ import (
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
+	"github.com/Bigsy/mcpmu/internal/metrics"
 	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/Bigsy/mcpmu/internal/registry"
 )
@@ -41,6 +42,13 @@ type Server struct {
 
 	// Config file watcher: broadcasts to SSE clients on external changes.
 	configBcast *configBroadcaster
+
+	// Metrics store cache, keyed by file mtime+size so htmx polling stays
+	// cheap. Guarded by metricsMu.
+	metricsMu    sync.Mutex
+	metricsStore *metrics.Store
+	metricsMtime time.Time
+	metricsSize  int64
 }
 
 // Options configures the web server.
@@ -136,6 +144,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /servers/{name}", s.handleServerDetailPage)
 	mux.HandleFunc("GET /namespaces", s.handleNamespacesPage)
 	mux.HandleFunc("GET /namespaces/{name}", s.handleNamespaceDetailPage)
+	mux.HandleFunc("GET /metrics", s.handleMetricsPage)
 
 	// Pages — forms (Phase 2)
 	mux.HandleFunc("GET /servers/add", s.handleServerAddPage)
@@ -185,11 +194,14 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/config/import", s.handleAPIImportConfig)
 	mux.HandleFunc("POST /api/config/import/apply", s.handleAPIImportApply)
 	mux.HandleFunc("GET /api/registry/search", s.handleAPIRegistrySearch)
+	mux.HandleFunc("GET /api/metrics", s.handleAPIMetrics)
 
 	// Fragments (HTML partials for htmx swaps)
 	mux.HandleFunc("GET /fragments/servers/table", s.handleFragmentServerTable)
 	mux.HandleFunc("GET /fragments/servers/{name}/status", s.handleFragmentServerStatus)
 	mux.HandleFunc("GET /fragments/registry/results", s.handleFragmentRegistryResults)
+	mux.HandleFunc("GET /fragments/metrics/table", s.handleFragmentMetricsTable)
+	mux.HandleFunc("GET /fragments/metrics/recent", s.handleFragmentMetricsRecent)
 
 	// SSE
 	mux.HandleFunc("GET /servers/{name}/logs/stream", s.handleSSELogs)
@@ -206,6 +218,7 @@ var pageTemplates = []string{
 	"templates/namespace_form.html",
 	"templates/config_import.html",
 	"templates/registry.html",
+	"templates/metrics.html",
 }
 
 func parseTemplates(authEnabled bool) (map[string]*template.Template, error) {

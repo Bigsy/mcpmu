@@ -893,3 +893,139 @@ textarea { min-height: 80px; resize: vertical; }
 .text-xs { font-size: 11px; }
 .fw-500 { font-weight: 500; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Metrics ── */
+.metrics-filter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.metrics-filter select {
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-tile {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.stat-value-name {
+  font-size: 15px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.stat-label {
+  margin-top: 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.metrics-chart {
+  display: block;
+  width: 100%;
+  height: 120px;
+  color: var(--primary);
+}
+
+.sparkline {
+  display: block;
+  width: 120px;
+  height: 20px;
+  color: var(--primary);
+}
+
+.chart-bar { fill: currentColor; }
+.chart-stub { fill: var(--border); }
+.chart-bar-err { fill: var(--danger); }
+
+.sort-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.sort-link:hover { color: var(--primary); }
+.sort-link.active { color: var(--primary); }
+.sort-dir { margin-left: 3px; }
+
+.unused-group {
+  padding: 8px 0;
+}
+
+.unused-group + .unused-group {
+  border-top: 1px solid var(--border);
+}
+
+.unused-ns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.unused-server {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0 4px 12px;
+}
+
+.unused-server-name {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.unused-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--warning-bg);
+  color: var(--warning);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pill-outcome-ok      { background: var(--success-bg-solid); color: var(--success); }
+.pill-outcome-error   { background: var(--danger-bg-solid); color: var(--danger); }
+.pill-outcome-timeout { background: var(--warning-bg-solid); color: var(--warning); }
+.pill-outcome-denied  { background: var(--bg-hover); color: var(--text-faint); }

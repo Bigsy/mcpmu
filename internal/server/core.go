@@ -14,6 +14,7 @@ import (
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
 	"github.com/Bigsy/mcpmu/internal/mcp"
+	"github.com/Bigsy/mcpmu/internal/metrics"
 	"github.com/Bigsy/mcpmu/internal/process"
 )
 
@@ -24,6 +25,7 @@ type Core struct {
 	coreMu           sync.RWMutex
 	cfg              *config.Config
 	configGeneration uint64
+	recorder         *metrics.Recorder // nil when metrics are disabled or unavailable
 	resourceStateMu  sync.RWMutex
 	sessionsMu       sync.RWMutex
 	sessions         map[*Session]struct{}
@@ -72,6 +74,7 @@ func NewCore(opts Options) (*Core, error) {
 	c := &Core{
 		cfg:              opts.Config,
 		configGeneration: 1,
+		recorder:         newRecorderForConfig(opts.Config, opts.ConfigPath),
 		sessions:         make(map[*Session]struct{}),
 		subscriptions:    newResourceSubscriptions(),
 		bus:              bus,
@@ -102,6 +105,27 @@ func (c *Core) currentAggregator() *Aggregator {
 	return c.aggregator
 }
 
+func (c *Core) currentRecorder() *metrics.Recorder {
+	c.coreMu.RLock()
+	defer c.coreMu.RUnlock()
+	return c.recorder
+}
+
+// newRecorderForConfig builds the usage-metrics recorder for a config, or nil
+// when metrics are disabled, no config path is set, or the sidecar path cannot
+// be resolved. A nil recorder is valid everywhere (all methods are no-ops).
+func newRecorderForConfig(cfg *config.Config, configPath string) *metrics.Recorder {
+	if configPath == "" || !cfg.MetricsEnabled() {
+		return nil
+	}
+	path, err := metrics.MetricsPath(configPath)
+	if err != nil {
+		log.Printf("Warning: failed to resolve metrics path: %v", err)
+		return nil
+	}
+	return metrics.NewRecorder(path, cfg.MetricsRetentionDays())
+}
+
 func (c *Core) replaceConfig(cfg *config.Config) *Aggregator {
 	aggregator := NewAggregator(cfg, c.supervisor, false)
 	aggregator.acquire = c.getOrStartHandle
@@ -109,7 +133,24 @@ func (c *Core) replaceConfig(cfg *config.Config) *Aggregator {
 	c.cfg = cfg
 	c.aggregator = aggregator
 	c.configGeneration++
+	// Swap the metrics recorder if metrics.enabled flipped. Retention changes
+	// just update the live recorder and take effect on its next flush.
+	var stale *metrics.Recorder
+	switch {
+	case c.recorder == nil:
+		c.recorder = newRecorderForConfig(cfg, c.configPath)
+	case !cfg.MetricsEnabled():
+		stale = c.recorder
+		c.recorder = nil
+	default:
+		c.recorder.SetRetentionDays(cfg.MetricsRetentionDays())
+	}
 	c.coreMu.Unlock()
+	if stale != nil {
+		if err := stale.Close(); err != nil {
+			log.Printf("Warning: failed to close metrics recorder: %v", err)
+		}
+	}
 	return aggregator
 }
 
@@ -346,6 +387,9 @@ func (c *Core) Close() {
 		c.resourceStateMu.Unlock()
 		c.supervisor.StopAll()
 		c.notifications.Close()
+		if err := c.currentRecorder().Close(); err != nil {
+			log.Printf("Warning: final metrics flush failed: %v", err)
+		}
 		c.bus.Close()
 	})
 }

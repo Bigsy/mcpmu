@@ -509,6 +509,85 @@ EOF
   return "$rc"
 }
 
+# Verifies the usage-metrics write path end to end: a tool call routed through
+# a real serve process must land in metrics.json (co-located with the config)
+# after the shutdown flush, with names/timings only — never arguments.
+#
+# This crosses two process boundaries (serve subprocess, fake upstream) and
+# exercises the flock merge + atomic rename against a real filesystem, which
+# unit tests approximate but cannot fully prove.
+smoke_usage_metrics() {
+  local tmp cfg fake response rc=0
+  tmp=$(mktemp -d -t mcpmu-smoke-metrics.XXXXXX)
+  cfg="$tmp/config.json"
+  fake="$tmp/fake-mcp.sh"
+
+  cat > "$fake" <<'EOF'
+#!/usr/bin/env bash
+while IFS= read -r line; do
+  method=$(printf '%s' "$line" | jq -r '.method // empty')
+  id=$(printf '%s' "$line" | jq -r '.id // empty')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"smoke-metrics","version":"1"}}}\n' "$id"
+      ;;
+    tools/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","description":"ping","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    tools/call)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong"}]}}\n' "$id"
+      ;;
+  esac
+done
+EOF
+  chmod 0700 "$fake"
+
+  jq -n --arg command "$fake" '{
+    schemaVersion: 1,
+    servers: {
+      pinger: {
+        command: $command,
+        startup_timeout_sec: 5
+      }
+    },
+    namespaces: {}
+  }' > "$cfg"
+
+  response=$({
+    printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}\n'
+    printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
+    printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pinger.ping","arguments":{"smoke_secret_arg":"do-not-store"}}}\n'
+    sleep 5
+  } | ./mcpmu serve --stdio --isolated --config "$cfg" 2>/dev/null)
+
+  if ! printf '%s\n' "$response" \
+    | jq -e 'select(.id == 2) | select(.result.content[0].text == "pong")' >/dev/null; then
+    echo "FAIL: tool call through serve did not succeed"
+    printf '%s\n' "$response" | head -5
+    rc=1
+  fi
+
+  # The final flush on shutdown must have written the sidecar next to the config.
+  if [ ! -f "$tmp/metrics.json" ]; then
+    echo "FAIL: metrics.json was not written next to the config"
+    rc=1
+  elif ! jq -e '.rows[] | select(.server == "pinger" and .tool == "ping" and .calls >= 1 and .outcomes.ok >= 1)' \
+      "$tmp/metrics.json" >/dev/null; then
+    echo "FAIL: metrics.json is missing the pinger.ping ok row"
+    jq . "$tmp/metrics.json" | head -20
+    rc=1
+  fi
+
+  # Privacy: tool arguments must never land in the metrics file.
+  if [ -f "$tmp/metrics.json" ] && grep -q "do-not-store" "$tmp/metrics.json"; then
+    echo "FAIL: tool arguments leaked into metrics.json"
+    rc=1
+  fi
+
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # Verifies that a resource-update notification from an HTTP upstream reaches a
 # downstream client through `mcpmu serve`.
 #
@@ -916,6 +995,7 @@ SMOKE_CHECKS=(
   smoke_cf_access_headers
   smoke_process_group_cleanup
   smoke_stdio_trailing_frame
+  smoke_usage_metrics
   smoke_http_sse_notification
   smoke_tool_metadata_fidelity
   smoke_protocol_negotiation

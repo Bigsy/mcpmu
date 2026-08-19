@@ -1,0 +1,48 @@
+{{define "metrics_table"}}
+{{if .Rows}}
+<table>
+  <thead>
+    <tr>
+      {{range .Headers}}
+      <th><a class="sort-link{{if .Active}} active{{end}}"
+             href="{{.URL}}"
+             hx-get="{{.FragURL}}"
+             hx-target="#metrics-table"
+             hx-swap="innerHTML">{{.Label}}{{if .Active}}<span class="sort-dir">{{if eq .Dir "desc"}}&darr;{{else}}&uarr;{{end}}</span>{{end}}</a></th>
+      {{end}}
+      <th>Trend</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rows}}
+    <tr>
+      <td class="td-name">
+        <a href="/servers/{{.Server}}" class="mono">{{.Server}}.{{.Tool}}</a>
+      </td>
+      <td><span class="mono text-sm">{{.Calls}}</span></td>
+      <td>
+        {{if gt .Errors 0}}<span class="mono text-sm" style="color: var(--danger)">{{.Errors}}</span>{{else}}<span class="text-faint">&mdash;</span>{{end}}
+        {{if gt .Denied 0}}<span class="badge badge-warning" title="Denied calls">{{.Denied}} denied</span>{{end}}
+      </td>
+      <td><span class="mono text-sm">{{.P50}}</span></td>
+      <td><span class="mono text-sm">{{.P95}}</span></td>
+      <td>
+        {{if .LastCalled}}<span class="mono text-sm text-faint">{{.LastCalled}}</span>{{else}}<span class="text-faint">&mdash;</span>{{end}}
+      </td>
+      <td>
+        {{if .Spark}}
+        <svg class="sparkline" viewBox="0 0 {{.Spark.W}} {{.Spark.H}}" preserveAspectRatio="none">
+          {{range .Spark.Bars}}<rect class="chart-bar{{if .Stub}} chart-stub{{end}}" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"/>{{end}}
+        </svg>
+        {{end}}
+      </td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="empty" style="padding: 24px;">
+  <p class="text-sm text-faint">No tool calls in this window.</p>
+</div>
+{{end}}
+{{end}}

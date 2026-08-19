@@ -7,6 +7,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/Bigsy/mcpmu/internal/metrics"
 )
 
 // Router routes tool calls to the appropriate upstream server.
@@ -33,15 +35,46 @@ func (r *Router) SetActiveNamespace(namespaceName string, selection SelectionMet
 // result. meta is the request's `_meta` object as it should reach the upstream
 // server — already rewritten by the caller where mcpmu must not forward a
 // value verbatim (progressToken).
+//
+// Every dispatched call is recorded as exactly one usage-metrics sample at
+// exit, whatever the path. Misaddressed calls (server not found) are not tool
+// usage and are not recorded; the internal 4xx-reinit retry is one call, so
+// only the final outcome is recorded.
 func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, meta json.RawMessage) (*ToolCallResult, *RPCError) {
 	log.Printf("CallTool: %s", qualifiedName)
+
+	start := time.Now()
 
 	// Parse the tool name
 	serverName, toolName, isManager := ParseToolName(qualifiedName)
 
 	// Handle manager tools (always allowed, no permission check)
 	if isManager {
-		return r.handleManagerTool(ctx, qualifiedName, arguments)
+		result, rpcErr := r.handleManagerTool(ctx, qualifiedName, arguments)
+		outcome := metrics.OutcomeOK
+		if rpcErr != nil {
+			outcome = metrics.OutcomeError
+		}
+		r.session.currentRecorder().Record(metrics.CallSample{
+			Time:      start,
+			Namespace: r.activeNamespaceName,
+			Server:    "mcpmu",
+			Tool:      strings.TrimPrefix(qualifiedName, "mcpmu."),
+			Duration:  time.Since(start),
+			Outcome:   outcome,
+		})
+		return result, rpcErr
+	}
+
+	record := func(outcome metrics.Outcome, duration time.Duration) {
+		r.session.currentRecorder().Record(metrics.CallSample{
+			Time:      start,
+			Namespace: r.activeNamespaceName,
+			Server:    serverName,
+			Tool:      toolName,
+			Duration:  duration,
+			Outcome:   outcome,
+		})
 	}
 
 	// Permission check — always runs. IsToolAllowed handles:
@@ -51,6 +84,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	cfg := r.session.currentConfig()
 	allowed, reason := IsToolAllowed(cfg, r.activeNamespaceName, serverName, toolName)
 	if !allowed {
+		record(metrics.OutcomeDenied, 0)
 		return nil, ErrToolDenied(qualifiedName, reason)
 	}
 
@@ -63,6 +97,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	// Acquire through the Core's single lazy-start/readiness path.
 	sc, rpcErr := r.session.getOrStartServer(ctx, serverName)
 	if rpcErr != nil {
+		record(metrics.OutcomeError, time.Since(start))
 		return nil, rpcErr
 	}
 	client := sc.client
@@ -75,6 +110,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	result, err := client.CallToolWithMeta(callCtx, toolName, arguments, meta)
 	if err != nil {
 		if callCtx.Err() == context.DeadlineExceeded {
+			record(metrics.OutcomeTimeout, time.Since(start))
 			return nil, ErrToolCallTimeout(serverName, toolName)
 		}
 
@@ -87,6 +123,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 
 			reinitialized, reinitErr := r.session.getOrStartServer(ctx, serverName)
 			if reinitErr != nil {
+				record(metrics.OutcomeError, time.Since(start))
 				return nil, ErrInternalError(fmt.Sprintf("tool call failed (reinit: %v) (original: %v)", reinitErr, err))
 			}
 			client = reinitialized.client
@@ -96,13 +133,21 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 
 			result, err = client.CallToolWithMeta(retryCtx, toolName, arguments, meta)
 			if err != nil {
+				record(metrics.OutcomeError, time.Since(start))
 				return nil, ErrInternalError(fmt.Sprintf("tool call failed after reinit: %v", err))
 			}
 
 			log.Printf("CallTool: retry succeeded for %s.%s after reinit", serverName, toolName)
 		} else {
+			record(metrics.OutcomeError, time.Since(start))
 			return nil, ErrInternalError(fmt.Sprintf("tool call failed: %v", err))
 		}
+	}
+
+	if result.IsError {
+		record(metrics.OutcomeToolError, time.Since(start))
+	} else {
+		record(metrics.OutcomeOK, time.Since(start))
 	}
 
 	// Pass through the content blocks directly (they're already json.RawMessage)

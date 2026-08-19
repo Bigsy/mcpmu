@@ -197,6 +197,7 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 - **Registry browser** — Search the official MCP server registry from the TUI and install with pre-populated config (`a` → Official Registry)
 - **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
 - **Web UI** — Browser-based management via `mcpmu web` with live log streaming, CRUD operations, and registry browser
+- **Usage metrics** — Per-tool call counts, error rates, and latency collected in serve mode, with an unused-tools view answering "am I actually using all the tools I've assigned?" (web UI **Metrics** page, or `GET /api/metrics` for scripting)
 
 ## Serve Mode
 

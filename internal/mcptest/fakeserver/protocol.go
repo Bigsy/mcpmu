@@ -65,8 +65,9 @@ type Config struct {
 	Malformed bool `json:"malformed"` // write invalid JSON
 
 	// Tool call handling
-	ToolHandler   ToolHandler `json:"-"`             // Custom handler for tools/call (not JSON-serializable)
-	EchoToolCalls bool        `json:"echoToolCalls"` // If true, tools/call returns the tool name and arguments as text
+	ToolHandler     ToolHandler `json:"-"`                         // Custom handler for tools/call (not JSON-serializable)
+	EchoToolCalls   bool        `json:"echoToolCalls"`             // If true, tools/call returns the tool name and arguments as text
+	ToolCallIsError bool        `json:"toolCallIsError,omitempty"` // If true, tools/call responses set isError: true
 
 	// ToolResultStructured and ToolResultMeta are attached to every tools/call
 	// result, for asserting that the result envelope survives the proxy hop.

@@ -1,0 +1,30 @@
+{{define "metrics_recent"}}
+{{if .Rows}}
+<table>
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Namespace</th>
+      <th>Tool</th>
+      <th>Duration</th>
+      <th>Outcome</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rows}}
+    <tr>
+      <td><span class="mono text-sm text-faint">{{.Time}}</span></td>
+      <td><span class="badge badge-ns">{{.Namespace}}</span></td>
+      <td><span class="mono text-sm">{{.Qualified}}</span></td>
+      <td><span class="mono text-sm">{{.Duration}}</span></td>
+      <td><span class="pill {{.PillClass}}">{{.Outcome}}</span></td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="empty" style="padding: 24px;">
+  <p class="text-sm text-faint">No recent calls.</p>
+</div>
+{{end}}
+{{end}}

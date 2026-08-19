@@ -207,6 +207,75 @@
     </div>
     </div>
 
+    {{if .Usage.Enabled}}
+    <!-- Usage metrics -->
+    <div class="card section">
+      <div class="card-header">
+        <h2>Usage (last 30 days)</h2>
+        <a href="/metrics" class="text-sm text-faint">All metrics &rarr;</a>
+      </div>
+      {{if .Usage.HasData}}
+      <div class="card-body" style="padding-bottom: 8px;">
+        <span class="text-sm text-muted">
+          <span class="mono">{{.Usage.Calls}}</span> calls
+          &middot; <span class="mono"{{if gt .Usage.Errors 0}} style="color: var(--danger)"{{end}}>{{.Usage.Errors}}</span> errors
+          {{if gt .Usage.Denied 0}}&middot; <span class="mono">{{.Usage.Denied}}</span> denied{{end}}
+          {{if .Usage.LastCalled}}&middot; last called <span class="mono">{{.Usage.LastCalled}}</span>{{end}}
+        </span>
+      </div>
+      <div class="card-body no-pad">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Tool</th><th>Calls</th><th>p95</th><th>Last called</th><th>Trend</th></tr>
+            </thead>
+            <tbody>
+              {{range .Usage.Rows}}
+              <tr>
+                <td><span class="mono text-sm">{{.Tool}}</span></td>
+                <td><span class="mono text-sm">{{.Calls}}</span></td>
+                <td><span class="mono text-sm">{{.P95}}</span></td>
+                <td><span class="mono text-sm text-faint">{{.LastCalled}}</span></td>
+                <td>
+                  {{if .Spark}}
+                  <svg class="sparkline" viewBox="0 0 {{.Spark.W}} {{.Spark.H}}" preserveAspectRatio="none">
+                    {{range .Spark.Bars}}<rect class="chart-bar{{if .Stub}} chart-stub{{end}}" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"/>{{end}}
+                  </svg>
+                  {{end}}
+                </td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {{else}}
+      <div class="card-body">
+        <p class="text-sm text-faint">No usage recorded in the last 30 days. Metrics are collected while <span class="mono">mcpmu serve</span> handles tool calls.</p>
+      </div>
+      {{end}}
+      {{if .Usage.Unused}}
+      <div class="card-body" style="border-top: 1px solid var(--border);">
+        <p class="text-xs text-faint" style="margin-bottom: 6px;">Never called in this window</p>
+        {{range .Usage.Unused}}
+        <div class="unused-server" style="padding-left: 0;">
+          <span class="badge badge-ns">{{.Namespace}}</span>
+          <span class="unused-chips">
+            {{range .Servers}}
+              {{if .NoDiscovery}}
+                <span class="text-sm text-faint">no discovery data yet</span>
+              {{else}}
+                {{range .Tools}}<span class="chip">{{.}}</span>{{end}}
+              {{end}}
+            {{end}}
+          </span>
+        </div>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+
   </div>
 
   <!-- Right column: logs -->

@@ -322,33 +322,62 @@ func TestServer_ProgressReachesClientEndToEnd(t *testing.T) {
 		},
 	}
 
-	var stdout bytes.Buffer
-	stdin := strings.NewReader(
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"test","version":"1.0"}}}` + "\n" +
-			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"srv.slow","arguments":{},"_meta":{"progressToken":"client-chosen"}}}` + "\n",
-	)
+	// The tool result is written by the request handler while progress travels
+	// through the notification broadcaster's worker goroutine — two independent
+	// writers to the client with no ordering between them. Feeding the session
+	// from a pipe (rather than a string reader that hits EOF the moment both
+	// lines are consumed) lets the test wait out a deadline for the progress
+	// frame instead of implicitly requiring it to beat the result and the
+	// shutdown that follows.
+	clientIn, clientOut := io.Pipe()
+	output := &lockedBuffer{}
 
 	srv, err := New(Options{
 		Config: cfg, PIDTrackerDir: t.TempDir(),
-		Stdin: stdin, Stdout: &stdout,
+		Stdin: clientIn, Stdout: output,
 		ServerName: "mcpmu-test", ServerVersion: "1.0.0", LogLevel: "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_ = srv.Run(ctx)
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		_ = srv.Run(ctx)
+	}()
 
-	output := stdout.String()
-	if !strings.Contains(output, "notifications/progress") {
-		t.Fatalf("no progress reached the client:\n%s", output)
+	for _, line := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"test","version":"1.0"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"srv.slow","arguments":{},"_meta":{"progressToken":"client-chosen"}}}`,
+	} {
+		if _, err := clientOut.Write([]byte(line + "\n")); err != nil {
+			t.Fatalf("write to server: %v", err)
+		}
 	}
-	if !strings.Contains(output, `"progressToken":"client-chosen"`) {
-		t.Errorf("progress did not carry the client's own token:\n%s", output)
+
+	deadline := time.Now().Add(15 * time.Second)
+	for !strings.Contains(output.String(), "notifications/progress") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no progress reached the client:\n%s", output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if strings.Contains(output, `"progressToken":"mcpmu/`) {
-		t.Errorf("mcpmu's internal token leaked to the client:\n%s", output)
+
+	_ = clientOut.Close()
+	select {
+	case <-runDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after the client disconnected")
+	}
+
+	out := output.String()
+	if !strings.Contains(out, `"progressToken":"client-chosen"`) {
+		t.Errorf("progress did not carry the client's own token:\n%s", out)
+	}
+	if strings.Contains(out, `"progressToken":"mcpmu/`) {
+		t.Errorf("mcpmu's internal token leaked to the client:\n%s", out)
 	}
 }
 

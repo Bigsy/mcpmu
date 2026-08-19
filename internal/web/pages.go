@@ -116,6 +116,7 @@ type serverDetailData struct {
 	Namespaces []string
 	Cached     bool
 	IsLoggedIn bool // true if HTTP server has stored OAuth credentials
+	Usage      serverUsageVM
 }
 
 type toolDisplay struct {
@@ -200,6 +201,9 @@ func (s *Server) handleServerDetailPage(w http.ResponseWriter, r *http.Request) 
 			data.Namespaces = append(data.Namespaces, nsName)
 		}
 	}
+
+	// Usage metrics (last 30 days)
+	data.Usage = s.buildServerUsage(name)
 
 	s.render(w, "server_detail.html", data)
 }
