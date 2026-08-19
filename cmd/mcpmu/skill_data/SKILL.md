@@ -2,7 +2,7 @@
 name: mcpmu
 disable-model-invocation: true
 description: Install, set up, and manage MCP servers using the mcpmu CLI. Use when the user wants to install mcpmu, register it as an MCP server, add/remove/list MCP servers, manage namespaces, set tool permissions, manage server-level denied tools, or expose servers via serve mode.
-allowed-tools: Bash(mcpmu *), Bash(brew *), Bash(go install *), Bash(claude mcp *), Bash(codex mcp *), Bash(which mcpmu), Bash(command -v mcpmu)
+allowed-tools: Bash(mcpmu *), Bash(brew *), Bash(go install *), Bash(claude mcp *), Bash(codex mcp *), Bash(which mcpmu), Bash(command -v mcpmu), Bash(curl http://127.0.0.1:*), Bash(curl http://localhost:*)
 ---
 
 # mcpmu — MCP Server Manager
@@ -273,6 +273,7 @@ mcpmu serve --stdio -n work --eager          # pre-start all servers
 mcpmu serve --stdio --expose-manager-tools   # include mcpmu.* management tools
 mcpmu serve --stdio --log-level debug        # verbose logging
 mcpmu serve --stdio --isolated               # private embedded serve
+mcpmu serve --http                           # same endpoint over Streamable HTTP (see below)
 ```
 
 Flags:
@@ -280,7 +281,66 @@ Flags:
 - `--eager` — pre-start all servers (default: lazy/on-demand)
 - `--expose-manager-tools` — include mcpmu.* tools in tools/list
 - `-l, --log-level` — debug, info, warn, error
-- `--isolated` — bypass the shared daemon for this serve process
+- `--isolated` — bypass the shared daemon for this serve process (stdio only)
+
+### HTTP serve mode
+
+`mcpmu serve --http` exposes the same endpoint over the MCP Streamable HTTP
+transport (POST + SSE) instead of stdio — one long-running foreground process
+that any number of HTTP MCP clients can connect to. Each namespace gets its
+own URL from the one process: `POST /mcp` is the default namespace,
+`POST /mcp/{namespace}` selects one.
+
+```bash
+mcpmu serve --http                                    # 127.0.0.1:8081
+mcpmu serve --http --addr 127.0.0.1:9090              # custom port
+mcpmu serve --http --addr 0.0.0.0:8081 --token $TOK   # token mandatory off-loopback
+mcpmu serve --http --session-idle-timeout 1h --allow-origin https://myapp.example
+mcpmu serve --http --namespace work --eager           # stdio serve flags apply too
+```
+
+HTTP-only flags (each requires `--http`):
+- `--addr` — listen address (default: `127.0.0.1:8081`; the web UI owns 8080)
+- `--token` — bearer token required on every request (falls back to the
+  `MCPMU_SERVE_TOKEN` env var; the flag wins). Mandatory for a non-loopback
+  `--addr` — binding one without a token refuses to start. Loopback binds may
+  run tokenless.
+- `--allow-origin` — extra allowed `Origin`, repeatable (loopback origins are
+  always allowed)
+- `--session-idle-timeout` — reap sessions idle for this long (default `30m`,
+  `0` = never); an in-flight tool call counts as activity, so long calls are
+  never cut off
+
+Notes:
+- The process must stay running — launch it yourself (or via a process
+  manager); agents connect to it rather than spawning it.
+- `--isolated` is rejected with `--http` (there is no daemon to skip). For
+  per-session upstream instances use `"shared": false` on individual servers.
+- Health check: `curl http://127.0.0.1:8081/healthz` answers
+  `ok mcpmu <version>` without authentication.
+- TLS termination is out of scope — put a reverse proxy in front for network
+  deployments.
+
+Register the HTTP endpoint with an agent:
+
+**Claude Code:**
+```bash
+claude mcp add --transport http mcpmu http://127.0.0.1:8081/mcp
+claude mcp add --transport http work http://127.0.0.1:8081/mcp/work
+# with a token:
+claude mcp add --transport http mcpmu http://127.0.0.1:8081/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+**Any MCP config JSON that supports HTTP servers:**
+```json
+{
+  "mcpmu": {
+    "url": "http://127.0.0.1:8081/mcp/work",
+    "headers": { "Authorization": "Bearer <token>" }
+  }
+}
+```
 
 ### Shared daemon behavior
 
