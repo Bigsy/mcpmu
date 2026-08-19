@@ -77,16 +77,26 @@ type StreamableHTTPTransport struct {
 	rpcClient *http.Client // Client for POST requests (with timeout)
 
 	// Session state
-	sessionID         string
+	sessionID string
+	// expiredSessionID latches the ID of a session the server 404'd until a
+	// replacement session is established. While latched, Send fails every
+	// non-initialize frame locally with SessionExpiredError instead of
+	// sending it: sessionID is already cleared, and a request without the
+	// header would come back 400 ("missing Mcp-Session-Id"), which nothing
+	// recognises as expiry — the client would be stuck failing forever. The
+	// local error routes every caller into the Client's reinitialize path.
+	expiredSessionID  string
 	endpointURL       string // POST endpoint URL (may include session ID query param)
 	lastEventID       string
 	negotiatedVersion string // Protocol version negotiated with server
 
-	// Standalone server→client SSE stream (the GET stream). Opened once, after
-	// the first successful POST has settled the protocol version and session ID.
+	// Standalone server→client SSE stream (the GET stream). Opened after the
+	// first successful POST has settled the protocol version and session ID.
+	// sseActive guards against double-starts; unlike a sync.Once it is
+	// cleared on session expiry so the fresh session reopens the stream.
 	sseCancel context.CancelFunc // cancels just the stream, derived from baseCtx
 	sseConn   io.ReadCloser      // active stream body, so Close can unblock the read
-	sseOnce   sync.Once
+	sseActive bool
 
 	// Message queue for received messages from SSE
 	msgQueue chan []byte
@@ -162,9 +172,24 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 		return errors.New("transport closed")
 	}
 	sessionID := t.sessionID
+	expiredSessionID := t.expiredSessionID
 	endpointURL := t.endpointURL
 	negotiatedVersion := t.negotiatedVersion
 	t.mu.Unlock()
+
+	if sessionID == "" && expiredSessionID != "" {
+		// Expired and not yet replaced. Only initialize may go to the wire —
+		// it is how the replacement session is minted (and the spec forbids
+		// it carrying a session header, so the cleared state is correct for
+		// it). Everything else fails locally as expired so the Client
+		// reinitializes, however many callers race into this window.
+		var m struct {
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(msg, &m); err != nil || m.Method != "initialize" {
+			return &SessionExpiredError{}
+		}
+	}
 
 	if DebugLogging {
 		log.Printf("HTTP Send: %s", string(msg))
@@ -262,11 +287,15 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 		}
 
 		// Capture session ID from response
+		// Any successful POST settles the expiry question: either the header
+		// carries the replacement session ID, or this server does not issue
+		// sessions at all — in both cases the latch must not survive.
+		t.mu.Lock()
 		if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
-			t.mu.Lock()
 			t.sessionID = sid
-			t.mu.Unlock()
 		}
+		t.expiredSessionID = ""
+		t.mu.Unlock()
 
 		// Check response status
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
@@ -277,6 +306,16 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 				// Uses all header values to find Bearer challenge with resource_metadata
 				challenge := oauth.ParseBearerChallenge(resp.Header)
 				return &UnauthorizedError{Challenge: challenge}
+			}
+			if resp.StatusCode == http.StatusNotFound && sessionID != "" {
+				// The server no longer knows our session. Per the Streamable
+				// HTTP spec the client MUST start over: clear the session
+				// state so the caller (Client) can reinitialize, and stop the
+				// stale standalone stream so the fresh session reopens it.
+				// (Callers that race in after the clearing never reach the
+				// wire — the expiredSessionID latch fails them locally.)
+				t.handleSessionExpired(sessionID)
+				return &SessionExpiredError{}
 			}
 			return fmt.Errorf("request failed: %s - %s", resp.Status, string(body))
 		}
@@ -416,29 +455,62 @@ func (t *StreamableHTTPTransport) trackGoroutine() bool {
 	return true
 }
 
-// startStandaloneSSE opens the server→client SSE stream, once per transport.
+// startStandaloneSSE opens the server→client SSE stream, once per session.
 //
 // This is the only channel for messages the server originates rather than sends
 // in reply: notifications/resources/updated for a subscribed resource, and
 // notifications/tools/list_changed. Without it, resources/subscribe succeeds
 // against an HTTP upstream and then never delivers anything.
+//
+// The guard is restartable: handleSessionExpired clears sseActive along with
+// the session state, so the first successful POST of the replacement session
+// opens a fresh stream. A stream that ends on its own (the server declined it
+// permanently) leaves sseActive set — reconnecting would just repeat.
 func (t *StreamableHTTPTransport) startStandaloneSSE() {
-	t.sseOnce.Do(func() {
-		t.mu.Lock()
-		if t.closed {
-			t.mu.Unlock()
-			return
-		}
-		streamCtx, cancel := context.WithCancel(t.baseCtx)
-		t.sseCancel = cancel
-		t.wg.Add(1)
+	t.mu.Lock()
+	if t.closed || t.sseActive {
 		t.mu.Unlock()
+		return
+	}
+	streamCtx, cancel := context.WithCancel(t.baseCtx)
+	t.sseCancel = cancel
+	t.sseActive = true
+	t.wg.Add(1)
+	t.mu.Unlock()
 
-		go func() {
-			defer t.wg.Done()
-			t.runStandaloneSSE(streamCtx)
-		}()
-	})
+	go func() {
+		defer t.wg.Done()
+		t.runStandaloneSSE(streamCtx)
+	}()
+}
+
+// handleSessionExpired resets per-session state after the server answered 404
+// for a session it once issued. No-op if a concurrent recovery already
+// replaced the session.
+func (t *StreamableHTTPTransport) handleSessionExpired(stale string) {
+	t.mu.Lock()
+	if t.sessionID != stale {
+		t.mu.Unlock()
+		return
+	}
+	log.Printf("HTTP session %s expired at %s; clearing session state", stale, t.config.URL)
+	t.sessionID = ""
+	t.expiredSessionID = stale
+	t.negotiatedVersion = ""
+	t.lastEventID = ""
+	sseCancel := t.sseCancel
+	sseConn := t.sseConn
+	t.sseCancel = nil
+	t.sseConn = nil
+	t.sseActive = false
+	t.mu.Unlock()
+
+	if sseCancel != nil {
+		sseCancel()
+	}
+	if sseConn != nil {
+		_ = sseConn.Close()
+	}
 }
 
 // runStandaloneSSE keeps the stream up, backing off between attempts. It stops
@@ -515,7 +587,23 @@ func (t *StreamableHTTPTransport) openStandaloneSSE(ctx context.Context) (produc
 	switch resp.StatusCode {
 	case http.StatusOK:
 		// Fall through to streaming below.
-	case http.StatusMethodNotAllowed, http.StatusNotFound, http.StatusNotImplemented:
+	case http.StatusNotFound:
+		_ = resp.Body.Close()
+		if sessionID != "" {
+			// Same meaning as a 404 on the POST path: the server no longer
+			// knows this session (idle reap, DELETE, restart). Clearing the
+			// session state stops this stream and re-arms sseActive, so the
+			// reinitialize triggered by the next Send opens a fresh stream.
+			// Without this the transport mistakes an expired session for a
+			// server that has no stream to give and never reconnects.
+			t.handleSessionExpired(sessionID)
+			return false, false
+		}
+		// No session to expire: a server that simply does not route GET here.
+		log.Printf("Server %s offers no SSE stream (HTTP 404); server-initiated "+
+			"notifications such as resources/updated will not arrive", t.config.URL)
+		return false, false
+	case http.StatusMethodNotAllowed, http.StatusNotImplemented:
 		// A server entitled to decline the stream. Retrying would just repeat.
 		_ = resp.Body.Close()
 		log.Printf("Server %s offers no SSE stream (HTTP %d); server-initiated "+
@@ -797,6 +885,16 @@ const (
 // AuthChallenge is an alias for oauth.BearerChallenge for backward compatibility.
 // Deprecated: Use oauth.BearerChallenge directly.
 type AuthChallenge = oauth.BearerChallenge
+
+// SessionExpiredError is returned by Send when a POST carrying a session ID
+// came back 404 — the server has expired or forgotten the session. The
+// transport has already cleared its session state; the client is expected to
+// reinitialize and retry.
+type SessionExpiredError struct{}
+
+func (e *SessionExpiredError) Error() string {
+	return "session expired - server no longer recognizes the session ID"
+}
 
 // UnauthorizedError is returned on HTTP 401 responses.
 // It preserves the WWW-Authenticate challenge info so callers can use

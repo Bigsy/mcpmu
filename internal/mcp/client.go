@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -42,6 +43,9 @@ type Client struct {
 	// sendMu serializes transport.Send across call and notify so NDJSON
 	// frames don't interleave on stdio.
 	sendMu sync.Mutex
+
+	// reinitMu single-flights session-expiry recovery. See reinitializeOnce.
+	reinitMu sync.Mutex
 
 	// Reader lifecycle. readerDone is initialized in NewClient and closed
 	// after the reader has drained pending waiters on transport error.
@@ -553,10 +557,7 @@ func (c *Client) call(ctx context.Context, method string, params any, result any
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	c.sendMu.Lock()
-	sendErr := c.transport.Send(ctx, data)
-	c.sendMu.Unlock()
-	if sendErr != nil {
+	if sendErr := c.sendWithSessionRecovery(ctx, method, data); sendErr != nil {
 		return fmt.Errorf("send: %w", sendErr)
 	}
 
@@ -625,7 +626,59 @@ func (c *Client) notify(ctx context.Context, method string, params any) error {
 		return fmt.Errorf("marshal notification: %w", err)
 	}
 
+	return c.sendWithSessionRecovery(ctx, method, data)
+}
+
+// sendWithSessionRecovery sends one frame, recovering once from an expired
+// HTTP session. The Streamable HTTP spec requires clients to reinitialize
+// when a request carrying a session ID comes back 404; the transport has
+// already cleared its session state (and stopped the stale standalone SSE
+// stream) by the time it returns SessionExpiredError, so a fresh Initialize
+// mints a new session — and its first successful POST reopens the stream.
+//
+// initialize and its follow-up notification are exempt: they are how a
+// session is created, so recovering through them could recurse.
+func (c *Client) sendWithSessionRecovery(ctx context.Context, method string, data []byte) error {
 	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
-	return c.transport.Send(ctx, data)
+	sendErr := c.transport.Send(ctx, data)
+	c.sendMu.Unlock()
+
+	var expired *SessionExpiredError
+	if !errors.As(sendErr, &expired) || method == "initialize" || method == "notifications/initialized" {
+		return sendErr
+	}
+
+	log.Printf("MCP session expired before %s; reinitializing and retrying once", method)
+	if initErr := c.reinitializeOnce(ctx); initErr != nil {
+		return fmt.Errorf("reinitialize after session expiry: %w", initErr)
+	}
+	c.sendMu.Lock()
+	sendErr = c.transport.Send(ctx, data)
+	c.sendMu.Unlock()
+	return sendErr
+}
+
+// sessionIDer is implemented by transports carrying a server-issued session
+// (Streamable HTTP). It is how recovery tells "nobody has reconnected yet"
+// from "another goroutine already did".
+type sessionIDer interface {
+	SessionID() string
+}
+
+// reinitializeOnce runs at most one Initialize per expired session, however
+// many callers raced into recovery. Concurrent calls all get
+// SessionExpiredError for the same dead session; without the guard each would
+// mint its own server-side session — every one of them spinning up private
+// upstream instances for shared:false servers — and only the last session ID
+// would survive in the transport, orphaning the rest until the server's idle
+// reaper notices.
+func (c *Client) reinitializeOnce(ctx context.Context) error {
+	c.reinitMu.Lock()
+	defer c.reinitMu.Unlock()
+	if s, ok := c.transport.(sessionIDer); ok && s.SessionID() != "" {
+		// Recovered while this goroutine waited for the lock; the caller's
+		// retry rides the new session.
+		return nil
+	}
+	return c.Initialize(ctx)
 }
