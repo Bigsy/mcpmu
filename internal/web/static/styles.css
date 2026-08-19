@@ -1029,3 +1029,5 @@ textarea { min-height: 80px; resize: vertical; }
 .pill-outcome-error   { background: var(--danger-bg-solid); color: var(--danger); }
 .pill-outcome-timeout { background: var(--warning-bg-solid); color: var(--warning); }
 .pill-outcome-denied  { background: var(--bg-hover); color: var(--text-faint); }
+/* cancelled is a caller hanging up, not a failure — neutral, like denied. */
+.pill-outcome-cancelled { background: var(--bg-hover); color: var(--text-faint); }

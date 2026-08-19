@@ -251,6 +251,8 @@ func outcomePillClass(o metrics.Outcome) string {
 		return "pill-outcome-timeout"
 	case metrics.OutcomeDenied:
 		return "pill-outcome-denied"
+	case metrics.OutcomeCancelled:
+		return "pill-outcome-cancelled"
 	default:
 		return "pill-outcome-ok"
 	}

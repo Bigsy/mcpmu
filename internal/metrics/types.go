@@ -17,6 +17,10 @@ const (
 	OutcomeError     Outcome = "error"      // transport/internal/startup failure
 	OutcomeTimeout   Outcome = "timeout"    // per-tool timeout hit
 	OutcomeDenied    Outcome = "denied"     // permission check refused the call
+	// OutcomeCancelled marks a call abandoned by the client — a cancellation
+	// notification or a dropped HTTP connection. Not the tool's fault, so it
+	// stays out of the error total (see Counters.errors).
+	OutcomeCancelled Outcome = "cancelled"
 )
 
 // dateLayout is the day-bucket key format. Local time; ISO dates sort
