@@ -328,6 +328,14 @@ func (c *Core) RunningServers() []string {
 	return c.supervisor.RunningServers()
 }
 
+// HasNamespace reports whether the current config defines the named
+// namespace. HTTP serve uses it to answer 404 for a namespace route that
+// does not exist, before any Session is created.
+func (c *Core) HasNamespace(name string) bool {
+	_, ok := c.currentConfig().Namespaces[name]
+	return ok
+}
+
 func (c *Core) registerSession(session *Session) {
 	c.sessionsMu.Lock()
 	c.sessions[session] = struct{}{}

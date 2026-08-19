@@ -76,6 +76,16 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 			Outcome:   outcome,
 		})
 	}
+	// failureOutcome classifies a failure at recording time: a cancelled
+	// parent context means the client hung up, wherever the failure surfaced
+	// — during lazy startup, mid-call, reinitialization, or the retry — and
+	// that is not an upstream error, so it stays out of the error rate.
+	failureOutcome := func() metrics.Outcome {
+		if ctx.Err() == context.Canceled {
+			return metrics.OutcomeCancelled
+		}
+		return metrics.OutcomeError
+	}
 
 	// Permission check — always runs. IsToolAllowed handles:
 	// 1. Global deny (applies even without a namespace)
@@ -97,7 +107,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	// Acquire through the Core's single lazy-start/readiness path.
 	sc, rpcErr := r.session.getOrStartServer(ctx, serverName)
 	if rpcErr != nil {
-		record(metrics.OutcomeError, time.Since(start))
+		record(failureOutcome(), time.Since(start))
 		return nil, rpcErr
 	}
 	client := sc.client
@@ -113,6 +123,13 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 			record(metrics.OutcomeTimeout, time.Since(start))
 			return nil, ErrToolCallTimeout(serverName, toolName)
 		}
+		// The client abandoned the call (notifications/cancelled, or an HTTP
+		// client that dropped its connection). Not an upstream failure — keep
+		// it out of the error rate.
+		if ctx.Err() == context.Canceled {
+			record(metrics.OutcomeCancelled, time.Since(start))
+			return nil, ErrInternalError(fmt.Sprintf("tool call cancelled: %v", context.Cause(ctx)))
+		}
 
 		// On 4xx errors (stale session, server reset, etc.), reinitialize and retry once.
 		// 401 is excluded — the transport returns UnauthorizedError for that, not "request failed: 4xx".
@@ -123,7 +140,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 
 			reinitialized, reinitErr := r.session.getOrStartServer(ctx, serverName)
 			if reinitErr != nil {
-				record(metrics.OutcomeError, time.Since(start))
+				record(failureOutcome(), time.Since(start))
 				return nil, ErrInternalError(fmt.Sprintf("tool call failed (reinit: %v) (original: %v)", reinitErr, err))
 			}
 			client = reinitialized.client
@@ -133,13 +150,17 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 
 			result, err = client.CallToolWithMeta(retryCtx, toolName, arguments, meta)
 			if err != nil {
-				record(metrics.OutcomeError, time.Since(start))
+				if retryCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+					record(metrics.OutcomeTimeout, time.Since(start))
+					return nil, ErrToolCallTimeout(serverName, toolName)
+				}
+				record(failureOutcome(), time.Since(start))
 				return nil, ErrInternalError(fmt.Sprintf("tool call failed after reinit: %v", err))
 			}
 
 			log.Printf("CallTool: retry succeeded for %s.%s after reinit", serverName, toolName)
 		} else {
-			record(metrics.OutcomeError, time.Since(start))
+			record(failureOutcome(), time.Since(start))
 			return nil, ErrInternalError(fmt.Sprintf("tool call failed: %v", err))
 		}
 	}

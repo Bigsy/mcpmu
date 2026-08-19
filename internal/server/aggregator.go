@@ -374,23 +374,37 @@ const (
 	catalogPrompts
 )
 
-// shouldQueryCapability implements list fan-out scoping. Running upstreams
-// are queried regardless of catalog state; stopped verified upstreams that did
-// not advertise the relevant capability are skipped.
+// shouldQueryCapability implements list fan-out scoping. A running upstream
+// is judged by the capabilities it declared at initialize — asking a server
+// that advertised no prompts for prompts/list is a guaranteed -32601, and a
+// network round trip per fan-out for HTTP upstreams; a handshake still in
+// flight is queried (the fan-out's acquire path waits for readiness).
+// Stopped upstreams fall back to the verified catalog so a list call does
+// not start a server that cannot contribute; an unverified catalog queries.
 func (a *Aggregator) shouldQueryCapability(serverName string, capability catalogCapability) bool {
 	id := a.instanceFor(serverName)
 	if handle := a.supervisor.GetInstance(id); handle != nil && handle.IsRunning() {
-		return true
+		client := handle.Client()
+		if client == nil || client.ProtocolVersion() == "" {
+			// No settled handshake to consult (mid-initialize, or a
+			// needs-auth HTTP handle) — don't guess.
+			return true
+		}
+		return capabilityAdvertised(client.Capabilities(), capability)
 	}
 	entry := a.catalog.snapshot(id)
 	if entry.state != catalogVerified {
 		return true
 	}
+	return capabilityAdvertised(entry.capabilities, capability)
+}
+
+func capabilityAdvertised(caps mcp.ServerCapabilities, capability catalogCapability) bool {
 	switch capability {
 	case catalogResources:
-		return entry.capabilities.Resources != nil
+		return caps.Resources != nil
 	case catalogPrompts:
-		return entry.capabilities.Prompts != nil
+		return caps.Prompts != nil
 	default:
 		return true
 	}

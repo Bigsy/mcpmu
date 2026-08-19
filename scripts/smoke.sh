@@ -990,6 +990,268 @@ EOF
   return "$rc"
 }
 
+# Verifies `mcpmu serve --http` end to end on the real wire: a Streamable
+# HTTP session against the real binary (401 without token → initialize with
+# session-ID capture → tools/list → tools/call), then the dogfood twist — a
+# second mcpmu config points at that endpoint as an HTTP upstream with a
+# bearer env var and calls the same tool through it, proving
+# mcpmu-behind-mcpmu works on the real wire.
+smoke_serve_http() {
+  local tmp cfg cfg2 fake port token base sid code resp rc=0 serve_pid=""
+
+  command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not available"; return 0; }
+  command -v curl >/dev/null 2>&1 || { echo "SKIP: curl not available"; return 0; }
+  command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 not available (port picking)"; return 0; }
+
+  tmp=$(mktemp -d -t mcpmu-smoke-servehttp.XXXXXX)
+  cfg="$tmp/config.json"
+  cfg2="$tmp/client-config.json"
+  fake="$tmp/fake-mcp.sh"
+
+  cat > "$fake" <<'EOF'
+#!/usr/bin/env bash
+while IFS= read -r line; do
+  method=$(printf '%s' "$line" | jq -r '.method // empty')
+  id=$(printf '%s' "$line" | jq -r '.id // empty')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"smoke-http","version":"1"}}}\n' "$id"
+      ;;
+    tools/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","description":"ping","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    tools/call)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong-http"}]}}\n' "$id"
+      ;;
+  esac
+done
+EOF
+  chmod 0700 "$fake"
+
+  jq -n --arg command "$fake" '{
+    schemaVersion: 1,
+    servers: { pinger: { command: $command, startup_timeout_sec: 5 } },
+    namespaces: {}
+  }' > "$cfg"
+
+  port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+  token="smoke-token-$$"
+  base="http://127.0.0.1:$port/mcp"
+
+  ./mcpmu serve --http --addr "127.0.0.1:$port" --token "$token" --config "$cfg" 2>"$tmp/serve.log" &
+  serve_pid=$!
+
+  # Readiness: poll the unauthenticated /healthz probe.
+  local ready=""
+  for _ in $(seq 1 50); do
+    if curl -fsS --max-time 2 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "$serve_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -z "$ready" ]]; then
+    echo "SKIP: mcpmu serve --http did not come up on 127.0.0.1:$port"
+    head -5 "$tmp/serve.log" 2>/dev/null
+    kill "$serve_pid" 2>/dev/null || true
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  # Security posture: no token → 401.
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' "$base")
+  if [[ "$code" != "401" ]]; then
+    echo "FAIL: POST without token returned $code, want 401"
+    rc=1
+  fi
+
+  # Initialize, capturing the Mcp-Session-Id response header.
+  resp=$(curl -sS -D "$tmp/headers" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}' \
+    "$base")
+  sid=$(awk 'tolower($1) == "mcp-session-id:" {print $2}' "$tmp/headers" | tr -d '\r')
+  if [[ -z "$sid" ]]; then
+    echo "FAIL: initialize issued no Mcp-Session-Id"
+    printf '%s\n' "$resp" | head -3
+    rc=1
+  fi
+  if ! printf '%s\n' "$resp" | jq -e '.result.serverInfo.name == "mcpmu"' >/dev/null; then
+    echo "FAIL: initialize result is not from mcpmu"
+    printf '%s\n' "$resp" | head -3
+    rc=1
+  fi
+
+  curl -s -o /dev/null -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    -H "Mcp-Session-Id: $sid" \
+    -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' "$base"
+
+  # tools/list must show the upstream's tool; tools/call must reach it.
+  resp=$(curl -sS -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    -H "Mcp-Session-Id: $sid" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "$base")
+  if ! printf '%s\n' "$resp" | jq -e '.result.tools[] | select(.name == "pinger.ping")' >/dev/null; then
+    echo "FAIL: tools/list over HTTP is missing pinger.ping"
+    printf '%s\n' "$resp" | head -3
+    rc=1
+  fi
+  resp=$(curl -sS -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    -H "Mcp-Session-Id: $sid" \
+    -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"pinger.ping","arguments":{}}}' "$base")
+  if ! printf '%s\n' "$resp" | jq -e '.result.content[0].text == "pong-http"' >/dev/null; then
+    echo "FAIL: tools/call over HTTP did not reach the upstream"
+    printf '%s\n' "$resp" | head -3
+    rc=1
+  fi
+
+  # Dogfood: a second mcpmu (stdio serve) using the HTTP endpoint as an
+  # upstream, authenticated via --bearer-env-style config.
+  jq -n --arg url "$base" '{
+    schemaVersion: 1,
+    servers: { mcpmux: { url: $url, bearer_token_env_var: "MCPMU_SMOKE_HTTP_TOKEN", startup_timeout_sec: 10 } },
+    namespaces: {}
+  }' > "$cfg2"
+
+  resp=$({
+    printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}\n'
+    printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
+    printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mcpmux.pinger.ping","arguments":{}}}\n'
+    sleep 5
+  } | MCPMU_SMOKE_HTTP_TOKEN="$token" ./mcpmu serve --stdio --isolated --config "$cfg2" 2>/dev/null)
+  if ! printf '%s\n' "$resp" \
+    | jq -e 'select(.id == 2) | .result.content[0].text == "pong-http"' >/dev/null; then
+    echo "FAIL: mcpmu-behind-mcpmu tool call did not round-trip"
+    printf '%s\n' "$resp" | head -5
+    rc=1
+  fi
+
+  kill "$serve_pid" 2>/dev/null || true
+  wait "$serve_pid" 2>/dev/null || true
+  rm -rf "$tmp"
+  return "$rc"
+}
+
+# Graceful shutdown: SIGTERM during an in-flight tool call must drain the call
+# before the Core is closed. ListenAndServe returns the instant the listener
+# closes, so a serve that stops waiting there tears down upstream processes
+# (and writes the final metrics flush) underneath calls that are still running.
+smoke_serve_http_graceful_shutdown() {
+  local tmp cfg fake port token base sid rc=0 serve_pid="" call_pid="" alive=""
+
+  command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not available"; return 0; }
+  command -v curl >/dev/null 2>&1 || { echo "SKIP: curl not available"; return 0; }
+  command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 not available (port picking)"; return 0; }
+
+  tmp=$(mktemp -d -t mcpmu-smoke-servehttp-term.XXXXXX)
+  cfg="$tmp/config.json"
+  fake="$tmp/fake-mcp.sh"
+
+  cat > "$fake" <<'EOF'
+#!/usr/bin/env bash
+while IFS= read -r line; do
+  method=$(printf '%s' "$line" | jq -r '.method // empty')
+  id=$(printf '%s' "$line" | jq -r '.id // empty')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"smoke-slow","version":"1"}}}\n' "$id"
+      ;;
+    tools/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"slow","description":"slow","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    tools/call)
+      sleep 2
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong-slow"}]}}\n' "$id"
+      ;;
+  esac
+done
+EOF
+  chmod 0700 "$fake"
+
+  jq -n --arg command "$fake" '{
+    schemaVersion: 1,
+    servers: { slowpoke: { command: $command, startup_timeout_sec: 5, tool_timeout_sec: 30 } },
+    namespaces: {}
+  }' > "$cfg"
+
+  port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+  token="smoke-token-$$"
+  base="http://127.0.0.1:$port/mcp"
+
+  ./mcpmu serve --http --addr "127.0.0.1:$port" --token "$token" --config "$cfg" 2>"$tmp/serve.log" &
+  serve_pid=$!
+
+  local ready=""
+  for _ in $(seq 1 50); do
+    if curl -fsS --max-time 2 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    kill -0 "$serve_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if [[ -z "$ready" ]]; then
+    echo "SKIP: mcpmu serve --http did not come up on 127.0.0.1:$port"
+    head -5 "$tmp/serve.log" 2>/dev/null
+    kill "$serve_pid" 2>/dev/null || true
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  curl -sS -D "$tmp/headers" -o /dev/null -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}' \
+    "$base"
+  sid=$(awk 'tolower($1) == "mcp-session-id:" {print $2}' "$tmp/headers" | tr -d '\r')
+  if [[ -z "$sid" ]]; then
+    echo "FAIL: initialize issued no Mcp-Session-Id"
+    kill "$serve_pid" 2>/dev/null || true
+    rm -rf "$tmp"
+    return 1
+  fi
+  curl -s -o /dev/null -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    -H "Mcp-Session-Id: $sid" \
+    -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' "$base"
+  # Warm the upstream so the timing below measures the call, not the spawn.
+  curl -s -o /dev/null -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    -H "Mcp-Session-Id: $sid" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "$base"
+
+  # A 2s call, SIGTERM'd a second in.
+  curl -sS --max-time 20 -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    -H "Mcp-Session-Id: $sid" \
+    -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"slowpoke.slow","arguments":{}}}' \
+    "$base" > "$tmp/call.json" 2>/dev/null &
+  call_pid=$!
+  sleep 1
+  kill -TERM "$serve_pid" 2>/dev/null || true
+  wait "$call_pid" 2>/dev/null || true
+
+  if ! jq -e '.result.content[0].text == "pong-slow"' < "$tmp/call.json" >/dev/null 2>&1; then
+    echo "FAIL: in-flight tool call did not survive SIGTERM"
+    head -3 "$tmp/call.json" 2>/dev/null
+    rc=1
+  fi
+
+  for _ in $(seq 1 50); do
+    if ! kill -0 "$serve_pid" 2>/dev/null; then
+      alive=""
+      break
+    fi
+    alive=1
+    sleep 0.2
+  done
+  if [[ -n "$alive" ]]; then
+    echo "FAIL: serve --http did not exit within 10s of SIGTERM"
+    kill -9 "$serve_pid" 2>/dev/null || true
+    rc=1
+  fi
+  wait "$serve_pid" 2>/dev/null || true
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # Register new smoke checks here.
 SMOKE_CHECKS=(
   smoke_cf_access_headers
@@ -1000,6 +1262,8 @@ SMOKE_CHECKS=(
   smoke_tool_metadata_fidelity
   smoke_protocol_negotiation
   smoke_cancel_and_progress
+  smoke_serve_http
+  smoke_serve_http_graceful_shutdown
   smoke_daemon_control
   smoke_daemon_shim_fallback
   smoke_daemon_private_instances

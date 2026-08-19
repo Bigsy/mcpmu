@@ -311,3 +311,48 @@ func TestCapabilityScopedFanoutDecision(t *testing.T) {
 		t.Fatal("unknown server capability must be probed")
 	}
 }
+
+// TestRunningServerCapabilityGatesFanout pins the running-server half of the
+// fan-out decision: a live upstream that declared no prompts/resources at
+// initialize must not be asked for them. Before the live-capability check,
+// every downstream prompts/list sent a guaranteed -32601 to every running
+// upstream — a wasted network round trip per server per refresh for HTTP
+// upstreams, plus a log line each.
+func TestRunningServerCapabilityGatesFanout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess test")
+	}
+	testutil.SetupTestHome(t)
+	cfg := &config.Config{SchemaVersion: 1, Servers: map[string]config.ServerConfig{
+		"tools-only": fakeServerConfig(t, map[string]any{
+			"tools":              []any{map[string]any{"name": "one"}},
+			"advertisePrompts":   false,
+			"advertiseResources": false,
+		}),
+	}}
+	core, err := NewCore(Options{Config: cfg, PIDTrackerDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewCore: %v", err)
+	}
+	t.Cleanup(core.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if tools, listErr := core.currentAggregator().ListTools(ctx, []string{"tools-only"}); listErr != nil || len(tools) != 1 {
+		t.Fatalf("ListTools = (%v, %v), want one tool", tools, listErr)
+	}
+
+	// The list started the instance; the decision must now come from the
+	// live negotiated capabilities, not the always-query-running shortcut.
+	agg := core.currentAggregator()
+	handle := core.supervisor.GetInstance(process.SharedInstanceID("tools-only"))
+	if handle == nil || !handle.IsRunning() {
+		t.Fatal("expected the upstream to be running after ListTools")
+	}
+	if agg.shouldQueryCapability("tools-only", catalogPrompts) {
+		t.Fatal("running tools-only server should be skipped by prompts/list fan-out")
+	}
+	if agg.shouldQueryCapability("tools-only", catalogResources) {
+		t.Fatal("running tools-only server should be skipped by resources/list fan-out")
+	}
+}

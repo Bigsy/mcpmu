@@ -10,9 +10,11 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/daemon"
+	"github.com/Bigsy/mcpmu/internal/httpserve"
 	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/server"
 	"github.com/Bigsy/mcpmu/internal/shim"
@@ -28,6 +30,12 @@ var (
 	serveResources          bool
 	servePrompts            bool
 	serveIsolated           bool
+
+	serveHTTP               bool
+	serveAddr               string
+	serveToken              string
+	serveAllowOrigins       []string
+	serveSessionIdleTimeout time.Duration
 )
 
 var serveCmd = &cobra.Command{
@@ -65,6 +73,12 @@ func init() {
 	serveCmd.Flags().BoolVar(&servePrompts, "prompts", true, "Passthrough prompts/* from upstream servers")
 	serveCmd.Flags().BoolVar(&serveIsolated, "isolated", false, "Run embedded with private upstream server instances")
 
+	serveCmd.Flags().BoolVar(&serveHTTP, "http", false, "Expose the endpoint over MCP Streamable HTTP instead of stdio")
+	serveCmd.Flags().StringVar(&serveAddr, "addr", httpserve.DefaultAddr, "Listen address for --http")
+	serveCmd.Flags().StringVar(&serveToken, "token", "", "Bearer token for --http (or set MCPMU_SERVE_TOKEN); required off-loopback")
+	serveCmd.Flags().StringArrayVar(&serveAllowOrigins, "allow-origin", nil, "Extra allowed Origin for --http (repeatable; loopback origins are always allowed)")
+	serveCmd.Flags().DurationVar(&serveSessionIdleTimeout, "session-idle-timeout", httpserve.DefaultSessionIdleTimeout, "Reap --http sessions idle for this long (0 = never)")
+
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -72,6 +86,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	serveLogLevel = strings.ToLower(serveLogLevel)
 	if !validDaemonLogLevel(serveLogLevel) {
 		return fmt.Errorf("invalid log level %q: expected debug, info, warn, or error", serveLogLevel)
+	}
+	if err := validateHTTPServeFlags(cmd); err != nil {
+		return err
 	}
 	// In stdio mode, all output must go to stderr except MCP protocol
 	// Configure logging based on log level
@@ -144,6 +161,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
+	// HTTP serve is a deliberate foreground process that owns its own Core —
+	// it never rendezvouses with the daemon (a network port opened as a side
+	// effect of a client spawn would be a security surprise, and the daemon's
+	// linger-driven lifetime can't outlive its sessions to accept the next
+	// connection).
+	if serveHTTP {
+		return runHTTPServe(ctx, cfg, resolvedConfigPath)
+	}
+
 	// Windows has no daemon transport yet; use embedded mode directly instead
 	// of treating the expected platform limitation as a fallback failure.
 	if runtime.GOOS != "windows" && cfg.IsDaemonModeEnabled() && !serveIsolated {
@@ -164,6 +190,104 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	return runEmbeddedServe(ctx, cfg, resolvedConfigPath)
+}
+
+// validateHTTPServeFlags rejects flag combinations that make no sense with
+// --http, and stray HTTP flags without it.
+func validateHTTPServeFlags(cmd *cobra.Command) error {
+	if serveHTTP {
+		if serveIsolated {
+			// --isolated's only effect is skipping the daemon rendezvous, and
+			// HTTP serve never rendezvouses. Per-session privacy is the
+			// per-server `shared: false` config property instead.
+			return fmt.Errorf("--isolated cannot be combined with --http; use \"shared\": false on individual servers for per-session instances")
+		}
+		if serveToken == "" {
+			serveToken = os.Getenv("MCPMU_SERVE_TOKEN")
+		}
+		return nil
+	}
+	for _, flag := range []string{"addr", "token", "allow-origin", "session-idle-timeout"} {
+		if cmd.Flags().Changed(flag) {
+			return fmt.Errorf("--%s requires --http", flag)
+		}
+	}
+	return nil
+}
+
+// runHTTPServe owns one Core directly and serves it over Streamable HTTP
+// until the context ends.
+func runHTTPServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string) error {
+	core, err := server.NewCore(server.Options{
+		Config:     cfg,
+		ConfigPath: resolvedConfigPath, // For hot-reload watching
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create server core: %w", err)
+	}
+	defer core.Close()
+	core.StartWatching(ctx)
+
+	httpSrv, err := httpserve.New(httpserve.Options{
+		Core:               core,
+		Addr:               serveAddr,
+		Token:              serveToken,
+		AllowedOrigins:     serveAllowOrigins,
+		SessionIdleTimeout: serveSessionIdleTimeout,
+		Namespace:          serveNamespace,
+		EagerStart:         serveEager,
+		ExposeManagerTools: serveExposeManagerTools,
+		ExposeResources:    serveResources,
+		ExposePrompts:      servePrompts,
+		ServerVersion:      version,
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := serveUntilShutdown(ctx, httpSrv, httpShutdownGrace); err != nil {
+		return err
+	}
+	log.Println("mcpmu serve exiting")
+	return nil
+}
+
+// httpShutdownGrace bounds the drain of in-flight requests on shutdown.
+const httpShutdownGrace = 5 * time.Second
+
+// httpListener is the slice of *httpserve.Server that serveUntilShutdown
+// drives. An interface so the ordering below is testable without a socket.
+type httpListener interface {
+	ListenAndServe() error
+	Shutdown(context.Context) error
+}
+
+// serveUntilShutdown serves until ctx ends, then shuts down — and, the point
+// of the helper, does not return until that shutdown has finished.
+// ListenAndServe returns the moment Shutdown closes the listener, well before
+// the drain and session teardown complete; returning then would run the
+// caller's deferred core.Close() — StopAll plus the final metrics flush —
+// underneath tool calls that are still running.
+func serveUntilShutdown(ctx context.Context, srv httpListener, grace time.Duration) error {
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("HTTP serve shutdown: %v", err)
+		}
+	}()
+
+	if err := srv.ListenAndServe(); err != nil {
+		// A listener error (port in use, bind refused) leaves the shutdown
+		// goroutine parked on ctx.Done with nothing to drain; the process is
+		// on its way out, so do not wait for it.
+		return fmt.Errorf("http serve error: %w", err)
+	}
+	<-shutdownDone
+	return nil
 }
 
 func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string) error {

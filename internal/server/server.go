@@ -394,22 +394,74 @@ func isUpstreamMethod(method string) bool {
 	return false
 }
 
+// ParseMessage validates one JSON-RPC frame. A non-nil *RPCError means
+// "reply with this parse error (null id)".
+func ParseMessage(data []byte) (RPCMessage, *RPCError) {
+	var msg RPCMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return RPCMessage{}, ErrParseError(err.Error())
+	}
+	// Shape validation beyond syntax: without it `{}` dispatches as a
+	// notification for method "" and quietly succeeds (202 over HTTP). On a
+	// shape error the partially-decoded msg is returned alongside, so the
+	// caller can echo msg.ID in the error response when one was present.
+	if msg.JSONRPC != "2.0" {
+		return msg, ErrInvalidRequest(fmt.Sprintf("jsonrpc must be \"2.0\", got %q", msg.JSONRPC))
+	}
+	if msg.Method == "" && !msg.IsResponse() {
+		return msg, ErrInvalidRequest("message has no method and is not a response")
+	}
+	return msg, nil
+}
+
+// Dispatch routes one parsed message and returns the response value.
+// hasResponse is false for notifications. Dispatch never spawns goroutines
+// and never writes to the session's writer — concurrency and delivery stay
+// with the transport (the stdio Run loop, the HTTP POST handler).
+func (s *Session) Dispatch(ctx context.Context, msg RPCMessage) (RPCResponse, bool) {
+	if msg.ID == nil {
+		if err := s.handleNotification(ctx, msg.Method, msg.Params); err != nil {
+			log.Printf("Error handling notification %s: %v", msg.Method, err)
+		}
+		return RPCResponse{}, false
+	}
+	result, rpcErr := s.handleRequest(ctx, msg.Method, msg.Params)
+	if rpcErr != nil {
+		return RPCResponse{JSONRPC: "2.0", ID: msg.ID, Error: rpcErr}, true
+	}
+	resultJSON, _ := json.Marshal(result)
+	return RPCResponse{JSONRPC: "2.0", ID: msg.ID, Result: resultJSON}, true
+}
+
+// TrackRequest registers a request with the session's in-flight table so a
+// later notifications/cancelled naming its id can cancel the returned
+// context. The release func unregisters the entry; callers must defer it.
+// Register before dispatching so a cancellation that arrives immediately
+// after the request cannot miss it.
+func (s *Session) TrackRequest(ctx context.Context, id json.RawMessage) (context.Context, func()) {
+	return s.inflight.track(ctx, id)
+}
+
 // handleMessage parses and routes a JSON-RPC message.
 func (s *Server) handleMessage(ctx context.Context, data []byte) error {
 	if DebugLogging {
 		log.Printf("Recv: %s", string(data))
 	}
 
-	var msg rpcMessage
-	if err := json.Unmarshal(data, &msg); err != nil {
-		// Parse error - respond if we can extract an ID
-		s.sendError(nil, ErrParseError(err.Error()))
+	msg, parseErr := ParseMessage(data)
+	if parseErr != nil {
+		// Echo the request id when the shape was decodable enough to carry
+		// one; a syntax error responds with id null, per spec.
+		s.sendError(msg.ID, parseErr)
 		return nil
 	}
 
-	// Check if it's a notification (no ID)
-	if msg.ID == nil {
-		return s.handleNotification(ctx, msg.Method, msg.Params)
+	if msg.IsResponse() {
+		// A client response. The server issues no server→client requests, so
+		// there is nothing to correlate it with; replying would be a protocol
+		// violation (a response to a response), so drop it.
+		log.Printf("Dropping unexpected client response (id %s)", msg.ID)
+		return nil
 	}
 
 	// Requests that dispatch to an upstream MCP server can block for a long
@@ -418,28 +470,21 @@ func (s *Server) handleMessage(ctx context.Context, data []byte) error {
 	// wedged upstream would freeze every other tool call, list, or ping.
 	// JSON-RPC correlates responses by id and send() serializes stdout
 	// writes via writeMu, so concurrent handlers are safe.
-	if isUpstreamMethod(msg.Method) {
+	if msg.ID != nil && isUpstreamMethod(msg.Method) {
 		// Register the call before the goroutine starts so a cancellation that
 		// arrives immediately after the request cannot miss it.
-		callCtx, release := s.inflight.track(ctx, msg.ID)
+		callCtx, release := s.TrackRequest(ctx, msg.ID)
 		s.handlersWG.Go(func() {
 			defer release()
-			result, rpcErr := s.handleRequest(callCtx, msg.Method, msg.Params)
-			if rpcErr != nil {
-				s.sendError(msg.ID, rpcErr)
-			} else {
-				s.sendResult(msg.ID, result)
+			if resp, ok := s.Dispatch(callCtx, msg); ok {
+				s.send(resp)
 			}
 		})
 		return nil
 	}
 
-	// It's a request - handle and respond
-	result, rpcErr := s.handleRequest(ctx, msg.Method, msg.Params)
-	if rpcErr != nil {
-		s.sendError(msg.ID, rpcErr)
-	} else {
-		s.sendResult(msg.ID, result)
+	if resp, ok := s.Dispatch(ctx, msg); ok {
+		s.send(resp)
 	}
 	return nil
 }
@@ -1574,20 +1619,9 @@ func (s *Session) applyReloadConfig(newCfg *config.Config) []string {
 	return slices.Clone(s.activeServerNames)
 }
 
-// sendResult sends a successful JSON-RPC response.
-func (s *Server) sendResult(id json.RawMessage, result any) {
-	resultJSON, _ := json.Marshal(result)
-	resp := rpcResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result:  resultJSON,
-	}
-	s.send(resp)
-}
-
 // sendError sends a JSON-RPC error response.
 func (s *Server) sendError(id json.RawMessage, rpcErr *RPCError) {
-	resp := rpcResponse{
+	resp := RPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Error:   rpcErr,
@@ -1595,7 +1629,9 @@ func (s *Server) sendError(id json.RawMessage, rpcErr *RPCError) {
 	s.send(resp)
 }
 
-// send writes a JSON-RPC message to stdout.
+// send writes a JSON-RPC message to the session writer as exactly one Write
+// call per frame (payload + trailing newline together), so a non-stdio writer
+// like the daemon's queuedWriter or the HTTP sseHub receives whole frames.
 func (s *Server) send(msg any) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -1610,29 +1646,40 @@ func (s *Server) send(msg any) {
 		log.Printf("Send: %s", string(data))
 	}
 
-	if _, err := s.writer.Write(data); err != nil {
+	if _, err := s.writer.Write(append(data, '\n')); err != nil {
 		log.Printf("Failed to write response: %v", err)
-		return
-	}
-	if _, err := s.writer.Write([]byte("\n")); err != nil {
-		log.Printf("Failed to write newline: %v", err)
 	}
 }
 
 // JSON-RPC message types
 
-type rpcMessage struct {
+// RPCMessage is one incoming JSON-RPC frame. A nil ID marks a notification.
+type RPCMessage struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
+	// Result and Error are captured only to classify the frame: a message
+	// with an id, no method, and one of these is a client's *response* to a
+	// server→client request, not a request to dispatch.
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  json.RawMessage `json:"error,omitempty"`
 }
 
-type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *RPCError       `json:"error,omitempty"`
+// IsResponse reports whether the frame is a JSON-RPC response.
+func (m RPCMessage) IsResponse() bool {
+	return m.Method == "" && m.ID != nil && (len(m.Result) > 0 || len(m.Error) > 0)
+}
+
+// RPCResponse is one outgoing JSON-RPC response frame.
+type RPCResponse struct {
+	JSONRPC string `json:"jsonrpc"`
+	// No omitempty: a parse-error response has no id to echo and the spec
+	// requires an explicit "id": null there, which is exactly how a nil
+	// RawMessage marshals.
+	ID     json.RawMessage `json:"id"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *RPCError       `json:"error,omitempty"`
 }
 
 type initializeRequest struct {

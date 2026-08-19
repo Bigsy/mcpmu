@@ -186,7 +186,7 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 - **Stdio process management** — Spawn and supervise local MCP servers (npx, binaries, scripts)
 - **Process-tree cleanup** — Stop wrapper-launched workers with their parent and retain identity-validated crash recovery records
 - **Streamable HTTP/SSE** — Connect to remote MCP endpoints with full SSE support
-- **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`
+- **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`, or over Streamable HTTP via `mcpmu serve --http` with one URL per namespace
 - **Faithful proxying** — Tool definitions arrive with `title`, `annotations`, `outputSchema`, `icons`, and `_meta` intact, and results keep `structuredContent`; a tool's `readOnlyHint` reaches your agent instead of being discarded, so auto-approve still works through mcpmu
 - **Protocol revisions up to 2025-11-25** — Negotiated per client connection rather than pinned, with cancellation and `progressToken` progress relayed in both directions
 - **Shared daemon** — Concurrent `serve` clients share one set of upstream processes by default on Unix
@@ -243,6 +243,48 @@ also share authentication sessions and upstream rate limits. Calling
 use starts it again. For `shared: false`, that action affects only the caller.
 See [docs/CLI.md](docs/CLI.md#shared-daemon-mode) for configuration and
 diagnostic commands.
+
+### HTTP serve mode
+
+`mcpmu serve --http` exposes the same endpoint over the MCP Streamable HTTP
+transport (POST + SSE) instead of stdio — one long-running process that any
+number of HTTP MCP clients can connect to:
+
+```bash
+mcpmu serve --http                                    # 127.0.0.1:8081
+mcpmu serve --http --addr 127.0.0.1:9090              # custom port
+mcpmu serve --http --addr 0.0.0.0:8081 --token $TOK   # token mandatory off-loopback
+mcpmu serve --http --session-idle-timeout 1h --allow-origin https://myapp.example
+```
+
+Each namespace gets its own URL — one running process, many toolsets:
+
+```json
+// Claude Code / any Streamable HTTP MCP client
+{
+  "mcpmu": {
+    "url": "http://127.0.0.1:8081/mcp/work",
+    "headers": { "Authorization": "Bearer <token>" }
+  }
+}
+```
+
+`POST /mcp` uses the default namespace (same auto-select as stdio);
+`POST /mcp/{namespace}` selects that namespace. Sessions idle for longer than
+`--session-idle-timeout` (default 30m) are reaped, which is what keeps
+`shared: false` servers safe here too — each HTTP session gets its own private
+instance, so session count is process count.
+
+Security: pass a bearer token via `--token` or `MCPMU_SERVE_TOKEN`; loopback
+binds may run tokenless (the unauthenticated endpoint is then loopback-only,
+plus an Origin check against browsers). Binding a
+non-loopback address without a token refuses to start — serve-mode
+`tools/call` is arbitrary code execution. TLS termination is out of scope;
+put a reverse proxy in front for network deployments. `--isolated` does not
+combine with `--http` (there is no daemon to skip; use per-server
+`"shared": false` for per-session instances). An HTTP serve running beside
+stdio clients duplicates shared upstream instances across the two processes —
+tolerated, but worth knowing.
 
 ## Shell Completions
 

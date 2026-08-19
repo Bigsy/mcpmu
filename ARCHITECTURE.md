@@ -54,7 +54,9 @@ path is a stdio-to-Unix-socket shim connected to one shared daemon per canonical
 config path. The daemon owns one Core and attaches one Session per shim.
 Top-level `daemonMode: false` disables daemon mode globally, `--isolated`
 forces embedded behavior for one process, and every daemon setup failure falls
-back to embedded serve. Windows remains embedded.
+back to embedded serve. Windows remains embedded. `mcpmu serve --http` is a
+third mode — a dedicated foreground process exposing the same endpoint over
+Streamable HTTP (see "HTTP Serve Mode" below).
 
 ```json
 // ~/.claude/mcp_servers.json
@@ -174,6 +176,125 @@ process group), removes the socket and pidfile, and retains the per-config log.
 The pidfile records the full config path, PID/start identity, and executable;
 control fallback validates all of that identity before signalling anything.
 
+### HTTP Serve Mode
+
+`mcpmu serve --http` exposes the same aggregation endpoint over the MCP
+Streamable HTTP transport (POST + standalone GET SSE stream), implemented in
+`internal/httpserve`. It is a deliberate, foreground, long-lived process (like
+`mcpmu web`) that owns one `Core` directly and attaches one `server.Session`
+per HTTP client session. It never rendezvouses with the Unix daemon: the
+daemon is spawned implicitly by whichever client shim wins the race, and a
+network port opened as a side effect of a client spawn would be a security
+surprise; the daemon's linger-driven lifetime also could not outlive its
+sessions to accept the next connection. A dedicated process additionally gives
+HTTP mode to Windows for free.
+
+**Routes and namespace selection.** One URL per namespace replaces stdio's
+per-client `--namespace` flag:
+
+```
+POST   /mcp                  → default namespace (same auto-select as stdio)
+POST   /mcp/{namespace}      → that namespace
+GET    /mcp[/{namespace}]    → standalone SSE stream for the session
+DELETE /mcp[/{namespace}]    → terminate the session
+GET    /healthz              → unauthenticated readiness probe
+```
+
+The namespace is resolved when the session is created (initialize) and
+enforced on every request: a session ID minted under `/mcp/work` presented to
+`/mcp/personal` is a 404. Session IDs are 128-bit `crypto/rand` hex — they are
+bearer-ish within an authenticated origin.
+
+**Session lifecycle.** Sessions are created only by an `initialize` POST
+(which returns the `Mcp-Session-Id` header) and end via DELETE, idle reap, or
+shutdown — all funnelled through one teardown that runs the same cleanup a
+stdio EOF runs (unsubscribes, refcounts, stops private instances). The idle
+reaper (default 30m, `--session-idle-timeout`) counts only client actions —
+POST, DELETE, GET attach — never keepalive writes, because a small write into
+a black-holed TCP connection "succeeds" into the socket buffer for minutes.
+A request counts as activity for as long as it is being dispatched, not just
+when it arrives: admission (lookup + busy-marking) and reaping run under the
+same lock, so a session with work in flight is skipped and a request can
+never begin dispatch against a session the reaper is tearing down. A tool
+call slower than the idle timeout is therefore never reaped out from under
+itself, and the idle clock restarts from the response.
+The reaper is the HTTP replacement for stdio's EOF and is what makes
+`shared: false` (one private upstream instance per session) safe here: session
+count is process count.
+
+**Dispatch.** Each POST-carried request is dispatched synchronously on its
+handler goroutine via `Session.Dispatch` (the transport-neutral half of the
+stdio loop). The dispatch context is a child of the session context,
+additionally cancelled when the POST's request context ends, so a vanished
+client stops burning upstream tool-call time; such cancellations record the
+`cancelled` metrics outcome, which stays out of the error rate.
+`http.Server.Shutdown` draining active requests is therefore also the handler
+drain mechanism — and since `ListenAndServe` returns the moment the listener
+closes, the command waits for `Shutdown` to return before closing the `Core`,
+which would otherwise stop upstream processes and write the final metrics
+flush mid-drain. Notifications return 202, as do client responses (an id with
+no method — mcpmu issues no server→client requests, so there is nothing to
+correlate them with); parse errors and batch arrays (removed from the spec in
+2025-06-18) return 400.
+
+**sseHub.** Each session's `Session.writer` is an `sseHub`: every notification
+arrives as one frame (single-write `send`), is queued under a short mutex, and
+is delivered by the currently attached GET stream's own goroutine as
+`event: message` SSE events with 30s `: ping` keepalives under per-write
+deadlines. Queued frames coalesce — `*/list_changed` per method,
+`resources/updated` per URI, progress per token — so the 256-frame backlog cap
+is practically unreachable; a second GET replaces the first (clients reconnect
+faster than dead connections are detected) and draining is ownership-checked —
+an evicted handler that wins the shared wake signal takes nothing, so frames
+never land on the abandoned connection. Stream disconnect never ends
+the session. Unlike the daemon's `queuedWriter`, overflow never kills the
+session: responses do not flow through the hub.
+
+**Security posture** (stricter than the web UI, because serve-mode
+`tools/call` is arbitrary code execution): when a token is configured
+(`--token` / `MCPMU_SERVE_TOKEN`, constant-time compare) it is required on
+every `/mcp` request — only `/healthz`, which serves nothing sensitive, is
+exempt. A tokenless bind is permitted on loopback only; a non-loopback bind
+without a token refuses to start rather than warn. Origin
+headers are validated against loopback plus `--allow-origin` entries
+(DNS-rebinding protection; absent Origin is allowed — rebinding attacks come
+from browsers, which always send it). POST requires
+`Content-Type: application/json` (415 otherwise) — with Origin checking, that
+is what stops a browser form on a tokenless loopback bind. Bodies are bounded
+at 1 MiB and, via a per-request read deadline that is cleared before dispatch,
+at 30s of trickle (a server-wide `ReadTimeout` would kill the GET stream and
+long tool calls). The session table is capped at 256 — initialize gets 503
+past it — so a reconnect-looping client cannot fan out unbounded upstream
+instances before the idle reaper catches up. Frames are validated beyond
+syntax: a wrong `jsonrpc` version or a message that is neither request,
+notification, nor response is a 400 `-32600` (echoing the request id when one
+was decodable, `"id": null` otherwise). TLS is out of scope: put a reverse proxy in front for non-loopback
+deployments.
+
+**Client recovery.** A POST presenting an unknown or expired session ID gets
+404, and spec-compliant clients reinitialize. mcpmu's own
+`StreamableHTTPTransport` returns a typed session-expired error on such a 404,
+clears its session state, and `mcp.Client` reinitializes and retries once —
+reopening the standalone GET stream for the fresh session. Recovery is
+single-flight: one reinitialize serves every caller that raced into the
+window. The transport latches the expired session ID until a replacement is
+minted and fails non-initialize sends locally with the typed error while
+latched — necessary, not just tidy, because a request sent after the session
+was cleared would carry no session header and come back 400 ("missing
+Mcp-Session-Id"), which nothing recognises as expiry. The latch is also what
+lets an *idle* client recover: a GET-stream reconnect that 404s runs the same
+expiry handling, and the next call — with no session left to present — still
+routes into reinitialization instead of failing forever.
+
+**Coexistence caveat.** If stdio clients (via the daemon) and an HTTP serve
+run at the same time against the same config, shared upstream instances are
+duplicated across the two processes. This topology is already tolerated
+(embedded fallback, `--isolated`, and the metrics multi-writer design all
+assume it); PID tracking and the `metrics.json` file lock keep it safe.
+`--isolated` is rejected with `--http` — its only effect is skipping the
+daemon rendezvous, and there is no daemon to skip; per-session privacy is the
+per-server `shared: false` config property.
+
 ### Verified Upstream Catalog
 
 The Supervisor is the single owner of upstream initialization and initial
@@ -254,8 +375,12 @@ serializing on different mutexes.
   `Last-Event-ID`. A stream that delivered nothing and lasted less than
   `SSEReconnectMinUptime` does not reset the backoff, so a server that accepts
   the GET and closes it immediately is not reconnected forever at the base delay.
-  `405`, `404` and `501` mean the server has no stream to give and are not
-  retried; so are `401`/`403`, since the POST path owns authentication.
+  `405` and `501` mean the server has no stream to give and are not retried;
+  so are `401`/`403`, since the POST path owns authentication. A `404`
+  carrying a session ID means something else entirely — the session is gone —
+  so it runs the same expiry handling the POST path does rather than
+  abandoning the stream (against mcpmu's own server this is exactly what a
+  reconnect after a reap or DELETE hits).
 
 `Close` cancels the transport-wide context, which aborts in-flight GETs and
 closes any POST response body a server is holding open, then waits for both
@@ -526,7 +651,7 @@ mcpmu embeds a `SKILL.md` file in the binary (`cmd/mcpmu/skill_data/SKILL.md` vi
 
 Every tool call routed through serve mode is counted into daily usage buckets and surfaced in the web UI's **Metrics** page (plus a compact block on each server detail page). The headline question the feature answers: *"Am I actually using all the tools I've assigned?"* — hence the dedicated unused-tools view.
 
-**Write path** (`internal/metrics`): tool calls are dispatched in serve-mode processes (the shared daemon or an embedded serve), never in the web process, so metrics flow through a file on disk. `Router.CallTool` records one `CallSample` per call at exit — outcome `ok`, `tool_error` (upstream returned `isError`), `error` (transport/startup failure), `timeout`, or `denied` (permission refusal; duration 0). Manager tools record under server `mcpmu`. Misaddressed calls (server not found) are not tool usage and are not recorded; the internal 4xx-reinit retry records only the final outcome. The `Recorder` lives on `Core` (one per process, reached via the Session), accumulates a delta in memory (mutex-only, no I/O on the call path), and flushes every ~30s plus once on `Core.Close`. A nil `*Recorder` is valid and a no-op, so call sites are unconditional.
+**Write path** (`internal/metrics`): tool calls are dispatched in serve-mode processes (the shared daemon or an embedded serve), never in the web process, so metrics flow through a file on disk. `Router.CallTool` records one `CallSample` per call at exit — outcome `ok`, `tool_error` (upstream returned `isError`), `error` (transport/startup failure), `timeout`, `cancelled` (the client abandoned the call — a cancellation notification, or an HTTP client that dropped its POST; not counted as an error), or `denied` (permission refusal; duration 0). Manager tools record under server `mcpmu`. Misaddressed calls (server not found) are not tool usage and are not recorded; the internal 4xx-reinit retry records only the final outcome. The `Recorder` lives on `Core` (one per process, reached via the Session), accumulates a delta in memory (mutex-only, no I/O on the call path), and flushes every ~30s plus once on `Core.Close`. A nil `*Recorder` is valid and a no-op, so call sites are unconditional.
 
 **Multi-writer story**: a daemon and one or more embedded serves can run concurrently against the same config. Each flush is a read-merge-write of `metrics.json` under an exclusive file lock (`metrics.json.lock`, via `process.LockFileBlocking` on the same flock/LockFileEx primitive as `manager.lock`; the lock file is never deleted, for the same inode-race reason). Because each writer contributes only its own delta since its last flush, no writer clobbers another's counts; a crash costs at most one flush interval of data. Writes land in a temp file, fsync, then atomic rename — so readers (the web process) never need the lock. On flush failure the delta is merged back and retried on the next tick.
 

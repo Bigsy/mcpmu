@@ -77,9 +77,52 @@ mcpmu serve --stdio --isolated
 - `--expose-manager-tools` — include mcpmu.* tools in tools/list (default: hidden)
 - `--resources` — passthrough resources/* from upstream servers (default: on)
 - `--prompts` — passthrough prompts/* from upstream servers (default: on)
-- `--isolated` — bypass shared-daemon mode for this process and run embedded
+- `--isolated` — bypass shared-daemon mode for this process and run embedded (stdio only)
 
 Resource URIs are passed through unmodified from upstream servers. Prompt names are qualified as `serverName.promptName`.
+
+## HTTP serve mode
+
+The same aggregation endpoint over the MCP Streamable HTTP transport (POST +
+GET SSE) instead of stdio — one long-running foreground process that any number
+of HTTP MCP clients can connect to. It never uses the shared daemon.
+
+```bash
+mcpmu serve --http                                    # 127.0.0.1:8081
+mcpmu serve --http --addr 127.0.0.1:9090              # custom port
+mcpmu serve --http --addr 0.0.0.0:8081 --token $TOK   # token mandatory off-loopback
+mcpmu serve --http --session-idle-timeout 1h --allow-origin https://myapp.example
+mcpmu serve --http --namespace work --eager           # the stdio flags apply too
+```
+
+`POST /mcp` uses the default namespace (the same auto-select as stdio);
+`POST /mcp/{namespace}` selects one. `GET` on the same URL attaches the
+standalone SSE stream that carries server-initiated notifications; `DELETE`
+ends the session.
+
+### HTTP serve flags
+
+- `--http` — expose the endpoint over Streamable HTTP instead of stdio
+- `--addr` — listen address (default: `127.0.0.1:8081`)
+- `--token` — bearer token required on every request. Falls back to
+  `MCPMU_SERVE_TOKEN` when the flag is absent; the flag wins when both are set.
+  Mandatory for a non-loopback `--addr` — binding one without a token refuses to
+  start, because serve-mode `tools/call` is arbitrary code execution.
+- `--allow-origin` — extra allowed `Origin`, repeatable. Loopback and
+  `localhost` origins are always allowed; everything else is rejected unless
+  listed here.
+- `--session-idle-timeout` — reap sessions with no client activity for this long
+  (default: `30m`, `0` = never). A request being dispatched counts as activity
+  for as long as it runs, so a long tool call is not reaped mid-flight.
+  SSE keepalive writes deliberately do not count.
+
+The four flags above require `--http`; passing one without it is an error.
+`--isolated` is rejected with `--http` — there is no daemon to skip. For
+per-session upstream instances use `"shared": false` on individual servers,
+which is what session reaping keeps safe here (session count is process count).
+
+TLS termination is out of scope; put a reverse proxy in front for network
+deployments.
 
 ## Shared daemon mode
 
