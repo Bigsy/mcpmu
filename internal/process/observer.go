@@ -7,12 +7,22 @@ import (
 	"github.com/Bigsy/mcpmu/internal/mcp"
 )
 
-// DiscoveryResult is the immutable result of one Supervisor-owned initialize
-// and initial tools/list sequence. Generation prevents a late result from an
-// old process from replacing catalog data for a newer process.
+// DiscoveryResult is the immutable result of one upstream catalog probe: the
+// Supervisor-owned initialize plus initial tools/list, or a later refresh of
+// the same generation. Generation prevents a late result from an old process
+// from replacing catalog data for a newer process; Sequence does the same job
+// between the producers that share one generation.
 type DiscoveryResult struct {
-	Instance     InstanceID
-	Generation   uint64
+	Instance   InstanceID
+	Generation uint64
+	// Sequence orders results *within* one Generation, which Generation alone
+	// cannot: the initial discovery and a list_changed refresh both describe
+	// generation N, so without it an older snapshot applied late overwrites
+	// newer tools. Producers stamp it with Handle.NextDiscoverySequence at the
+	// moment the data is obtained — not at publish or apply time, which can be
+	// arbitrarily delayed by scheduling. Zero means unsequenced: ordering falls
+	// back to Generation alone.
+	Sequence     uint64
 	Initialized  bool
 	Capabilities mcp.ServerCapabilities
 	Tools        []mcp.Tool

@@ -65,6 +65,67 @@ func TestVerifiedCatalogRetainsLastGoodAndRejectsOldGeneration(t *testing.T) {
 	}
 }
 
+// TestVerifiedCatalogRejectsStaleSequenceWithinGeneration pins the ordering
+// rule that Generation alone cannot express. The initial discovery and a
+// list_changed refresh both describe generation N, and the goroutine carrying
+// the initial snapshot can be descheduled past the refresh — either inside the
+// Supervisor's publish or inside ensureCatalog re-applying the handle's stored
+// result. Before Sequence, that stale snapshot won and the refreshed tools
+// vanished until the next refresh.
+func TestVerifiedCatalogRejectsStaleSequenceWithinGeneration(t *testing.T) {
+	catalog := newVerifiedCatalog()
+	id := process.SharedInstanceID("changing")
+	toolsCapability := &mcp.ToolsCapability{ListChanged: true}
+	discovered := process.DiscoveryResult{
+		Instance: id, Generation: 1, Sequence: 1, Initialized: true,
+		Capabilities: mcp.ServerCapabilities{Tools: toolsCapability},
+		Tools:        []mcp.Tool{{Name: "old"}},
+	}
+
+	catalog.apply(discovered)
+	catalog.apply(process.DiscoveryResult{
+		Instance: id, Generation: 1, Sequence: 2, Initialized: true,
+		Capabilities: mcp.ServerCapabilities{Tools: toolsCapability},
+		Tools:        []mcp.Tool{{Name: "new"}},
+	})
+
+	// The same result re-applied by a second caller, and any older snapshot of
+	// the generation, must both be no-ops.
+	if changed, _ := catalog.apply(discovered); changed {
+		t.Fatal("re-applying an already-applied result reported a change")
+	}
+	entry := catalog.snapshot(id)
+	if _, ok := entry.tools["new"]; !ok {
+		t.Fatal("stale same-generation snapshot replaced the refreshed catalog")
+	}
+	if _, ok := entry.tools["old"]; ok {
+		t.Fatal("stale same-generation snapshot restored a removed tool")
+	}
+
+	// A restart starts a fresh sequence space: the new generation's first
+	// snapshot must not be judged stale against the previous generation.
+	catalog.invalidate(id, 1)
+	catalog.apply(process.DiscoveryResult{
+		Instance: id, Generation: 2, Sequence: 1, Initialized: true,
+		Capabilities: mcp.ServerCapabilities{Tools: toolsCapability},
+		Tools:        []mcp.Tool{{Name: "restarted"}},
+	})
+	if _, ok := catalog.snapshot(id).tools["restarted"]; !ok {
+		t.Fatal("first snapshot of a new generation was rejected as stale")
+	}
+
+	// Unsequenced results (Sequence 0) keep their pre-existing behaviour:
+	// ordering falls back to Generation alone.
+	catalog.apply(process.DiscoveryResult{
+		Instance: id, Generation: 2, Initialized: true,
+		Capabilities: mcp.ServerCapabilities{Tools: toolsCapability},
+		Tools:        []mcp.Tool{{Name: "unsequenced"}},
+	})
+	if _, ok := catalog.snapshot(id).tools["unsequenced"]; !ok {
+		t.Fatal("unsequenced result was rejected")
+	}
+}
+
 func TestCatalogUnknownGenerationFailureWakesJoinersWithError(t *testing.T) {
 	catalog := newVerifiedCatalog()
 	id := process.SharedInstanceID("crashed")

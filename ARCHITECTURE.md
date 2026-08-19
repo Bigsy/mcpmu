@@ -311,6 +311,17 @@ advertises tools stays retryable and retains the last verified tool set. Stops
 and config reloads invalidate verification, restarts publish a fresh generation,
 and late results from older generations are ignored.
 
+Generation alone cannot order results *within* one generation, and more than one
+producer describes generation N: the Supervisor's initial discovery and every
+subsequent refresh. Each result therefore also carries a `Sequence`, stamped
+from a per-handle counter at the moment the upstream response lands, and the
+catalog rejects a result whose sequence is not newer than the one already
+applied for that generation. That makes an already-applied result idempotent —
+`ensureCatalog` re-applies the handle's stored initial result, which the
+Observer path has usually applied already — and stops a snapshot whose carrier
+goroutine was descheduled from overwriting newer tools. A new generation starts
+a fresh sequence space.
+
 An upstream `notifications/tools/list_changed` callback only enters the
 broadcaster queue. Its worker refreshes that generation's catalog entry before
 fanning the notification out to Sessions, avoiding the reader-goroutine

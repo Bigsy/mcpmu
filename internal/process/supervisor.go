@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -452,7 +453,8 @@ initLoop:
 	if initErr != nil {
 		handle.setInitError(initErr)
 		s.publishDiscovery(DiscoveryResult{
-			Instance: handle.instance, Generation: handle.generation, Err: initErr,
+			Instance: handle.instance, Generation: handle.generation,
+			Sequence: handle.NextDiscoverySequence(), Err: initErr,
 		})
 		_ = handle.Stop()
 		s.emitStatus(name, events.StateError, handle.PID(), nil, fmt.Sprintf("MCP init failed after %d attempts: %v", MaxInitRetries, initErr))
@@ -608,7 +610,8 @@ func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, generation ui
 				needsLoginErr := fmt.Errorf("%w for server %s", ErrNeedsLogin, name)
 				handle.setInitError(needsLoginErr)
 				s.publishDiscovery(DiscoveryResult{
-					Instance: handle.instance, Generation: handle.generation, Err: needsLoginErr,
+					Instance: handle.instance, Generation: handle.generation,
+					Sequence: handle.NextDiscoverySequence(), Err: needsLoginErr,
 				})
 				handle.signalToolsReady()
 
@@ -619,7 +622,8 @@ func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, generation ui
 		}
 
 		s.publishDiscovery(DiscoveryResult{
-			Instance: handle.instance, Generation: handle.generation, Err: err,
+			Instance: handle.instance, Generation: handle.generation,
+			Sequence: handle.NextDiscoverySequence(), Err: err,
 		})
 		_ = handle.Stop()
 		s.emitStatus(name, events.StateError, 0, nil, fmt.Sprintf("MCP init failed: %v", err))
@@ -822,7 +826,8 @@ func (s *Supervisor) discoverInitialTools(handle *Handle, client *mcp.Client, na
 	if capabilities.Tools == nil {
 		handle.SetTools([]mcp.Tool{})
 		s.publishDiscovery(DiscoveryResult{
-			Instance: handle.instance, Generation: handle.generation, Initialized: true,
+			Instance: handle.instance, Generation: handle.generation,
+			Sequence: handle.NextDiscoverySequence(), Initialized: true,
 			Capabilities: capabilities, Tools: []mcp.Tool{},
 		})
 		return
@@ -832,10 +837,16 @@ func (s *Supervisor) discoverInitialTools(handle *Handle, client *mcp.Client, na
 	defer cancel()
 
 	tools, err := client.ListTools(ctx)
+	// Stamped here, next to the response: everything below — publishing, the
+	// observer's apply, a caller re-applying the stored result later — can be
+	// descheduled past a list_changed refresh of the same generation, and the
+	// catalog needs to know this snapshot is the older of the two.
+	sequence := handle.NextDiscoverySequence()
 	if err != nil {
 		s.bus.Publish(events.NewErrorEvent(name, err, "Failed to list tools"))
 		s.publishDiscovery(DiscoveryResult{
-			Instance: handle.instance, Generation: handle.generation, Initialized: true,
+			Instance: handle.instance, Generation: handle.generation,
+			Sequence: sequence, Initialized: true,
 			Capabilities: capabilities, Err: err,
 		})
 		return
@@ -843,7 +854,8 @@ func (s *Supervisor) discoverInitialTools(handle *Handle, client *mcp.Client, na
 
 	handle.SetTools(tools)
 	s.publishDiscovery(DiscoveryResult{
-		Instance: handle.instance, Generation: handle.generation, Initialized: true,
+		Instance: handle.instance, Generation: handle.generation,
+		Sequence: sequence, Initialized: true,
 		Capabilities: capabilities, Tools: tools,
 	})
 	s.publishToolsUpdated(name, tools)
@@ -998,6 +1010,7 @@ type Handle struct {
 	discovery    DiscoveryResult
 	discoverySet bool
 	discoveryMu  sync.RWMutex
+	discoverySeq atomic.Uint64 // stamps DiscoveryResult.Sequence
 	logs         []string
 	logsMu       sync.RWMutex
 	bus          *events.Bus
@@ -1024,6 +1037,15 @@ func (h *Handle) InstanceID() InstanceID {
 // Generation identifies this exact process/transport generation.
 func (h *Handle) Generation() uint64 {
 	return h.generation
+}
+
+// NextDiscoverySequence stamps a DiscoveryResult produced for this handle.
+// Call it where the catalog data is obtained (right after the upstream
+// responds), so that a snapshot taken earlier always carries a lower sequence
+// than a later one even if the goroutine carrying it is descheduled before it
+// reaches the catalog. See DiscoveryResult.Sequence.
+func (h *Handle) NextDiscoverySequence() uint64 {
+	return h.discoverySeq.Add(1)
 }
 
 // Client returns the MCP client, or nil if the handle has no usable connection

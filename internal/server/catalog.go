@@ -25,6 +25,7 @@ const (
 type catalogEntry struct {
 	state        catalogState
 	generation   uint64
+	sequence     uint64 // highest DiscoveryResult.Sequence applied at generation
 	capabilities mcp.ServerCapabilities
 	tools        map[string]AggregatedTool
 	lastGood     map[string]AggregatedTool
@@ -81,8 +82,18 @@ func (c *verifiedCatalog) apply(result process.DiscoveryResult) (changed, hadPri
 	if result.Generation < entry.generation {
 		return false, entry.lastGood != nil
 	}
+	if result.Generation > entry.generation {
+		// A new process generation starts a fresh sequence space.
+		entry.generation = result.Generation
+		entry.sequence = 0
+	} else if result.Sequence != 0 && result.Sequence <= entry.sequence {
+		// Same generation, but a newer snapshot already landed: this one is
+		// stale. Without the check, an initial discovery re-applied after a
+		// list_changed refresh silently restores the pre-refresh tool set.
+		return false, entry.lastGood != nil
+	}
+	entry.sequence = max(entry.sequence, result.Sequence)
 	hadPrior = entry.lastGood != nil
-	entry.generation = result.Generation
 	entry.capabilities = result.Capabilities
 	entry.err = result.Err
 
@@ -117,6 +128,9 @@ func (c *verifiedCatalog) invalidate(id process.InstanceID, generation uint64) {
 	entry := c.entries[id]
 	if generation < entry.generation {
 		return
+	}
+	if generation > entry.generation {
+		entry.sequence = 0
 	}
 	entry.generation = generation
 	entry.state = catalogUnknown

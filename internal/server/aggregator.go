@@ -340,16 +340,22 @@ func (a *Aggregator) refreshHandleTools(ctx context.Context, handle *process.Han
 	}
 	if capabilities.Tools == nil {
 		result.Tools = []mcp.Tool{}
+		result.Sequence = handle.NextDiscoverySequence()
 		a.catalog.apply(result)
 		return nil
 	}
 	client := handle.Client()
 	if client == nil {
 		result.Err = errors.New("upstream client is unavailable")
+		result.Sequence = handle.NextDiscoverySequence()
 		a.catalog.apply(result)
 		return result.Err
 	}
 	tools, err := client.ListTools(ctx)
+	// Stamped next to the response, so this snapshot outranks every earlier one
+	// for the generation — including the initial discovery, whose apply may
+	// still be in flight on the Supervisor's goroutine.
+	result.Sequence = handle.NextDiscoverySequence()
 	result.Tools = tools
 	result.Err = err
 	if err == nil {
