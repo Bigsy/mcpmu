@@ -21,7 +21,14 @@ func waitForPIDFile(t *testing.T, path string) int {
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(path)
 		if err == nil {
-			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data)))
+			value := strings.TrimSpace(string(data))
+			if value == "" {
+				// Shell redirection creates the file before echo writes the PID.
+				// Treat existence with no content as not ready yet.
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			pid, parseErr := strconv.Atoi(value)
 			if parseErr != nil {
 				t.Fatalf("parse child PID: %v", parseErr)
 			}

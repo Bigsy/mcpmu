@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -202,6 +203,93 @@ func TestSessionExpiredErrorClearsState(t *testing.T) {
 	}
 	if transport.NegotiatedVersion() != "" {
 		t.Fatalf("negotiated version not cleared after expiry: %q", transport.NegotiatedVersion())
+	}
+}
+
+// TestStalePOSTDoesNotClearGETExpiryLatch forces the ordering where the GET
+// stream detects expiry while a POST carrying the same stale session is still
+// in flight. The later POST 404 must not erase the GET path's expiry latch;
+// otherwise the next call goes out with no session header and gets a plain 400
+// instead of entering client recovery.
+func TestStalePOSTDoesNotClearGETExpiryLatch(t *testing.T) {
+	postStarted := make(chan struct{})
+	releasePost := make(chan struct{})
+	var requestsMu sync.Mutex
+	nonInitRequests := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.Unmarshal(body, &msg); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if msg.Method == "initialize" {
+			w.Header().Set("Mcp-Session-Id", "session-1")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{}}`, msg.ID)
+			return
+		}
+
+		requestsMu.Lock()
+		nonInitRequests++
+		requestNumber := nonInitRequests
+		requestsMu.Unlock()
+		if r.Header.Get("Mcp-Session-Id") == "" {
+			http.Error(w, "missing Mcp-Session-Id", http.StatusBadRequest)
+			return
+		}
+		if requestNumber == 1 {
+			close(postStarted)
+			<-releasePost
+		}
+		http.Error(w, "unknown session", http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	transport := NewStreamableHTTPTransport(StreamableHTTPConfig{URL: srv.URL})
+	t.Cleanup(func() { _ = transport.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)); err != nil {
+		t.Fatalf("initialize send: %v", err)
+	}
+
+	postErr := make(chan error, 1)
+	go func() {
+		postErr <- transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`))
+	}()
+	select {
+	case <-postStarted:
+	case <-ctx.Done():
+		t.Fatal("stale POST did not reach server")
+	}
+
+	// Simulate the standalone GET stream winning the expiry race.
+	transport.handleSessionExpired("session-1")
+	close(releasePost)
+	var expired *SessionExpiredError
+	if err := <-postErr; !errors.As(err, &expired) {
+		t.Fatalf("stale POST error = %v, want *SessionExpiredError", err)
+	}
+
+	// The expiry latch must still reject locally; reaching the server would
+	// produce its missing-header 400 and increment nonInitRequests.
+	err := transport.Send(ctx, []byte(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`))
+	if !errors.As(err, &expired) {
+		t.Fatalf("Send after competing expiry signals = %v, want *SessionExpiredError", err)
+	}
+	requestsMu.Lock()
+	defer requestsMu.Unlock()
+	if nonInitRequests != 1 {
+		t.Fatalf("non-initialize requests reaching server = %d, want 1", nonInitRequests)
 	}
 }
 

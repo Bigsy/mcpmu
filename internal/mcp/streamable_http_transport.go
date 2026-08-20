@@ -286,16 +286,17 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 			return fmt.Errorf("request failed: %s - %s", resp.Status, bodyStr)
 		}
 
-		// Capture session ID from response
-		// Any successful POST settles the expiry question: either the header
-		// carries the replacement session ID, or this server does not issue
-		// sessions at all — in both cases the latch must not survive.
-		t.mu.Lock()
-		if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
-			t.sessionID = sid
+		// A server may rotate the session ID even on an error response (for
+		// example, alongside a 401). An explicit replacement settles the expiry
+		// question immediately; an error with no replacement must leave any
+		// existing expiry latch intact.
+		responseSessionID := resp.Header.Get("Mcp-Session-Id")
+		if responseSessionID != "" {
+			t.mu.Lock()
+			t.sessionID = responseSessionID
+			t.expiredSessionID = ""
+			t.mu.Unlock()
 		}
-		t.expiredSessionID = ""
-		t.mu.Unlock()
 
 		// Check response status
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
@@ -318,6 +319,16 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 				return &SessionExpiredError{}
 			}
 			return fmt.Errorf("request failed: %s - %s", resp.Status, string(body))
+		}
+
+		// A successful POST with no session header means this server issues no
+		// sessions, so it also settles the expiry question. Keep this after the
+		// status check: a stale 404 without a replacement ID must not clear a
+		// latch set concurrently by the GET stream.
+		if responseSessionID == "" {
+			t.mu.Lock()
+			t.expiredSessionID = ""
+			t.mu.Unlock()
 		}
 
 		// Success! Store the negotiated version
