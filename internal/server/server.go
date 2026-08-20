@@ -841,8 +841,8 @@ func (s *Server) OnUpstreamNotification(notification process.UpstreamNotificatio
 
 // discoverAndNotify continues tool discovery for straggling servers in the background.
 // It discovers pending servers concurrently and sends a notifications/tools/list_changed
-// as soon as the first straggler succeeds, so the client can refresh promptly instead of
-// waiting for all servers (including broken ones) to time out.
+// each time a straggler succeeds, so the client can refresh promptly without missing
+// later successes or waiting for broken servers to time out.
 //
 // pendingNames is the set of servers that were still pending when the grace period expired.
 func (s *Server) discoverAndNotify(pendingNames []string) {
@@ -851,9 +851,11 @@ func (s *Server) discoverAndNotify(pendingNames []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultToolDiscoveryTimeout)
 	defer cancel()
 
-	// Channel signals when any single server finishes discovery successfully.
-	notify := make(chan struct{}, 1)
-	notified := false
+	// Buffer one completion per pending server. A non-blocking, single-slot
+	// signal loses later completions when several stragglers finish close
+	// together, leaving clients unaware of tools discovered after the first
+	// notification.
+	completed := make(chan string, len(pendingNames))
 
 	var wg sync.WaitGroup
 	for _, name := range pendingNames {
@@ -868,29 +870,24 @@ func (s *Server) discoverAndNotify(pendingNames []string) {
 			}
 			log.Printf("Background discovery succeeded for %s (%d tools)", serverName, len(tools))
 
-			// Signal that at least one server made progress
-			select {
-			case notify <- struct{}{}:
-			default:
-			}
+			completed <- serverName
 		}(name)
 	}
 
-	// Wait for first success (or all to finish)
+	// Close the completion stream after every discovery attempt has finished.
 	go func() {
 		wg.Wait()
-		close(notify)
+		close(completed)
 	}()
 
-	for range notify {
-		if !notified {
-			notified = true
-			s.sendNotification("notifications/tools/list_changed")
-			log.Printf("Sent tools/list_changed notification (background discovery made progress)")
-		}
+	notified := 0
+	for serverName := range completed {
+		notified++
+		s.sendNotification("notifications/tools/list_changed")
+		log.Printf("Sent tools/list_changed notification (background discovery completed for %s)", serverName)
 	}
 
-	if !notified {
+	if notified == 0 {
 		log.Printf("Background discovery made no progress (%d still pending), skipping notification",
 			len(pendingNames))
 	}

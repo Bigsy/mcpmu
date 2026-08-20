@@ -481,7 +481,7 @@ Serve mode uses a two-phase `tools/list` flow so clients are not blocked behind 
 2. On the first `tools/list`, `mcpmu` starts or probes all selected servers concurrently.
 3. It waits up to an 8 second grace period and returns the tools that are already ready.
 4. Any remaining discovery continues in the background with the normal per-server timeout.
-5. If background discovery makes progress, `mcpmu` sends `notifications/tools/list_changed` so the client can refresh with another `tools/list`.
+5. Each time a background straggler completes discovery, `mcpmu` sends `notifications/tools/list_changed` so the client can refresh without missing tools from servers that finish after an earlier notification.
 6. Config reloads that may change the visible tool set also send `notifications/tools/list_changed`.
 
 The catalog retains the last verified tools across a transient refresh failure,

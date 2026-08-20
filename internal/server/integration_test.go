@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -976,20 +977,20 @@ func TestServer_NamespaceServerDefaults_EndToEnd(t *testing.T) {
 }
 
 // TestServer_ProgressiveDiscovery verifies that:
-// 1. tools/list returns immediately with tools from fast servers only
-// 2. A notifications/tools/list_changed notification is sent when slow servers finish
-// 3. A second tools/list returns the complete tool set
+// 1. tools/list returns immediately with whatever is ready within the grace period
+// 2. A notifications/tools/list_changed notification is sent for each later success
+// 3. Refreshing after notifications eventually returns the complete tool set
 //
-// Uses an in-process server with a short grace period (100ms) so the slow server
-// (500ms tools/list delay) reliably exceeds it, guaranteeing the notification path
-// is exercised every run.
+// Uses an in-process server with a near-zero grace period and explicit 100ms
+// and 500ms tools/list delays, making both servers deterministic stragglers
+// and guaranteeing two distinct completion notifications.
 func TestServer_ProgressiveDiscovery(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Config: one fast server, one slow server (500ms delay on tools/list)
+	// Config: one faster server (100ms) and one slow server (500ms).
 	enabled := true
 	cfg := &config.Config{
 		SchemaVersion: 1,
@@ -1001,7 +1002,7 @@ func TestServer_ProgressiveDiscovery(t *testing.T) {
 				Args:    []string{"-test.run=TestHelperProcess", "--"},
 				Env: map[string]string{
 					"GO_WANT_HELPER_PROCESS": "1",
-					"FAKE_MCP_CFG":           `{"tools":[{"name":"fast_tool","description":"A fast tool"}],"echoToolCalls":true}`,
+					"FAKE_MCP_CFG":           `{"tools":[{"name":"fast_tool","description":"A fast tool"}],"delays":{"tools/list":100000000},"echoToolCalls":true}`,
 				},
 			},
 			"slow-srv": {
@@ -1011,7 +1012,7 @@ func TestServer_ProgressiveDiscovery(t *testing.T) {
 				Args:    []string{"-test.run=TestHelperProcess", "--"},
 				Env: map[string]string{
 					"GO_WANT_HELPER_PROCESS": "1",
-					// 500ms delay on tools/list — exceeds the 100ms test grace period
+					// 500ms delay on tools/list — completes well after fast-srv.
 					"FAKE_MCP_CFG": `{"tools":[{"name":"slow_tool","description":"A slow tool"}],"delays":{"tools/list":500000000},"echoToolCalls":true}`,
 				},
 			},
@@ -1046,8 +1047,9 @@ func TestServer_ProgressiveDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// Set a very short grace period so the slow server (500ms) always exceeds it
-	srv.listToolsGracePeriod = 100 * time.Millisecond
+	// Expire before either helper process can start so the test deterministically
+	// covers multiple background successes rather than depending on runner load.
+	srv.listToolsGracePeriod = time.Nanosecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1125,13 +1127,38 @@ func TestServer_ProgressiveDiscovery(t *testing.T) {
 		t.Error("Expected tools.listChanged=true in capabilities")
 	}
 
-	// Step 2: Send tools/list — grace period is 100ms, so the slow server (500ms) will be pending
+	// Step 2: Send tools/list — the near-zero grace period leaves both servers pending.
 	send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 
-	// Read first tools/list response
-	toolsLine1, err := readLine(5 * time.Second)
-	if err != nil {
-		t.Fatalf("tools/list read: %v", err)
+	// Read the first tools/list response. On a heavily loaded race runner, a
+	// background completion may be written before the response, so correlate by
+	// JSON-RPC ID and remember any early refresh signal.
+	earlyNotifications := 0
+	var toolsLine1 string
+	firstResponseDeadline := time.Now().Add(5 * time.Second)
+	for toolsLine1 == "" {
+		line, err := readLine(time.Until(firstResponseDeadline))
+		if err != nil {
+			t.Fatalf("tools/list read: %v", err)
+		}
+		var envelope struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+			t.Fatalf("Parse tools/list envelope: %v\nLine: %s", err, line)
+		}
+		if envelope.Method != "" {
+			if envelope.Method != "notifications/tools/list_changed" {
+				t.Fatalf("Expected notifications/tools/list_changed, got %q", envelope.Method)
+			}
+			earlyNotifications++
+			continue
+		}
+		if envelope.ID == nil || *envelope.ID != 2 {
+			t.Fatalf("Expected tools/list response id 2, got %v", envelope.ID)
+		}
+		toolsLine1 = line
 	}
 
 	var toolsResp1 struct {
@@ -1156,64 +1183,109 @@ func TestServer_ProgressiveDiscovery(t *testing.T) {
 	}
 	t.Logf("First tools/list: %v", firstToolNames)
 
-	if !firstToolNames["fast-srv.fast_tool"] {
-		t.Error("Expected fast-srv.fast_tool in first tools/list")
-	}
-	if firstToolNames["slow-srv.slow_tool"] {
-		t.Fatal("slow-srv.slow_tool should NOT be in first tools/list (grace period too short)")
+	if len(firstToolNames) != 0 {
+		t.Fatalf("Expected no tools within the near-zero grace period, got %v", firstToolNames)
 	}
 
-	// Step 3: Wait for notifications/tools/list_changed from background discovery
-	notifLine, err := readLine(10 * time.Second)
-	if err != nil {
-		t.Fatalf("notification read: %v", err)
-	}
-	var notif struct {
-		Method string `json:"method"`
-	}
-	if err := json.Unmarshal([]byte(notifLine), &notif); err != nil {
-		t.Fatalf("Parse notification: %v\nLine: %s", err, notifLine)
-	}
-	if notif.Method != "notifications/tools/list_changed" {
-		t.Fatalf("Expected notifications/tools/list_changed, got %q", notif.Method)
-	}
-	t.Log("Received notifications/tools/list_changed")
+	// Steps 3-4: Refresh after every notification until the slow server is
+	// visible. Both servers missed the initial grace period, so the slow server's
+	// completion must still produce a notification after the fast server's.
+	toolNames := firstToolNames
+	notifications := earlyNotifications
+	refreshPending := earlyNotifications > 0
+	nextRequestID := 3
+	discoveryDeadline := time.Now().Add(15 * time.Second)
+	for !toolNames["slow-srv.slow_tool"] {
+		if !refreshPending {
+			line, err := readLine(time.Until(discoveryDeadline))
+			if err != nil {
+				t.Fatalf("notification read: %v", err)
+			}
+			var envelope struct {
+				Method string `json:"method"`
+			}
+			if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+				t.Fatalf("Parse notification: %v\nLine: %s", err, line)
+			}
+			if envelope.Method != "notifications/tools/list_changed" {
+				t.Fatalf("Expected notifications/tools/list_changed, got %q", envelope.Method)
+			}
+			notifications++
+		}
 
-	// Step 4: Send tools/list again — should now include slow server's tools
-	send(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
+		refreshPending = false
+		requestID := nextRequestID
+		nextRequestID++
+		send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/list"}`, requestID))
 
-	toolsLine2, err := readLine(15 * time.Second)
-	if err != nil {
-		t.Fatalf("second tools/list read: %v", err)
+		for {
+			line, err := readLine(time.Until(discoveryDeadline))
+			if err != nil {
+				t.Fatalf("tools/list refresh read: %v", err)
+			}
+			var envelope struct {
+				ID     *int   `json:"id"`
+				Method string `json:"method"`
+			}
+			if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+				t.Fatalf("Parse tools/list refresh envelope: %v\nLine: %s", err, line)
+			}
+			if envelope.Method != "" {
+				if envelope.Method != "notifications/tools/list_changed" {
+					t.Fatalf("Expected notifications/tools/list_changed, got %q", envelope.Method)
+				}
+				notifications++
+				refreshPending = true
+				continue
+			}
+			if envelope.ID == nil || *envelope.ID != requestID {
+				t.Fatalf("Expected tools/list response id %d, got %v", requestID, envelope.ID)
+			}
+
+			var toolsResp struct {
+				Result struct {
+					Tools []struct {
+						Name string `json:"name"`
+					} `json:"tools"`
+				} `json:"result"`
+				Error *RPCError `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(line), &toolsResp); err != nil {
+				t.Fatalf("Parse tools/list refresh: %v\nLine: %s", err, line)
+			}
+			if toolsResp.Error != nil {
+				t.Fatalf("tools/list refresh error: %v", toolsResp.Error)
+			}
+
+			toolNames = make(map[string]bool)
+			for _, tool := range toolsResp.Result.Tools {
+				toolNames[tool.Name] = true
+			}
+			t.Logf("Refreshed tools/list after notification: %v", toolNames)
+			break
+		}
 	}
 
-	var toolsResp2 struct {
-		Result struct {
-			Tools []struct {
-				Name string `json:"name"`
-			} `json:"tools"`
-		} `json:"result"`
-		Error *RPCError `json:"error"`
+	if !toolNames["fast-srv.fast_tool"] {
+		t.Fatal("Expected fast-srv.fast_tool after progressive discovery completed")
 	}
-	if err := json.Unmarshal([]byte(toolsLine2), &toolsResp2); err != nil {
-		t.Fatalf("Parse second tools/list: %v\nLine: %s", err, toolsLine2)
+	for notifications < 2 {
+		line, err := readLine(time.Until(discoveryDeadline))
+		if err != nil {
+			t.Fatalf("remaining notification read: %v", err)
+		}
+		var envelope struct {
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+			t.Fatalf("Parse remaining notification: %v\nLine: %s", err, line)
+		}
+		if envelope.Method != "notifications/tools/list_changed" {
+			t.Fatalf("Expected notifications/tools/list_changed, got %q", envelope.Method)
+		}
+		notifications++
 	}
-	if toolsResp2.Error != nil {
-		t.Fatalf("second tools/list error: %v", toolsResp2.Error)
-	}
-
-	secondToolNames := make(map[string]bool)
-	for _, tool := range toolsResp2.Result.Tools {
-		secondToolNames[tool.Name] = true
-	}
-	t.Logf("Second tools/list: %v", secondToolNames)
-
-	if !secondToolNames["fast-srv.fast_tool"] {
-		t.Error("Expected fast-srv.fast_tool in second tools/list")
-	}
-	if !secondToolNames["slow-srv.slow_tool"] {
-		t.Error("Expected slow-srv.slow_tool in second tools/list after notification")
-	}
+	t.Logf("Progressive discovery completed after %d notification(s)", notifications)
 
 	// Cleanup: close stdin to stop the server
 	_ = stdinWriter.Close()
