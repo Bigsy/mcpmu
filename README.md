@@ -4,14 +4,15 @@
 
 <h1 align="center">mcpmu (μ)</h1>
 
-<p align="center"><strong>A multiplexing MCP server that aggregates multiple MCP servers behind a single stdio MCP server.</strong></p>
+<p align="center"><strong>A multiplexing MCP gateway that exposes multiple MCP servers through unified stdio or Streamable HTTP endpoints.</strong></p>
 
 Unlike typical MCP setups where each coding agent needs its own server configurations, mcpmu acts as a meta-server: you configure all your MCP servers once, then expose them as a unified endpoint to any agent that supports the Model Context Protocol. Add one entry to Claude Code, Cursor, Windsurf, or any MCP-compatible tool and instantly gain access to your entire MCP ecosystem.
 
 Key differentiators:
 - **Single configuration, universal access** — Define servers once, use everywhere
 - **Namespace profiles** — Group servers by context (work, personal, project) with per-namespace tool permissions
-- **Multi-transport** — Manage both local stdio processes and remote HTTP/SSE endpoints
+- **Flexible upstreams** — Manage both local stdio processes and remote Streamable HTTP/SSE servers
+- **Flexible endpoints** — Connect clients over stdio or Streamable HTTP, with one endpoint per namespace
 - **Registry browser** — Search the official MCP registry and install servers with pre-populated config
 - **Interactive TUI** — Monitor, test, and manage servers with a terminal interface
 - **Tool permissions** — Block unused tools per-namespace or globally deny dangerous tools at the server level
@@ -73,7 +74,7 @@ mcpmu skill install
 
 Then tell your agent: *"Read my current MCP config, add all my servers to mcpmu, and register mcpmu as an MCP server"*
 
-### Or set it up manually with via the TUI, Web or Cmdline
+### Or set it up manually with the TUI, web UI, or CLI
 
 **1. Add your MCP servers:**
 
@@ -84,7 +85,7 @@ mcpmu
 # Start web
 mcpmu web
 
-#Or just use the cli
+# Or use the CLI
 
 # Add a stdio server
 mcpmu add context7 -- npx -y @upstash/context7-mcp
@@ -98,7 +99,10 @@ mcpmu add searxng https://searxng-mcp.example.com/mcp \
   --env-header "CF-Access-Client-Secret: CF_ACCESS_CLIENT_SECRET"
 ```
 
-**2. Register mcpmu with your agent:**
+**2. Choose how your clients connect:**
+
+Use stdio for local agent integrations. Each agent launches an mcpmu shim, and
+on Unix those shims share one background daemon by default:
 
 ```bash
 # Claude Code
@@ -118,7 +122,25 @@ Or add directly to any MCP config JSON (Claude Code, Cursor, Windsurf, etc.):
 }
 ```
 
-That's it. Your agent now has access to all your configured MCP servers through a single endpoint.
+Or run one persistent Streamable HTTP endpoint for multiple HTTP-capable clients:
+
+```bash
+mcpmu serve --http
+```
+
+Then point clients at `http://127.0.0.1:8081/mcp` for the default namespace,
+or `/mcp/{namespace}` for a specific namespace. For example:
+
+```json
+{
+  "mcpmu": {
+    "url": "http://127.0.0.1:8081/mcp"
+  }
+}
+```
+
+That's it. Your clients now have access to all configured MCP servers through
+the transport that fits their setup.
 
 ## Namespaces
 
@@ -145,6 +167,15 @@ claude mcp add work -- mcpmu serve --stdio --namespace work
 **Codex:**
 ```bash
 codex mcp add personal -- mcpmu serve --stdio --namespace personal
+```
+
+**Streamable HTTP:**
+
+With `mcpmu serve --http` running, use the namespace URL directly:
+
+```text
+http://127.0.0.1:8081/mcp/work
+http://127.0.0.1:8081/mcp/personal
 ```
 
 If no namespace is specified, mcpmu uses the default namespace (usually the first namespace created).
@@ -185,8 +216,8 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 
 - **Stdio process management** — Spawn and supervise local MCP servers (npx, binaries, scripts)
 - **Process-tree cleanup** — Stop wrapper-launched workers with their parent and retain identity-validated crash recovery records
-- **Streamable HTTP/SSE** — Connect to remote MCP endpoints with full SSE support
-- **MCP aggregation** — Expose all managed servers as a single MCP endpoint via `mcpmu serve --stdio`, or over Streamable HTTP via `mcpmu serve --http` with one URL per namespace
+- **Remote upstreams** — Connect to Streamable HTTP/SSE MCP servers with full SSE support
+- **MCP aggregation** — Expose all managed servers over stdio or Streamable HTTP, with one endpoint per namespace
 - **Faithful proxying** — Tool definitions arrive with `title`, `annotations`, `outputSchema`, `icons`, and `_meta` intact, and results keep `structuredContent`; a tool's `readOnlyHint` reaches your agent instead of being discarded, so auto-approve still works through mcpmu
 - **Protocol revisions up to 2025-11-25** — Negotiated per client connection rather than pinned, with cancellation and `progressToken` progress relayed in both directions
 - **Shared daemon** — Concurrent `serve` clients share one set of upstream processes by default on Unix
@@ -201,7 +232,16 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 
 ## Serve Mode
 
-Expose managed servers as a single MCP endpoint:
+Expose the same managed servers and namespaces through either client transport:
+
+| Client transport | Best fit | Namespace selection | Process model |
+|------------------|----------|---------------------|---------------|
+| stdio | Local agent and editor integrations | `--namespace work` | Per-client shim with a shared daemon by default on Unix |
+| Streamable HTTP | Persistent or networked endpoints shared by multiple clients | `/mcp/work` | One dedicated, long-running HTTP process |
+
+### Stdio serve mode
+
+Use stdio when the MCP client launches its configured server process:
 
 ```bash
 mcpmu serve --stdio                          # default namespace
@@ -260,7 +300,6 @@ mcpmu serve --http --session-idle-timeout 1h --allow-origin https://myapp.exampl
 Each namespace gets its own URL — one running process, many toolsets:
 
 ```json
-// Claude Code / any Streamable HTTP MCP client
 {
   "mcpmu": {
     "url": "http://127.0.0.1:8081/mcp/work",
