@@ -91,7 +91,7 @@ func newMetricsTestServer(t *testing.T) *Server {
 func get(t *testing.T, srv *Server, path string) (int, string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", path, nil)
+	req := newRequest("GET", path, nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 	resp := rec.Result()
 	defer func() { _ = resp.Body.Close() }()

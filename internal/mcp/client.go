@@ -40,10 +40,6 @@ type Client struct {
 	closed  bool
 	pending map[int64]chan rpcResponse
 
-	// sendMu serializes transport.Send across call and notify so NDJSON
-	// frames don't interleave on stdio.
-	sendMu sync.Mutex
-
 	// reinitMu single-flights session-expiry recovery. See reinitializeOnce.
 	reinitMu sync.Mutex
 
@@ -606,8 +602,7 @@ func (c *Client) cancelUpstream(id int64, ctx context.Context) {
 	}
 }
 
-// notify sends a JSON-RPC notification (no response expected). Serialized
-// with call via sendMu so NDJSON frames cannot interleave on stdio.
+// notify sends a JSON-RPC notification (no response expected).
 func (c *Client) notify(ctx context.Context, method string, params any) error {
 	c.mu.Lock()
 	if c.closed {
@@ -638,10 +633,16 @@ func (c *Client) notify(ctx context.Context, method string, params any) error {
 //
 // initialize and its follow-up notification are exempt: they are how a
 // session is created, so recovering through them could recurse.
+//
+// Sends are not serialized here. Frame integrity is each transport's own
+// job: StdioTransport.Send holds its mutex across the whole NDJSON write,
+// and Streamable HTTP POSTs are independent requests. Holding a client-side
+// lock across transport.Send used to serialize an HTTP transport's entire
+// POST round trip — head-of-line blocking every concurrent caller, and
+// stranding notifications/cancelled behind the very tool call being
+// cancelled until its 5-second deadline blew.
 func (c *Client) sendWithSessionRecovery(ctx context.Context, method string, data []byte) error {
-	c.sendMu.Lock()
 	sendErr := c.transport.Send(ctx, data)
-	c.sendMu.Unlock()
 
 	var expired *SessionExpiredError
 	if !errors.As(sendErr, &expired) || method == "initialize" || method == "notifications/initialized" {
@@ -652,10 +653,7 @@ func (c *Client) sendWithSessionRecovery(ctx context.Context, method string, dat
 	if initErr := c.reinitializeOnce(ctx); initErr != nil {
 		return fmt.Errorf("reinitialize after session expiry: %w", initErr)
 	}
-	c.sendMu.Lock()
-	sendErr = c.transport.Send(ctx, data)
-	c.sendMu.Unlock()
-	return sendErr
+	return c.transport.Send(ctx, data)
 }
 
 // sessionIDer is implemented by transports carrying a server-issued session

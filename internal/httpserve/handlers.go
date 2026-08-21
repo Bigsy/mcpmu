@@ -214,7 +214,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, routeN
 	if ok, full := s.register(id, hs); !ok {
 		s.teardown(id, hs)
 		if full {
-			log.Printf("httpserve: refusing initialize, session table full (%d)", maxSessions)
+			log.Printf("httpserve: refusing initialize, all %d sessions busy", maxSessions)
 			http.Error(w, "too many sessions", http.StatusServiceUnavailable)
 		} else {
 			http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
@@ -250,7 +250,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	replaced, ok := hs.hub.attach()
+	replaced, drain, ok := hs.hub.attach()
 	if !ok {
 		http.Error(w, "unknown or expired session", http.StatusNotFound)
 		return
@@ -309,7 +309,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-hs.ctx.Done():
 			return
-		case <-hs.hub.wake:
+		case <-drain:
 			if !flushFrames() {
 				hs.hub.detach(replaced)
 				return
@@ -380,6 +380,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 		http.Error(w, "marshal response: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Bound the write like the GET stream's per-write deadline. Into a client
+	// that POSTs and never reads, this write "succeeds" into socket buffers
+	// for minutes while inflight stays ≥1 and reapIdle skips the session — a
+	// wedged goroutine plus one of the 256 slots per occurrence, permanent at
+	// the cap. The response is already computed, so a bounded deadline cannot
+	// truncate a legitimate slow tool call.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(writeDeadline))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(data)

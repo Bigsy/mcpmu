@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/Bigsy/mcpmu/internal/flock"
 )
 
 const (
@@ -86,21 +88,30 @@ func Save(cfg *Config) error {
 	return SaveTo(cfg, path)
 }
 
-// SaveTo writes the configuration to a specific path atomically.
-// Uses a temp file + rename pattern for atomic writes.
-func SaveTo(cfg *Config, path string) error {
-	// Expand ~ in path
+// ResolvePath expands a leading ~ and resolves symlinks best-effort, the
+// same way SaveTo prepares the config path. Anything deriving companion
+// files from a data path (e.g. a lock file) must go through this so every
+// process — however it spelled the path — lands on the same name.
+func ResolvePath(path string) (string, error) {
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return fmt.Errorf("get home dir: %w", err)
+			return "", fmt.Errorf("get home dir: %w", err)
 		}
 		path = filepath.Join(home, path[2:])
 	}
-
-	// Resolve symlinks so atomic rename targets the real file
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
+	}
+	return path, nil
+}
+
+// SaveTo writes the configuration to a specific path atomically.
+// Uses a temp file + rename pattern for atomic writes.
+func SaveTo(cfg *Config, path string) error {
+	path, err := ResolvePath(path)
+	if err != nil {
+		return err
 	}
 
 	// Ensure config directory exists
@@ -118,16 +129,12 @@ func SaveTo(cfg *Config, path string) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	// Write to temp file first
-	tmpFile := path + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0600); err != nil {
-		return fmt.Errorf("write temp config: %w", err)
-	}
-
-	// Atomic rename
-	if err := os.Rename(tmpFile, path); err != nil {
-		_ = os.Remove(tmpFile) // Clean up temp file on failure
-		return fmt.Errorf("rename config: %w", err)
+	// Install atomically (temp file + fsync + rename). Callers that need the
+	// whole read-modify-write cycle protected — e.g. the web UI's
+	// mutateConfig — hold flock.WithLock around reload and save; a lock held
+	// only here would fix torn files but still lose concurrent updates.
+	if err := flock.WriteAtomic(path, data); err != nil {
+		return fmt.Errorf("write config: %w", err)
 	}
 
 	return nil

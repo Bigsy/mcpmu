@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -55,9 +56,11 @@ func (a *auth) middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check for Authorization: Bearer header (for API clients)
+		// Check for Authorization: Bearer header (for API clients).
+		// Constant-time: this secret gates config mutation and server
+		// registration, so it gets the same treatment as serve mode's token.
 		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
-			if authHeader[len("Bearer "):] == a.token {
+			if subtle.ConstantTimeCompare([]byte(authHeader[len("Bearer "):]), []byte(a.token)) == 1 {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -125,7 +128,7 @@ func (a *auth) handleLoginSubmit() http.HandlerFunc {
 		}
 
 		submitted := r.FormValue("token")
-		if submitted != a.token {
+		if subtle.ConstantTimeCompare([]byte(submitted), []byte(a.token)) != 1 {
 			http.Redirect(w, r, "/login?error=1", http.StatusSeeOther)
 			return
 		}

@@ -416,11 +416,12 @@ func TestMetrics_RetryAfter4xxRecordsOneSample(t *testing.T) {
 			writeResult(`{"tools":[{"name":"ping","inputSchema":{"type":"object"}}]}`)
 		case "tools/call":
 			if toolCalls.Add(1) == 1 {
-				// A stale session reads as "request failed: 400 ..." to the
-				// transport, which is what CallTool retries once. The body must
-				// not mention a version, or the transport treats it as a
-				// protocol-version rejection instead.
-				http.Error(w, "stale session", http.StatusBadRequest)
+				// A stale session — a 404 for a session ID the upstream once
+				// issued (it sets Mcp-Session-Id on every response) — is the
+				// one failure CallTool retries after reinit. The client layer
+				// reinitializes first; this second 404-shaped path proves the
+				// retry machinery end to end.
+				http.Error(w, "stale session", http.StatusNotFound)
 				return
 			}
 			writeResult(`{"content":[{"type":"text","text":"pong"}]}`)

@@ -7,19 +7,18 @@ package httpserve
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"maps"
+	"math"
 	"net"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Bigsy/mcpmu/internal/httpguard"
 	"github.com/Bigsy/mcpmu/internal/server"
 )
 
@@ -36,10 +35,13 @@ const (
 
 	// maxSessions bounds the session table. Sessions are cheap while lazy,
 	// but each is an upstream fan-out waiting to happen (--eager, or
-	// shared:false private instances), and until the idle reaper runs a
-	// reconnect-looping client that never DELETEs could mint thousands. Far
-	// above any legitimate concurrent-client count; initialize gets 503 past
-	// it.
+	// shared:false private instances). Far above any legitimate
+	// concurrent-client count. Past it, register evicts the
+	// least-recently-active non-busy session per new initialize, so a
+	// client that reconnects by re-initializing recycles its own slot
+	// instead of starving everyone else until the idle reaper's full
+	// SessionIdleTimeout lapses; initialize gets 503 only when every slot
+	// holds work in flight.
 	maxSessions = 256
 
 	// postBodyReadTimeout bounds how long one POST may spend trickling its
@@ -146,12 +148,10 @@ func New(opts Options) (*Server, error) {
 	if opts.Addr == "" {
 		opts.Addr = DefaultAddr
 	}
+	if err := httpguard.RefuseUnsafeBind(opts.Addr, opts.Token, "--token or MCPMU_SERVE_TOKEN"); err != nil {
+		return nil, err
+	}
 	if opts.Token == "" {
-		if !isLoopbackAddr(opts.Addr) {
-			return nil, fmt.Errorf(
-				"refusing to bind %s without a token: serve-mode tools/call is arbitrary code execution. "+
-					"Set --token or MCPMU_SERVE_TOKEN, or bind a loopback address", opts.Addr)
-		}
 		log.Printf("WARNING: serving MCP on %s without authentication. Set --token or MCPMU_SERVE_TOKEN.", opts.Addr)
 	}
 
@@ -172,11 +172,17 @@ func New(opts Options) (*Server, error) {
 	mcpMux.HandleFunc("DELETE /mcp", s.handleDelete)
 	mcpMux.HandleFunc("DELETE /mcp/{namespace}", s.handleDelete)
 
-	// /healthz is exempt from Origin/auth — readiness probe, serves nothing
-	// sensitive. Everything else passes Origin check, then bearer auth.
+	// /healthz is exempt from Host/Origin/auth — readiness probe, serves
+	// nothing sensitive. Everything else passes the shared security wrappers
+	// (Host allowlist, Origin check, bearer auth), installed unconditionally
+	// and outermost: they must hold whether or not a token was configured.
 	outer := http.NewServeMux()
 	outer.HandleFunc("GET /healthz", s.handleHealthz)
-	outer.Handle("/", s.checkOrigin(s.requireAuth(mcpMux)))
+	outer.Handle("/", httpguard.Middleware(httpguard.Options{
+		Addr:           opts.Addr,
+		Token:          opts.Token,
+		AllowedOrigins: opts.AllowedOrigins,
+	}, mcpMux))
 
 	s.http = &http.Server{
 		Addr:    opts.Addr,
@@ -203,8 +209,13 @@ func (s *Server) ListenAndServe() error {
 	return err
 }
 
-// Serve serves on an existing listener (tests).
+// Serve serves on an existing listener (tests). New's tokenless-bind refusal
+// checks only the configured Addr, so re-check whatever listener actually got
+// passed in — it may reach interfaces New never saw.
 func (s *Server) Serve(l net.Listener) error {
+	if err := httpguard.RefuseUnsafeBind(l.Addr().String(), s.opts.Token, "--token or MCPMU_SERVE_TOKEN"); err != nil {
+		return err
+	}
 	err := s.http.Serve(l)
 	if err == http.ErrServerClosed {
 		return nil
@@ -243,18 +254,62 @@ func (s *Server) teardown(id string, hs *httpSession) {
 	s.mu.Unlock()
 }
 
-// register stores a new session, refusing after shutdown began or past the
-// session cap.
+// evictedSession pairs a session removed from the table with its ID so
+// teardown can run after the admission lock is released.
+type evictedSession struct {
+	id string
+	hs *httpSession
+}
+
+// register stores a new session, refusing after shutdown began. At the cap it
+// evicts the least-recently-active non-busy sessions to make room: clients
+// that reconnect by re-initializing instead of DELETE-ing — the normal case,
+// since a dropped stream is not a dead session — leak one slot per reconnect,
+// and without eviction a crash-looping client would lock every healthy client
+// out until SessionIdleTimeout expires (forever with --session-idle-timeout
+// 0). Eviction prefers exactly what the idle reaper would have chosen, just
+// on demand.
+//
+// Teardown of evicted sessions runs after s.mu is released: it performs
+// upstream unsubscribe RPCs, and holding the admission lock across those
+// would stall every other request for their duration.
 func (s *Server) register(id string, hs *httpSession) (ok bool, full bool) {
+	var evicted []evictedSession
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return false, false
 	}
+	for len(s.sessions) >= maxSessions {
+		victimID := ""
+		var oldest int64 = math.MaxInt64
+		for sid, cand := range s.sessions {
+			if cand.busy() {
+				continue
+			}
+			if last := cand.lastActive.Load(); last < oldest {
+				oldest, victimID = last, sid
+			}
+		}
+		if victimID == "" {
+			break // every slot holds work in flight
+		}
+		victim := s.sessions[victimID]
+		delete(s.sessions, victimID)
+		evicted = append(evicted, evictedSession{id: victimID, hs: victim})
+	}
 	if len(s.sessions) >= maxSessions {
+		s.mu.Unlock()
 		return false, true
 	}
 	s.sessions[id] = hs
+	s.mu.Unlock()
+
+	for _, v := range evicted {
+		log.Printf("httpserve: session table full, evicting idle session %s", v.id)
+		s.teardown(v.id, v.hs)
+	}
 	return true, false
 }
 
@@ -325,77 +380,6 @@ func (s *Server) reapIdle(now time.Time) {
 		log.Printf("httpserve: reaping idle session %s", id)
 		s.teardown(id, hs)
 	}
-}
-
-// requireAuth gates every request behind the bearer token. Comparison is
-// constant-time; failures get WWW-Authenticate per RFC 6750.
-func (s *Server) requireAuth(next http.Handler) http.Handler {
-	if s.opts.Token == "" {
-		return next
-	}
-	token := []byte(s.opts.Token)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		const prefix = "Bearer "
-		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, prefix) ||
-			subtle.ConstantTimeCompare([]byte(header[len(prefix):]), token) != 1 {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// checkOrigin rejects browser cross-origin requests (DNS-rebinding
-// protection, spec-mandated). An absent Origin (curl, MCP clients,
-// same-machine agents) is allowed — rebinding attacks come from browsers,
-// which always send it.
-func (s *Server) checkOrigin(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" && !s.originAllowed(origin) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) originAllowed(origin string) bool {
-	for _, allowed := range s.opts.AllowedOrigins {
-		if strings.EqualFold(origin, allowed) {
-			return true
-		}
-	}
-	u, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return false
-	}
-	host := u.Hostname()
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
-// isLoopbackAddr reports whether a listen address can only be reached from
-// this machine. An empty host (":8081") binds every interface and is not
-// loopback.
-func isLoopbackAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return false
-	}
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // newSessionID mints an unguessable session ID — 128 bits, hex. Session IDs

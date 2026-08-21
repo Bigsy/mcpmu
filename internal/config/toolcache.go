@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Bigsy/mcpmu/internal/flock"
 	"github.com/tiktoken-go/tokenizer"
 )
 
@@ -204,33 +205,26 @@ func (tc *ToolCache) load() {
 }
 
 func (tc *ToolCache) save() error {
-	// Resolve symlinks so atomic rename targets the real file
-	path := tc.path
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
+	// Cross-process writers (TUI, web, daemon share this file) serialise on a
+	// dedicated lock file. The in-process tc.mu only orders goroutines; the
+	// fixed .tmp path + rename this once used could interleave across
+	// processes and tear the file.
+	return flock.WithLock(tc.path, func() error {
+		// Resolve symlinks so the atomic rename targets the real file
+		path := tc.path
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			path = resolved
+		}
 
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create cache dir: %w", err)
-	}
-
-	data, err := json.MarshalIndent(tc.cache, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal tool cache: %w", err)
-	}
-
-	tmpFile := path + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0600); err != nil {
-		return fmt.Errorf("write temp cache: %w", err)
-	}
-
-	if err := os.Rename(tmpFile, path); err != nil {
-		_ = os.Remove(tmpFile)
-		return fmt.Errorf("rename cache: %w", err)
-	}
-
-	return nil
+		data, err := json.MarshalIndent(tc.cache, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal tool cache: %w", err)
+		}
+		if err := flock.WriteAtomic(path, data); err != nil {
+			return fmt.Errorf("write cache: %w", err)
+		}
+		return nil
+	})
 }
 
 // input reconstructs the counting input for an already-cached tool.

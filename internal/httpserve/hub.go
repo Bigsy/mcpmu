@@ -25,7 +25,8 @@ type sseFrame struct {
 // load-bearing ones are idempotent "go re-fetch" signals that coalesce.
 //
 // Network writes happen on the GET handler's goroutine, never here: Write
-// only appends to the queue under a short mutex and signals the wake channel.
+// only appends to the queue under a short mutex and signals the current
+// stream's drain channel.
 type sseHub struct {
 	mu       sync.Mutex
 	closed   bool
@@ -33,14 +34,19 @@ type sseHub struct {
 	attached bool
 	replaced chan struct{} // closed when a newer GET stream takes over
 
-	// wake is shared by consecutive streams (only one is attached at a time).
-	// Buffered so a producer never blocks and a signal is never lost between
-	// takeAll and the consumer's next select.
-	wake chan struct{}
+	// drain belongs to the currently attached stream: attach mints a fresh
+	// buffered channel per stream and Write signals only the current one.
+	// A single channel shared across streams loses wakeups at replacement —
+	// an evicted handler can consume the signal via its select race and then
+	// exit, stranding a queued frame on a replacement sitting on an empty
+	// channel. Per-stream channels make that impossible: whatever the evicted
+	// handler does with its own channel, the replacement's was primed by
+	// attach if any backlog existed and is signalled by every later Write.
+	drain chan struct{}
 }
 
 func newSSEHub() *sseHub {
-	return &sseHub{wake: make(chan struct{}, 1)}
+	return &sseHub{}
 }
 
 // Write implements io.Writer for server.Session. Safe to call after teardown
@@ -82,11 +88,14 @@ func (h *sseHub) Write(p []byte) (int, error) {
 		}
 		h.queue = append(h.queue, frame)
 	}
+	drain := h.drain
 	h.mu.Unlock()
 
-	select {
-	case h.wake <- struct{}{}:
-	default:
+	if drain != nil {
+		select {
+		case drain <- struct{}{}:
+		default:
+		}
 	}
 	return len(p), nil
 }
@@ -124,20 +133,27 @@ func coalesceKey(data []byte) string {
 
 // attach registers a new GET stream as the hub's consumer, evicting any
 // previous one (clients reconnect after network blips faster than a dead
-// conn is detected; refusing would strand them). The returned channel is
-// closed when a newer stream takes over. ok is false once the hub is closed.
-func (h *sseHub) attach() (replaced <-chan struct{}, ok bool) {
+// conn is detected; refusing would strand them). It returns the stream's
+// eviction signal — closed when a newer stream takes over or the hub closes —
+// and its drain signal, primed up-front when a backlog already awaits.
+// ok is false once the hub is closed.
+func (h *sseHub) attach() (replaced, drain <-chan struct{}, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {
-		return nil, false
+		return nil, nil, false
 	}
 	if h.attached && h.replaced != nil {
 		close(h.replaced)
 	}
 	h.attached = true
 	h.replaced = make(chan struct{})
-	return h.replaced, true
+	next := make(chan struct{}, 1)
+	if len(h.queue) > 0 {
+		next <- struct{}{}
+	}
+	h.drain = next
+	return h.replaced, next, true
 }
 
 // detach releases the consumer slot, but only if own is still the current
@@ -153,10 +169,10 @@ func (h *sseHub) detach(own <-chan struct{}) {
 }
 
 // takeAll drains the queue for the stream identified by own. A stream that
-// has been replaced gets nothing: the shared wake channel means an evicted
-// handler can win the race against its own replaced-channel case and reach
-// here after a newer GET owns the slot — draining then would deliver (or
-// lose) the frames on the abandoned connection.
+// has been replaced gets nothing: an evicted handler can still be scheduled
+// after its replacement attached — its select had both channels ready — and
+// must not drain, or frames would be delivered to (or lost on) the abandoned
+// connection.
 func (h *sseHub) takeAll(own <-chan struct{}) []sseFrame {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -177,6 +193,7 @@ func (h *sseHub) close() {
 	}
 	h.closed = true
 	h.queue = nil
+	h.drain = nil
 	if h.attached && h.replaced != nil {
 		close(h.replaced)
 		h.attached = false

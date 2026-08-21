@@ -658,9 +658,54 @@ func TestVersionNegotiationShapes(t *testing.T) {
 	}
 }
 
+// TestSessionCapEvictsIdle pins the eviction policy: a full session table
+// recycles the least-recently-active idle session for each new initialize
+// instead of 503-ing healthy clients until the idle timeout lapses. A
+// crash-looping client that re-initializes without DELETE-ing must not take
+// the endpoint down for everyone.
+func TestSessionCapEvictsIdle(t *testing.T) {
+	// No servers configured: sessions stay lazy and cheap to mint.
+	srv, base := startServer(t, &config.Config{}, nil)
+
+	tableSize := func() int {
+		srv.mu.Lock()
+		defer srv.mu.Unlock()
+		return len(srv.sessions)
+	}
+
+	probes := make([]*mcptest.HTTPProbe, 0, maxSessions)
+	for range maxSessions {
+		p := &mcptest.HTTPProbe{BaseURL: base + "/mcp"}
+		p.Initialize(t)
+		probes = append(probes, p)
+	}
+	if n := tableSize(); n != maxSessions {
+		t.Fatalf("session table holds %d sessions, want %d", n, maxSessions)
+	}
+
+	// One initialize past the cap must succeed via eviction, not 503.
+	extra := &mcptest.HTTPProbe{BaseURL: base + "/mcp"}
+	extra.Initialize(t)
+
+	if n := tableSize(); n > maxSessions {
+		t.Fatalf("session table grew past the cap: %d", n)
+	}
+
+	// The very first session — the least-recently-active — was the victim.
+	resp := probes[0].Post(t, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	if mcptest.ReadBody(t, resp); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("oldest session survived eviction: status %d, want 404", resp.StatusCode)
+	}
+
+	// A recent survivor still works.
+	if res := probes[maxSessions-1].Call(t, 2, "tools/list", nil); res.Error != nil {
+		t.Fatalf("recent session evicted too: %d %s", res.Error.Code, res.Error.Message)
+	}
+}
+
 func TestHubCoalescesBacklog(t *testing.T) {
 	hub := newSSEHub()
-	own, ok := hub.attach()
+	own, _, ok := hub.attach()
 	if !ok {
 		t.Fatal("attach on a fresh hub failed")
 	}
@@ -682,15 +727,15 @@ func TestHubCoalescesBacklog(t *testing.T) {
 }
 
 // TestHubTakeAllRefusesEvictedStream pins the ownership check: after a newer
-// GET attaches, the old handler can still win the shared wake signal — its
-// drain must come up empty or the frames land on the abandoned connection.
+// GET attaches, an evicted handler can still be scheduled and call takeAll —
+// its drain must come up empty or the frames land on the abandoned connection.
 func TestHubTakeAllRefusesEvictedStream(t *testing.T) {
 	hub := newSSEHub()
-	old, ok := hub.attach()
+	old, _, ok := hub.attach()
 	if !ok {
 		t.Fatal("first attach failed")
 	}
-	cur, ok := hub.attach() // evicts old
+	cur, _, ok := hub.attach() // evicts old
 	if !ok {
 		t.Fatal("second attach failed")
 	}
@@ -701,6 +746,53 @@ func TestHubTakeAllRefusesEvictedStream(t *testing.T) {
 	}
 	if frames := hub.takeAll(cur); len(frames) != 1 {
 		t.Fatalf("current stream drained %d frames, want 1", len(frames))
+	}
+}
+
+// TestHubReplacementSeesBacklogAfterEvictedSignal pins the lost-wakeup fix.
+// With a single shared wake channel, this sequence stranded a frame: write
+// signals wake; the evicted stream consumes that signal in its select race,
+// drains nothing (it no longer owns the queue), and exits; the replacement
+// then sits on an empty channel with the frame still queued. Per-attach drain
+// channels prime the replacement at attach time instead.
+func TestHubReplacementSeesBacklogAfterEvictedSignal(t *testing.T) {
+	hub := newSSEHub()
+	_, oldDrain, ok := hub.attach()
+	if !ok {
+		t.Fatal("first attach failed")
+	}
+
+	// A frame arrives while the old stream is attached; its signal lands on
+	// the old stream's drain channel.
+	_, _ = hub.Write([]byte(`{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}` + "\n"))
+	select {
+	case <-oldDrain:
+	default:
+		t.Fatal("old stream was not signalled for the frame")
+	}
+
+	// The replacement attaches — the evicted handler has consumed its signal
+	// but not yet exited. The backlog must already be primed on the new
+	// stream's own channel.
+	newOwn, newDrain, ok := hub.attach()
+	if !ok {
+		t.Fatal("second attach failed")
+	}
+	select {
+	case <-newDrain:
+	default:
+		t.Fatal("replacement stream sits on an empty drain with a queued frame — lost wakeup")
+	}
+	if frames := hub.takeAll(newOwn); len(frames) != 1 {
+		t.Fatalf("replacement drained %d frames, want the stranded one", len(frames))
+	}
+
+	// Later writes signal only the current stream's channel.
+	_, _ = hub.Write([]byte(`{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}` + "\n"))
+	select {
+	case <-newDrain:
+	default:
+		t.Fatal("current stream not signalled after later write")
 	}
 }
 

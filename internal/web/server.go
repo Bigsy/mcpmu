@@ -7,7 +7,6 @@ import (
 	"html/template"
 	"io/fs"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,6 +14,8 @@ import (
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
+	"github.com/Bigsy/mcpmu/internal/flock"
+	"github.com/Bigsy/mcpmu/internal/httpguard"
 	"github.com/Bigsy/mcpmu/internal/metrics"
 	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/Bigsy/mcpmu/internal/registry"
@@ -60,10 +61,22 @@ type Options struct {
 	Bus        *events.Bus
 	ToolCache  *config.ToolCache
 	Token      string // if set, require token auth for all requests
+
+	// AllowedOrigins are extra Origin allowlist entries for exotic setups —
+	// a reverse proxy exposing the UI under a different host, say. Loopback
+	// and the bind address itself are always allowed without listing them.
+	AllowedOrigins []string
 }
 
 // New creates a new web Server.
 func New(opts Options) (*Server, error) {
+	// Posture change from the old warning-at-bind-time: refuse a tokenless
+	// non-loopback bind outright. The warning was invisible anyway — cmd/mcpmu
+	// discards log output unless --debug is set.
+	if err := httpguard.RefuseUnsafeBind(opts.Addr, opts.Token, "--token or MCPMU_WEB_TOKEN"); err != nil {
+		return nil, err
+	}
+
 	a := newAuth(opts.Token)
 
 	tmpl, err := parseTemplates(a != nil)
@@ -103,6 +116,16 @@ func New(opts Options) (*Server, error) {
 		handler = a.middleware(handler)
 	}
 
+	// Security wrappers sit OUTSIDE the auth gate and are unconditional: a
+	// tokenless deployment used to run with no Host/Origin validation at all
+	// (newAuth("") returns nil), leaving the management API open to DNS
+	// rebinding. Token enforcement is not delegated to the guard — the auth
+	// middleware below accepts session cookies as well as bearer headers.
+	handler = httpguard.HostAndOrigin(httpguard.Options{
+		Addr:           opts.Addr,
+		AllowedOrigins: opts.AllowedOrigins,
+	}, handler)
+
 	s.httpServer = &http.Server{
 		Addr:              opts.Addr,
 		Handler:           handler,
@@ -112,18 +135,10 @@ func New(opts Options) (*Server, error) {
 	return s, nil
 }
 
-// ListenAndServe starts the HTTP server.
+// ListenAndServe starts the HTTP server. Non-loopback binds without a token
+// were already refused in New.
 func (s *Server) ListenAndServe() error {
-	addr := s.httpServer.Addr
-	host, _, _ := net.SplitHostPort(addr)
-	if host != "127.0.0.1" && host != "localhost" && host != "::1" && host != "" {
-		if s.auth == nil {
-			log.Printf("WARNING: binding to %s — the web UI has no authentication. Set --token or MCPMU_WEB_TOKEN.", addr)
-		} else {
-			log.Printf("Binding to %s with token auth enabled", addr)
-		}
-	}
-	log.Printf("mcpmu web listening on http://%s", addr)
+	log.Printf("mcpmu web listening on http://%s", s.httpServer.Addr)
 	return s.httpServer.ListenAndServe()
 }
 
@@ -360,22 +375,38 @@ func kindBadge(srv config.ServerConfig) string {
 
 // mutateConfig safely applies a config mutation using a read-modify-write cycle.
 // It reloads config from disk, applies the mutation function, saves back to disk,
-// and updates the in-memory config pointer. The mutex ensures atomicity.
+// and updates the in-memory config pointer. The mutex ensures atomicity within
+// this process; the file lock extends it across processes (a daemon or CLI
+// saving the same file concurrently used to be able to interleave with this
+// cycle, corrupting the file or losing one side's update).
 func (s *Server) mutateConfig(fn func(cfg *config.Config) error) error {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 
-	fresh, err := config.LoadFrom(s.configPath)
+	// Derive the lock path exactly as SaveTo resolves the data path, so
+	// every process lands on the same lock file.
+	lockPath, err := config.ResolvePath(s.configPath)
 	if err != nil {
-		return fmt.Errorf("reload config: %w", err)
-	}
-
-	if err := fn(fresh); err != nil {
 		return err
 	}
 
-	if err := config.SaveTo(fresh, s.configPath); err != nil {
-		return fmt.Errorf("save config: %w", err)
+	var fresh *config.Config
+	err = flock.WithLock(lockPath, func() error {
+		reloaded, err := config.LoadFrom(s.configPath)
+		if err != nil {
+			return fmt.Errorf("reload config: %w", err)
+		}
+		if err := fn(reloaded); err != nil {
+			return err
+		}
+		if err := config.SaveTo(reloaded, s.configPath); err != nil {
+			return fmt.Errorf("save config: %w", err)
+		}
+		fresh = reloaded
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	s.cfg = fresh

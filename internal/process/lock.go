@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Bigsy/mcpmu/internal/flock"
 )
 
 const lockFileName = "manager.lock"
@@ -55,7 +57,7 @@ func (l *ManagerLock) Acquire(mode string) error {
 
 	// Try to acquire an exclusive non-blocking lock.
 	// If another process holds the lock, this fails immediately.
-	if err := tryLockFile(f); err != nil {
+	if err := flock.TryLock(f); err != nil {
 		// Lock is held — read the file to report who holds it
 		_ = f.Close()
 		info, readErr := l.readFile()

@@ -4,50 +4,40 @@ package shim
 
 import (
 	"context"
-	"errors"
 	"os"
-	"syscall"
-	"time"
+
+	"github.com/Bigsy/mcpmu/internal/flock"
 )
 
 type fileLock struct {
-	file *os.File
+	release func()
 }
 
+// acquireLock blocks until the lock is held or ctx is done.
 func acquireLock(ctx context.Context, path string) (*fileLock, error) {
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		lock, err := tryAcquireLock(path)
-		if err == nil {
-			return lock, nil
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-ticker.C:
-		}
+	release, err := flock.Acquire(ctx, path)
+	if err != nil {
+		return nil, err
 	}
+	return &fileLock{release: release}, nil
 }
 
+// tryAcquireLock makes one non-blocking attempt.
 func tryAcquireLock(path string) (*fileLock, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := flock.TryLock(file); err != nil {
 		_ = file.Close()
 		return nil, err
 	}
-	return &fileLock{file: file}, nil
+	return &fileLock{release: func() { _ = file.Close() }}, nil
 }
 
 func (lock *fileLock) Close() {
-	if lock != nil && lock.file != nil {
-		_ = lock.file.Close()
-		lock.file = nil
+	if lock != nil && lock.release != nil {
+		lock.release()
+		lock.release = nil
 	}
 }

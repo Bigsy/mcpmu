@@ -103,14 +103,22 @@ ends the session.
 ### HTTP serve flags
 
 - `--http` — expose the endpoint over Streamable HTTP instead of stdio
-- `--addr` — listen address (default: `127.0.0.1:8081`)
+- `--addr` — listen address (default: `127.0.0.1:8081`). Requests whose
+  `Host` header does not name this machine are refused (DNS-rebinding
+  defence): loopback and the bind address itself always work, and a wildcard
+  bind accepts IP-literal hosts — connect by IP, or bind the specific
+  address if clients must use a DNS name.
 - `--token` — bearer token required on every request. Falls back to
   `MCPMU_SERVE_TOKEN` when the flag is absent; the flag wins when both are set.
   Mandatory for a non-loopback `--addr` — binding one without a token refuses to
   start, because serve-mode `tools/call` is arbitrary code execution.
 - `--allow-origin` — extra allowed `Origin`, repeatable. Loopback and
-  `localhost` origins are always allowed; everything else is rejected unless
-  listed here.
+  `localhost` origins are always allowed, as is an origin equal to the bind
+  address itself (what a browser at this server sends on same-origin POSTs);
+  everything else is rejected unless listed here. Behind a reverse proxy that
+  forwards the client's original `Host` through, list the public origin here
+  and both the `Host` and `Origin` checks accept it — a proxy that rewrites
+  `Host` to the upstream address needs nothing extra.
 - `--session-idle-timeout` — reap sessions with no client activity for this long
   (default: `30m`, `0` = never). A request being dispatched counts as activity
   for as long as it runs, so a long tool call is not reaped mid-flight.
@@ -122,7 +130,9 @@ per-session upstream instances use `"shared": false` on individual servers,
 which is what session reaping keeps safe here (session count is process count).
 
 TLS termination is out of scope; put a reverse proxy in front for network
-deployments.
+deployments. If the proxy forwards the client's original `Host` header
+instead of rewriting it to the upstream address, pass the public origin via
+`--allow-origin` — the `Host` check refuses names it has not been told about.
 
 ## Shared daemon mode
 

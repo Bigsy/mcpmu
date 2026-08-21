@@ -3,11 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 
+	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/metrics"
 )
 
@@ -131,10 +133,12 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 			return nil, ErrInternalError(fmt.Sprintf("tool call cancelled: %v", context.Cause(ctx)))
 		}
 
-		// On 4xx errors (stale session, server reset, etc.), reinitialize and retry once.
-		// 401 is excluded — the transport returns UnauthorizedError for that, not "request failed: 4xx".
+		// A stale session (the transport's SessionExpiredError, usually after
+		// the client layer's own recovery already failed) is the one failure
+		// a reinit can fix. Other 4xx — 403, 429 — mean this call was
+		// rejected; restarting the instance would punish unrelated sessions.
 		if isRetriableHTTPError(err) {
-			log.Printf("CallTool: 4xx error for %s.%s, reinitializing: %v", serverName, toolName, err)
+			log.Printf("CallTool: stale session for %s.%s, reinitializing: %v", serverName, toolName, err)
 
 			_ = r.session.supervisor.StopInstance(r.session.instanceID(serverName))
 
@@ -441,16 +445,20 @@ func textResult(text string) *ToolCallResult {
 	}
 }
 
-// isRetriableHTTPError checks if an error is a 4xx HTTP error that might
-// be resolved by reinitializing the server (e.g., stale session).
-// 401 Unauthorized is excluded as it returns a distinct UnauthorizedError type
-// and has its own OAuth handling flow.
+// isRetriableHTTPError reports whether an error justifies restarting the
+// upstream instance: only a stale session does. The transport turns that
+// shape — a 404 for a session the server once issued — into
+// SessionExpiredError, so this reduces to errors.As. Every other 4xx must
+// not restart: 403 and 429 mean this one call was rejected, and restarting a
+// shared instance tears down sessions other callers depend on.
+//
+// Note the HTTP client layer has usually already recovered the session by
+// the time this sees an error (sendWithSessionRecovery reinitializes and
+// retries once); a SessionExpiredError reaching here means that recovery
+// itself failed, and a full instance restart is the remaining remedy.
 func isRetriableHTTPError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "request failed: 4")
+	var expired *mcp.SessionExpiredError
+	return errors.As(err, &expired)
 }
 
 // mustJSON marshals a value to JSON, panicking on error.

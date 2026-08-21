@@ -56,7 +56,7 @@ func login(t *testing.T, srv *Server) *http.Cookie {
 	t.Helper()
 	form := url.Values{"token": {testToken}}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
+	req := newRequest("POST", "/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -73,7 +73,7 @@ func TestAuthDisabled(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers", nil)
+	req := newRequest("GET", "/servers", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -85,7 +85,7 @@ func TestUnauthenticatedRedirectsToLogin(t *testing.T) {
 	srv := newTestServerWithAuth(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers", nil)
+	req := newRequest("GET", "/servers", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusSeeOther {
@@ -100,7 +100,7 @@ func TestUnauthenticatedAPI401(t *testing.T) {
 	srv := newTestServerWithAuth(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/servers", nil)
+	req := newRequest("GET", "/api/servers", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -112,7 +112,7 @@ func TestUnauthenticatedHtmxRedirect(t *testing.T) {
 	srv := newTestServerWithAuth(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/fragments/servers/table", nil)
+	req := newRequest("GET", "/fragments/servers/table", nil)
 	req.Header.Set("HX-Request", "true")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -128,7 +128,7 @@ func TestLoginPageAccessible(t *testing.T) {
 	srv := newTestServerWithAuth(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/login", nil)
+	req := newRequest("GET", "/login", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -143,7 +143,7 @@ func TestStaticAccessibleWithoutAuth(t *testing.T) {
 	srv := newTestServerWithAuth(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/static/styles.css", nil)
+	req := newRequest("GET", "/static/styles.css", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -156,7 +156,7 @@ func TestLoginWrongToken(t *testing.T) {
 
 	form := url.Values{"token": {"wrong-token"}}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
+	req := newRequest("POST", "/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -173,7 +173,7 @@ func TestLoginAndAccess(t *testing.T) {
 	cookie := login(t, srv)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers", nil)
+	req := newRequest("GET", "/servers", nil)
 	req.AddCookie(cookie)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -186,7 +186,7 @@ func TestBearerAuth(t *testing.T) {
 	srv := newTestServerWithAuth(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/servers", nil)
+	req := newRequest("GET", "/api/servers", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -199,7 +199,7 @@ func TestBearerAuthWrongToken(t *testing.T) {
 	srv := newTestServerWithAuth(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/servers", nil)
+	req := newRequest("GET", "/api/servers", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -212,7 +212,7 @@ func TestBearerAuthRequiresPrefix(t *testing.T) {
 	srv := newTestServerWithAuth(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/servers", nil)
+	req := newRequest("GET", "/api/servers", nil)
 	req.Header.Set("Authorization", testToken)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -227,7 +227,7 @@ func TestLogout(t *testing.T) {
 
 	// Logout
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/logout", nil)
+	req := newRequest("POST", "/logout", nil)
 	req.AddCookie(cookie)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -249,7 +249,7 @@ func TestLogout(t *testing.T) {
 
 	// Access with cleared cookie should redirect
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest("GET", "/servers", nil)
+	req = newRequest("GET", "/servers", nil)
 	req.AddCookie(clearedCookie)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -273,7 +273,7 @@ func TestSessionExpiry(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers", nil)
+	req := newRequest("GET", "/servers", nil)
 	req.AddCookie(expiredCookie)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -287,7 +287,7 @@ func TestLoginRedirectsWhenAuthenticated(t *testing.T) {
 	cookie := login(t, srv)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/login", nil)
+	req := newRequest("GET", "/login", nil)
 	req.AddCookie(cookie)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 

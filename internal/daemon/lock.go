@@ -3,6 +3,8 @@ package daemon
 import (
 	"fmt"
 	"os"
+
+	"github.com/Bigsy/mcpmu/internal/flock"
 )
 
 type fileLock struct {
@@ -15,7 +17,7 @@ func acquireFileLock(path string) (*fileLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open daemon run lock: %w", err)
 	}
-	if err := tryFileLock(file); err != nil {
+	if err := flock.TryLock(file); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("another daemon already owns %s: %w", path, err)
 	}

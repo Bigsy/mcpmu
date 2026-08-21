@@ -1247,8 +1247,17 @@ func (h *Handle) Stop() error {
 		h.ctxCancel()
 	}
 
-	// Close MCP client first (may be nil for needs-auth state). Snapshot both
-	// under authMu and close outside it, so a slow Close cannot stall readers.
+	// Signal the stdio process group before closing the MCP client. A child
+	// that stopped reading stdin fills its pipe; Send then blocks forever
+	// holding the framing mutex, and client.Close needs that same mutex —
+	// closing first would hang teardown exactly when it matters. SIGTERM
+	// settles the child (or its writer) before Close runs.
+	if h.kind == HandleKindStdio && h.cmd != nil && h.cmd.Process != nil && h.pgid > 0 {
+		_ = terminateProcessGroupGracefully(h.pgid)
+	}
+
+	// Close MCP client (may be nil for needs-auth state). Snapshot both under
+	// authMu and close outside it, so a slow Close cannot stall readers.
 	h.authMu.RLock()
 	client, httpTransport := h.client, h.httpTransport
 	h.authMu.RUnlock()
@@ -1258,11 +1267,9 @@ func (h *Handle) Stop() error {
 	}
 
 	if h.kind == HandleKindStdio {
-		// Stdio: signal the entire process group. The watcher retires the PGID
-		// only after the leader is reaped and any surviving workers are gone.
+		// The watcher retires the PGID only after the leader is reaped and
+		// any surviving workers are gone.
 		if h.cmd != nil && h.cmd.Process != nil && h.pgid > 0 {
-			_ = terminateProcessGroupGracefully(h.pgid)
-
 			// Wait for watchProcess to signal completion with timeout
 			select {
 			case <-h.done:

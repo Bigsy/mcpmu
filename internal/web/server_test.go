@@ -18,6 +18,116 @@ import (
 	"github.com/Bigsy/mcpmu/internal/registry"
 )
 
+// newRequest builds a test request the way a real loopback client would.
+// httptest.NewRequest defaults Host to "example.com" when the target carries
+// no host, which the DNS-rebinding Host allowlist correctly refuses.
+func newRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Host = "127.0.0.1:8080"
+	return req
+}
+
+// TestTokenedNonLoopbackOriginAllowed pins the tokened-LAN deployment: a
+// browser at the server's own address sends Origin on every form POST, and
+// the guard must accept it (same-origin by definition) while still rejecting
+// foreign origins. Before the bind-aware rule this configuration served
+// every GET and 403'd every mutation.
+func TestTokenedNonLoopbackOriginAllowed(t *testing.T) {
+	cfg := config.NewConfig()
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := config.SaveTo(cfg, configPath); err != nil {
+		t.Fatalf("save test config: %v", err)
+	}
+	bus := events.NewBus()
+	t.Cleanup(bus.Close)
+
+	srv, err := New(Options{
+		Addr:       "192.168.1.5:8080",
+		Config:     cfg,
+		ConfigPath: configPath,
+		Supervisor: process.NewSupervisor(bus),
+		Bus:        bus,
+		Token:      "lan-secret",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	form := strings.NewReader("name=lan-server&kind=stdio&command=echo&enabled=true&startup_timeout=10&tool_timeout=60&auth_mode=none")
+	req := newRequest(http.MethodPost, "/servers", form)
+	req.Host = "192.168.1.5:8080"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://192.168.1.5:8080")
+	req.Header.Set("Authorization", "Bearer lan-secret")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code == http.StatusForbidden {
+		t.Fatalf("same-origin form POST was 403'd; body: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("form POST status = %d, want 303", rec.Code)
+	}
+
+	// A foreign origin is still refused even with valid credentials.
+	req = newRequest(http.MethodPost, "/servers", strings.NewReader("name=x&kind=stdio&command=echo"))
+	req.Host = "192.168.1.5:8080"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://evil.example")
+	req.Header.Set("Authorization", "Bearer lan-secret")
+	rec = httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("foreign origin status = %d, want 403", rec.Code)
+	}
+}
+
+// TestAllowedOriginsOption pins the exotic-setup escape hatch: an origin
+// listed in Options.AllowedOrigins (a reverse proxy exposing the UI under a
+// different host, say) passes the guard, while an unlisted foreign origin
+// does not.
+func TestAllowedOriginsOption(t *testing.T) {
+	cfg := config.NewConfig()
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := config.SaveTo(cfg, configPath); err != nil {
+		t.Fatalf("save test config: %v", err)
+	}
+	bus := events.NewBus()
+	t.Cleanup(bus.Close)
+
+	srv, err := New(Options{
+		Addr:           "127.0.0.1:8080",
+		Config:         cfg,
+		ConfigPath:     configPath,
+		Supervisor:     process.NewSupervisor(bus),
+		Bus:            bus,
+		Token:          "proxy-secret",
+		AllowedOrigins: []string{"https://mcpmu.corp.example"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	post := func(origin string) int {
+		req := newRequest(http.MethodPost, "/servers", strings.NewReader("name=x&kind=stdio&command=echo"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		req.Header.Set("Authorization", "Bearer proxy-secret")
+		rec := httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := post("https://mcpmu.corp.example"); code == http.StatusForbidden {
+		t.Fatal("allowlisted origin was refused")
+	}
+	if code := post("https://other.example"); code != http.StatusForbidden {
+		t.Fatalf("unlisted foreign origin status = %d, want 403", code)
+	}
+}
+
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 
@@ -68,7 +178,7 @@ func TestServersPage(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers", nil)
+	req := newRequest("GET", "/servers", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -100,7 +210,7 @@ func TestServerDetailPage(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers/test-stdio", nil)
+	req := newRequest("GET", "/servers/test-stdio", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -131,7 +241,7 @@ func TestServerDetailPage_NotFound(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers/nonexistent", nil)
+	req := newRequest("GET", "/servers/nonexistent", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -146,7 +256,7 @@ func TestNamespacesPage(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/namespaces", nil)
+	req := newRequest("GET", "/namespaces", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -171,7 +281,7 @@ func TestNamespaceDetailPage(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/namespaces/default", nil)
+	req := newRequest("GET", "/namespaces/default", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -196,7 +306,7 @@ func TestNamespaceDetailPage_NotFound(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/namespaces/nonexistent", nil)
+	req := newRequest("GET", "/namespaces/nonexistent", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -212,7 +322,7 @@ func TestStaticFiles(t *testing.T) {
 
 	for _, path := range []string{"/static/styles.css", "/static/htmx.min.js", "/static/sse.js"} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest("GET", path, nil)
+		req := newRequest("GET", path, nil)
 		srv.httpServer.Handler.ServeHTTP(rec, req)
 
 		resp := rec.Result()
@@ -228,7 +338,7 @@ func TestRootRedirectsToServers(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/", nil)
+	req := newRequest("GET", "/", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -260,7 +370,7 @@ func TestSSELogsEndpoint(t *testing.T) {
 
 	// Create a request with a cancelable context so the SSE handler unblocks
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest("GET", "/servers/test-stdio/logs/stream", nil).WithContext(ctx)
+	req := newRequest("GET", "/servers/test-stdio/logs/stream", nil).WithContext(ctx)
 
 	done := make(chan struct{})
 	go func() {
@@ -283,7 +393,7 @@ func TestSSELogsEndpoint_NotFound(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers/nonexistent/logs/stream", nil)
+	req := newRequest("GET", "/servers/nonexistent/logs/stream", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -298,7 +408,7 @@ func TestFragmentServerTable(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/fragments/servers/table", nil)
+	req := newRequest("GET", "/fragments/servers/table", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -327,7 +437,7 @@ func TestFragmentServerStatus(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/fragments/servers/test-stdio/status", nil)
+	req := newRequest("GET", "/fragments/servers/test-stdio/status", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -349,7 +459,7 @@ func TestFragmentServerStatus_NotFound(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/fragments/servers/nonexistent/status", nil)
+	req := newRequest("GET", "/fragments/servers/nonexistent/status", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -366,7 +476,7 @@ func TestServerAddPage(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers/add", nil)
+	req := newRequest("GET", "/servers/add", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -392,7 +502,7 @@ func TestServerCreate(t *testing.T) {
 
 	form := strings.NewReader("name=new-server&kind=stdio&command=echo&args=test&enabled=true&startup_timeout=10&tool_timeout=60&auth_mode=none")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers", form)
+	req := newRequest("POST", "/servers", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -420,7 +530,7 @@ func TestServerCreate_Duplicate(t *testing.T) {
 
 	form := strings.NewReader("name=test-stdio&kind=stdio&command=echo&enabled=true&startup_timeout=10&tool_timeout=60&auth_mode=none")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers", form)
+	req := newRequest("POST", "/servers", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -441,7 +551,7 @@ func TestServerEditPage(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers/test-stdio/edit", nil)
+	req := newRequest("GET", "/servers/test-stdio/edit", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -467,7 +577,7 @@ func TestServerUpdate(t *testing.T) {
 
 	form := strings.NewReader("kind=stdio&command=cat&args=--help&enabled=true&autostart=true&startup_timeout=15&tool_timeout=30&auth_mode=none")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers/test-stdio/edit", form)
+	req := newRequest("POST", "/servers/test-stdio/edit", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -496,7 +606,7 @@ func TestServerDelete(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers/test-http/delete", nil)
+	req := newRequest("POST", "/servers/test-http/delete", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -526,7 +636,7 @@ func TestServerCreate_WithHTTPHeaders(t *testing.T) {
 	body.Set("tool_timeout", "60")
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers", strings.NewReader(body.Encode()))
+	req := newRequest("POST", "/servers", strings.NewReader(body.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -567,7 +677,7 @@ func TestServerCreate_InvalidHeaderLine(t *testing.T) {
 	body.Set("tool_timeout", "60")
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers", strings.NewReader(body.Encode()))
+	req := newRequest("POST", "/servers", strings.NewReader(body.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -605,7 +715,7 @@ func TestServerCreate_StdioDropsHeaderFields(t *testing.T) {
 	body.Set("tool_timeout", "60")
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers", strings.NewReader(body.Encode()))
+	req := newRequest("POST", "/servers", strings.NewReader(body.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -634,7 +744,7 @@ func TestServerToggle(t *testing.T) {
 
 	// test-stdio starts enabled; toggle should disable it
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers/test-stdio/toggle", nil)
+	req := newRequest("POST", "/servers/test-stdio/toggle", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -654,7 +764,7 @@ func TestNamespaceAddPage(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/namespaces/add", nil)
+	req := newRequest("GET", "/namespaces/add", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -675,7 +785,7 @@ func TestNamespaceCreate(t *testing.T) {
 
 	form := strings.NewReader("name=production&description=Prod+servers&deny_by_default=false")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/namespaces", form)
+	req := newRequest("POST", "/namespaces", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -696,7 +806,7 @@ func TestNamespaceDelete(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/namespaces/default/delete", nil)
+	req := newRequest("POST", "/namespaces/default/delete", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -727,7 +837,7 @@ func TestNamespacePermission_RejectsSetOnServerDeniedTool(t *testing.T) {
 	form.Set("enabled", "true")
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/namespaces/default/permission", strings.NewReader(form.Encode()))
+	req := newRequest("POST", "/namespaces/default/permission", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -756,7 +866,7 @@ func TestNamespacePermission_AllowsUnsetOnServerDeniedTool(t *testing.T) {
 	form.Set("tool", "echo_tool")
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/namespaces/default/permission", strings.NewReader(form.Encode()))
+	req := newRequest("POST", "/namespaces/default/permission", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -776,7 +886,7 @@ func TestAPIListServers(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/servers", nil)
+	req := newRequest("GET", "/api/servers", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -801,7 +911,7 @@ func TestAPIGetServer(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/servers/test-stdio", nil)
+	req := newRequest("GET", "/api/servers/test-stdio", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -821,7 +931,7 @@ func TestAPIGetServer_NotFound(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/servers/nonexistent", nil)
+	req := newRequest("GET", "/api/servers/nonexistent", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -837,7 +947,7 @@ func TestAPICreateServer(t *testing.T) {
 
 	body := `{"name":"api-server","config":{"command":"echo","args":["hello"]}}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/servers", strings.NewReader(body))
+	req := newRequest("POST", "/api/servers", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -858,7 +968,7 @@ func TestAPIDeleteServer(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("DELETE", "/api/servers/test-http", nil)
+	req := newRequest("DELETE", "/api/servers/test-http", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -878,7 +988,7 @@ func TestAPIUpdateServer(t *testing.T) {
 
 	body := `{"enabled":false}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("PUT", "/api/servers/test-stdio", strings.NewReader(body))
+	req := newRequest("PUT", "/api/servers/test-stdio", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -900,7 +1010,7 @@ func TestAPIListNamespaces(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/namespaces", nil)
+	req := newRequest("GET", "/api/namespaces", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -920,7 +1030,7 @@ func TestAPIExportConfig(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/config/export", nil)
+	req := newRequest("GET", "/api/config/export", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -954,7 +1064,7 @@ func TestServerCreate_CheckboxEnabled(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers", strings.NewReader(form.Encode()))
+	req := newRequest("POST", "/servers", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -994,7 +1104,7 @@ func TestServerCreate_CheckboxUnchecked(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers", strings.NewReader(form.Encode()))
+	req := newRequest("POST", "/servers", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -1025,7 +1135,7 @@ func TestAPICreateNamespace(t *testing.T) {
 
 	body := `{"name":"staging","config":{"description":"Staging env","serverIds":[]}}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/namespaces", strings.NewReader(body))
+	req := newRequest("POST", "/api/namespaces", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -1051,7 +1161,7 @@ func TestAPIUpdateNamespace(t *testing.T) {
 
 	body := `{"description":"Updated desc","denyByDefault":true}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("PUT", "/api/namespaces/default", strings.NewReader(body))
+	req := newRequest("PUT", "/api/namespaces/default", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -1076,7 +1186,7 @@ func TestAPIDeleteNamespace(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("DELETE", "/api/namespaces/default", nil)
+	req := newRequest("DELETE", "/api/namespaces/default", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1103,7 +1213,7 @@ func TestAPIImportPreview(t *testing.T) {
 
 	body, _ := json.Marshal(incoming)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/config/import", strings.NewReader(string(body)))
+	req := newRequest("POST", "/api/config/import", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -1149,7 +1259,7 @@ func TestAPIImportApply_PreservesRootFields(t *testing.T) {
 
 	body, _ := json.Marshal(incoming)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/config/import/apply", strings.NewReader(string(body)))
+	req := newRequest("POST", "/api/config/import/apply", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -1192,7 +1302,7 @@ func TestAPIUpdateServer_PartialDoesNotDropFields(t *testing.T) {
 	// Disable via partial update — should not affect other fields
 	body := `{"enabled":false}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("PUT", "/api/servers/test-stdio", strings.NewReader(body))
+	req := newRequest("PUT", "/api/servers/test-stdio", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -1228,7 +1338,7 @@ func TestServerFormUpdatePreservesUnexposedSharedField(t *testing.T) {
 
 	form := strings.NewReader("kind=stdio&command=echo&args=hello&enabled=true&startup_timeout=10&tool_timeout=60&auth_mode=none")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/servers/test-stdio/edit", form)
+	req := newRequest("POST", "/servers/test-stdio/edit", form)
 	req.SetPathValue("name", "test-stdio")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
@@ -1248,7 +1358,7 @@ func TestAPIUpdateServer_CombinedPartialUpdate(t *testing.T) {
 	// Set both enabled and deniedTools in one request
 	body := `{"enabled":false,"deniedTools":["tool-a","tool-b"]}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("PUT", "/api/servers/test-stdio", strings.NewReader(body))
+	req := newRequest("PUT", "/api/servers/test-stdio", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
@@ -1278,7 +1388,7 @@ func TestConfigImportPage(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/config/import", nil)
+	req := newRequest("GET", "/config/import", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1303,7 +1413,7 @@ func TestLayoutHasExportImportLinks(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers", nil)
+	req := newRequest("GET", "/servers", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1370,7 +1480,7 @@ func TestRegistryPage_EmptySearch(t *testing.T) {
 	srv := newTestServerWithRegistry(t, registryFixture)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/registry", nil)
+	req := newRequest("GET", "/registry", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1399,7 +1509,7 @@ func TestRegistryPage_WithQuery(t *testing.T) {
 	srv := newTestServerWithRegistry(t, registryFixture)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/registry?q=test", nil)
+	req := newRequest("GET", "/registry?q=test", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1437,7 +1547,7 @@ func TestRegistryPage_NoResults(t *testing.T) {
 	srv := newTestServerWithRegistry(t, emptyFixture)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/registry?q=nonexistent", nil)
+	req := newRequest("GET", "/registry?q=nonexistent", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1459,7 +1569,7 @@ func TestFragmentRegistryResults(t *testing.T) {
 	srv := newTestServerWithRegistry(t, registryFixture)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/fragments/registry/results?q=test", nil)
+	req := newRequest("GET", "/fragments/registry/results?q=test", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1488,7 +1598,7 @@ func TestFragmentRegistryResults_EmptyQuery(t *testing.T) {
 	srv := newTestServerWithRegistry(t, registryFixture)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/fragments/registry/results", nil)
+	req := newRequest("GET", "/fragments/registry/results", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1510,7 +1620,7 @@ func TestAPIRegistrySearch(t *testing.T) {
 	srv := newTestServerWithRegistry(t, registryFixture)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/registry/search?q=test", nil)
+	req := newRequest("GET", "/api/registry/search?q=test", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1547,7 +1657,7 @@ func TestAPIRegistrySearch_NoQuery(t *testing.T) {
 	srv := newTestServerWithRegistry(t, registryFixture)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/registry/search", nil)
+	req := newRequest("GET", "/api/registry/search", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1571,7 +1681,7 @@ func TestServerAddPage_RegistryPrepopulate(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers/add?"+params.Encode(), nil)
+	req := newRequest("GET", "/servers/add?"+params.Encode(), nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1611,7 +1721,7 @@ func TestServerAddPage_RegistryPrepopulate_HTTP(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers/add?"+params.Encode(), nil)
+	req := newRequest("GET", "/servers/add?"+params.Encode(), nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()
@@ -1643,7 +1753,7 @@ func TestRegistryNavLink(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/servers", nil)
+	req := newRequest("GET", "/servers", nil)
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
 	resp := rec.Result()

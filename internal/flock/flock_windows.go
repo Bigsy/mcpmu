@@ -1,12 +1,16 @@
 //go:build windows
 
-package process
+package flock
 
 import (
+	"errors"
 	"os"
 
 	"golang.org/x/sys/windows"
 )
+
+// errInterrupted never matches on Windows — LockFileEx does not report EINTR.
+var errInterrupted = errors.New("interrupted")
 
 func tryLockFile(file *os.File) error {
 	var overlapped windows.Overlapped

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/Bigsy/mcpmu/internal/flock"
 )
 
 const (
@@ -60,28 +62,34 @@ func (s *FileStore) Put(cred *Credential) error {
 		return err
 	}
 
+	// The lock spans the whole read-modify-write cycle: holding it only
+	// around the write would fix torn files but still let a concurrent
+	// writer's update be lost between our load and our save. s.mu orders
+	// goroutines in this process; the file lock orders processes.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	creds, err := s.load()
-	if err != nil {
-		return err
-	}
-
-	// Update or append
-	found := false
-	for i, c := range creds {
-		if c.ServerURL == cred.ServerURL {
-			creds[i] = cred
-			found = true
-			break
+	return flock.WithLock(s.path, func() error {
+		creds, err := s.load()
+		if err != nil {
+			return err
 		}
-	}
-	if !found {
-		creds = append(creds, cred)
-	}
 
-	return s.save(creds)
+		// Update or append
+		found := false
+		for i, c := range creds {
+			if c.ServerURL == cred.ServerURL {
+				creds[i] = cred
+				found = true
+				break
+			}
+		}
+		if !found {
+			creds = append(creds, cred)
+		}
+
+		return s.save(creds)
+	})
 }
 
 // Delete removes credentials for a server.
@@ -89,20 +97,22 @@ func (s *FileStore) Delete(serverURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	creds, err := s.load()
-	if err != nil {
-		return err
-	}
-
-	// Filter out the credential
-	filtered := make([]*Credential, 0, len(creds))
-	for _, c := range creds {
-		if c.ServerURL != serverURL {
-			filtered = append(filtered, c)
+	return flock.WithLock(s.path, func() error {
+		creds, err := s.load()
+		if err != nil {
+			return err
 		}
-	}
 
-	return s.save(filtered)
+		// Filter out the credential
+		filtered := make([]*Credential, 0, len(creds))
+		for _, c := range creds {
+			if c.ServerURL != serverURL {
+				filtered = append(filtered, c)
+			}
+		}
+
+		return s.save(filtered)
+	})
 }
 
 // List returns all stored credentials.
@@ -131,18 +141,13 @@ func (s *FileStore) load() ([]*Credential, error) {
 	return creds, nil
 }
 
-// save writes credentials to the file (caller must hold lock).
+// save writes credentials to the file (caller must hold s.mu and the
+// flock.WithLock cycle).
 func (s *FileStore) save(creds []*Credential) error {
-	// Resolve symlinks so atomic rename targets the real file
+	// Resolve symlinks so the atomic rename targets the real file
 	path := s.path
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
-	}
-
-	// Ensure directory exists
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create credentials dir: %w", err)
 	}
 
 	data, err := json.MarshalIndent(creds, "", "  ")
@@ -150,16 +155,8 @@ func (s *FileStore) save(creds []*Credential) error {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
 
-	// Write to temp file first
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+	if err := flock.WriteAtomic(path, data); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
-	}
-
-	// Atomic rename
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("rename credentials: %w", err)
 	}
 
 	return nil

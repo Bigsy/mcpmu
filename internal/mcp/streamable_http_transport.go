@@ -283,7 +283,7 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 			}
 
 			// Not a version rejection - return the error
-			return fmt.Errorf("request failed: %s - %s", resp.Status, bodyStr)
+			return &UpstreamHTTPError{Code: resp.StatusCode, Status: resp.Status, Body: bodyStr}
 		}
 
 		// A server may rotate the session ID even on an error response (for
@@ -318,7 +318,7 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 				t.handleSessionExpired(sessionID)
 				return &SessionExpiredError{}
 			}
-			return fmt.Errorf("request failed: %s - %s", resp.Status, string(body))
+			return &UpstreamHTTPError{Code: resp.StatusCode, Status: resp.Status, Body: string(body)}
 		}
 
 		// A successful POST with no session header means this server issues no
@@ -916,6 +916,26 @@ type UnauthorizedError struct {
 
 func (e *UnauthorizedError) Error() string {
 	return "unauthorized - authentication required"
+}
+
+// UpstreamHTTPError is returned when a request to an HTTP upstream fails with
+// a status that has no dedicated handling (success is 200/202; 400 carries
+// version-rejection parsing; 401 becomes UnauthorizedError; a 404 for a
+// session the server once issued becomes SessionExpiredError). Code carries
+// the numeric status so callers classify structurally via errors.As instead
+// of substring-matching error strings — a string match on "4" once treated
+// every 4xx, 403 and 429 included, as a restartable failure.
+type UpstreamHTTPError struct {
+	Code   int    // numeric status, e.g. 403
+	Status string // status line, e.g. "403 Forbidden"
+	Body   string // up to 1 KiB of the response body, for diagnostics
+}
+
+func (e *UpstreamHTTPError) Error() string {
+	if e.Body != "" {
+		return fmt.Sprintf("request failed: %s - %s", e.Status, e.Body)
+	}
+	return "request failed: " + e.Status
 }
 
 // HTTPClientConfig holds configuration for creating an HTTP transport from server config.

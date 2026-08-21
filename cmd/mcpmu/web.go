@@ -19,9 +19,10 @@ import (
 )
 
 var (
-	webAddr  string
-	webDebug bool
-	webToken string
+	webAddr        string
+	webDebug       bool
+	webToken       string
+	webAllowOrigin []string
 )
 
 var webCmd = &cobra.Command{
@@ -42,6 +43,7 @@ func init() {
 	webCmd.Flags().StringVar(&webAddr, "addr", "127.0.0.1:8080", "Listen address (host:port)")
 	webCmd.Flags().BoolVar(&webDebug, "debug", false, "Enable debug logging to /tmp/mcpmu-debug.log")
 	webCmd.Flags().StringVar(&webToken, "token", "", "Auth token for web UI (or set MCPMU_WEB_TOKEN)")
+	webCmd.Flags().StringArrayVar(&webAllowOrigin, "allow-origin", nil, "Extra allowed Origin, e.g. behind a reverse proxy under another host (repeatable; also satisfies the Host check for forwarded Host headers)")
 	rootCmd.AddCommand(webCmd)
 }
 
@@ -126,13 +128,14 @@ func runWeb(cmd *cobra.Command, args []string) error {
 
 	// Create web server
 	srv, err := web.New(web.Options{
-		Addr:       webAddr,
-		Config:     cfg,
-		ConfigPath: configPath,
-		Supervisor: supervisor,
-		Bus:        bus,
-		ToolCache:  toolCache,
-		Token:      token,
+		Addr:           webAddr,
+		Config:         cfg,
+		ConfigPath:     configPath,
+		Supervisor:     supervisor,
+		Bus:            bus,
+		ToolCache:      toolCache,
+		Token:          token,
+		AllowedOrigins: webAllowOrigin,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create web server: %w", err)
