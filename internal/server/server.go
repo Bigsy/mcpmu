@@ -169,9 +169,12 @@ func (s *Session) Close() {
 		// running.
 		s.inflight.cancelAll(errSessionClosed)
 		s.progress.clear()
-		s.resourceStateMu.RLock()
+		// Unsubscribe RPCs run without resourceStateMu: the subscription table
+		// is internally synchronized and epoch-invalidated by the writers that
+		// used to exclude this path, and holding a global read lock across
+		// per-URI upstream round trips stalled reload and Core.Close for the
+		// length of every HTTP DELETE, idle reap, and shutdown teardown.
 		s.cleanupSessionSubscriptions(s)
-		s.resourceStateMu.RUnlock()
 		if s.unsubscribeNotifications != nil {
 			s.unsubscribeNotifications()
 		}
@@ -947,9 +950,18 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 }
 
 // handleResourcesList handles the resources/list request.
+//
+// No resourceStateMu hold across this handler: it starts upstreams (up to
+// StartupTimeout) and issues RPCs, and a global read lock here starved hot
+// reload and Core.Close daemon-wide. Every structure touched below
+// synchronizes on its own lock (s.mu, resourceMapMu, instance lifecycle), and
+// the subscription table's epoch check discards work a concurrent reload
+// invalidates.
 func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
-	s.resourceStateMu.RLock()
-	defer s.resourceStateMu.RUnlock()
+	// Snapshot for the install guard at the bottom: a list that gathered its
+	// routing table under the old config must not land after a reload wiped
+	// this state.
+	genAtEntry := s.currentConfigGeneration()
 
 	s.mu.RLock()
 	if !s.initialized {
@@ -1033,19 +1045,25 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 			})
 		}
 	}
+	// Install the routing table only if the config is still the one this list
+	// ran against. The generation check and the write share resourceMapMu with
+	// the reload's wipe of this session's state, and the reload bumps the
+	// generation strictly before wiping — so either the install precedes the
+	// wipe (and is cleaned up by it) or the check fails. A stale table cannot
+	// survive the reload.
 	s.resourceMapMu.Lock()
-	s.resourceMap = owners
+	if s.currentConfigGeneration() == genAtEntry {
+		s.resourceMap = owners
+	}
 	s.resourceMapMu.Unlock()
 	return struct {
 		Resources []listedResource `json:"resources"`
 	}{Resources: allResources}, nil
 }
 
-// handleResourcesRead handles the resources/read request.
+// handleResourcesRead handles the resources/read request. Like
+// handleResourcesList, it holds no global lock across its upstream I/O.
 func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage) (any, *RPCError) {
-	s.resourceStateMu.RLock()
-	defer s.resourceStateMu.RUnlock()
-
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -1090,11 +1108,10 @@ func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage
 	}{Contents: contents}, nil
 }
 
-// handleResourcesSubscribe handles the resources/subscribe request.
+// handleResourcesSubscribe handles the resources/subscribe request. The
+// subscribe transition itself is serialized per key and epoch-checked inside
+// resourceSubscriptions, so no global lock is held across the upstream RPC.
 func (s *Server) handleResourcesSubscribe(ctx context.Context, params json.RawMessage) (any, *RPCError) {
-	s.resourceStateMu.RLock()
-	defer s.resourceStateMu.RUnlock()
-
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -1144,9 +1161,6 @@ func (s *Server) handleResourcesSubscribe(ctx context.Context, params json.RawMe
 // Unknown URIs are treated as idempotent success — clients often unsubscribe
 // defensively, and the URI may have been evicted by a concurrent resources/list.
 func (s *Server) handleResourcesUnsubscribe(ctx context.Context, params json.RawMessage) (any, *RPCError) {
-	s.resourceStateMu.RLock()
-	defer s.resourceStateMu.RUnlock()
-
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -1502,21 +1516,30 @@ func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
 }
 
 func (c *Core) applyReload(ctx context.Context, newCfg *config.Config, initiator *Session) {
-	c.resourceStateMu.Lock()
-	defer c.resourceStateMu.Unlock()
-
+	// resourceStateMu excludes only the other writer (Core.Close): handlers
+	// never take it, because they run upstream I/O that must not stall a
+	// reload. The clearing below is internally synchronized; the epoch bump
+	// inside subscriptions.clear() invalidates any operation still in flight
+	// against the old generation.
+	//
+	// Ordering matters twice over. The generation advance must precede the
+	// clearing: handleResourcesList guards its resourceMap install with an
+	// entry-time generation snapshot, and "generation unchanged" implying
+	// "not yet wiped" is what makes that guard sound. The clearing itself
+	// must precede StopAll: closing the upstream transport ends the
+	// upstream-side subscription cleanly, so only local bookkeeping is
+	// dropped here — no per-URI unsubscribe RPC is attempted, it would race
+	// with shutdown.
 	log.Printf("Applying config reload: %d servers, %d namespaces",
 		len(newCfg.Servers), len(newCfg.Namespaces))
-
-	// Clear subscription tracking before StopAll: closing the upstream
-	// transport ends the upstream-side subscription cleanly, so we only
-	// need to drop our local bookkeeping. No per-URI unsubscribe RPC is
-	// attempted — it would race with shutdown.
-	c.clearResourceStateForReload()
 
 	// Advance the config generation before stopping instances. Any stale
 	// get-or-start path must revalidate under its instance lifecycle lock.
 	c.replaceConfig(newCfg)
+
+	c.resourceStateMu.Lock()
+	c.clearResourceStateForReload()
+	c.resourceStateMu.Unlock()
 
 	// Stop all running servers after the generation barrier is visible.
 	c.supervisor.StopAll()

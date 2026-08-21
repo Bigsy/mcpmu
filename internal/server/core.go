@@ -26,11 +26,17 @@ type Core struct {
 	cfg              *config.Config
 	configGeneration uint64
 	recorder         *metrics.Recorder // nil when metrics are disabled or unavailable
-	resourceStateMu  sync.RWMutex
-	sessionsMu       sync.RWMutex
-	sessions         map[*Session]struct{}
-	nextSessionID    atomic.Uint64
-	subscriptions    *resourceSubscriptions
+	// resourceStateMu serializes the two writers that reset all subscription
+	// and resource-map state (Close and hot reload); it is never taken
+	// read-side. resources/* handlers and session teardown perform upstream
+	// I/O that must not block — or be blocked by — those writers; overlap is
+	// handled by the subscription table's epoch check plus per-session locks,
+	// not here.
+	resourceStateMu sync.Mutex
+	sessionsMu      sync.RWMutex
+	sessions        map[*Session]struct{}
+	nextSessionID   atomic.Uint64
+	subscriptions   *resourceSubscriptions
 
 	bus        *events.Bus
 	supervisor *process.Supervisor
@@ -103,6 +109,15 @@ func (c *Core) currentAggregator() *Aggregator {
 	c.coreMu.RLock()
 	defer c.coreMu.RUnlock()
 	return c.aggregator
+}
+
+// currentConfigGeneration snapshots the config generation for stale-install
+// detection: state derived from the current config (the resourceMap routing
+// table) must not be installed if a reload replaced that config meanwhile.
+func (c *Core) currentConfigGeneration() uint64 {
+	c.coreMu.RLock()
+	defer c.coreMu.RUnlock()
+	return c.configGeneration
 }
 
 func (c *Core) currentRecorder() *metrics.Recorder {
@@ -387,6 +402,9 @@ func (c *Core) sessionSnapshot() []*Session {
 // call more than once.
 func (c *Core) Close() {
 	c.closeOnce.Do(func() {
+		// Short critical section, writer-vs-writer only: in-flight resource
+		// handlers and session teardowns are not excluded (they hold no read
+		// lock) — subscriptions.clear()'s epoch bump discards their results.
 		c.resourceStateMu.Lock()
 		c.subscriptions.clear()
 		for _, session := range c.sessionSnapshot() {
