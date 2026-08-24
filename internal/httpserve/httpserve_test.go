@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -700,6 +702,167 @@ func TestSessionCapEvictsIdle(t *testing.T) {
 	// A recent survivor still works.
 	if res := probes[maxSessions-1].Call(t, 2, "tools/list", nil); res.Error != nil {
 		t.Fatalf("recent session evicted too: %d %s", res.Error.Code, res.Error.Message)
+	}
+}
+
+// TestShutdownEndsStreamsAndKeepsSessionsThroughTheDrain pins the shutdown
+// contract. With the previous ordering — http.Shutdown first, closed and
+// teardown after — an attached standalone GET SSE stream never idled, so
+// every Ctrl-C with a connected client burned the full grace period before
+// anything was torn down. Now: streams end before the drain (so Shutdown is
+// bounded by real in-flight work), and a POST round trip already in flight
+// runs to completion inside a session that stays alive until the drain
+// finishes. The closed-before-drain guarantee itself is pinned at unit level
+// by TestBeginDrainRefusesRegisterAndStreamAttach — it is unobservable over
+// HTTP because http.Shutdown closes both idle connections and the listener
+// up front.
+func TestShutdownEndsStreamsAndKeepsSessionsThroughTheDrain(t *testing.T) {
+	requestLog := filepath.Join(t.TempDir(), "upstream-methods.log")
+	cfg := singleServerConfig(t, mcptest.FakeServerConfig{
+		Tools:          []mcptest.Tool{{Name: "slow_tool"}},
+		EchoToolCalls:  true,
+		Delays:         map[string]time.Duration{"tools/call": 3 * time.Second},
+		RequestLogPath: requestLog,
+	})
+	srv, base := startServer(t, cfg, nil)
+	probe := &mcptest.HTTPProbe{BaseURL: base + "/mcp"}
+	probe.Initialize(t)
+
+	postStatus := func(body string, headers ...string) int {
+		req, err := http.NewRequest(http.MethodPost, base+"/mcp", strings.NewReader(body))
+		if err != nil {
+			return 0
+		}
+		req.Header.Set("Content-Type", "application/json")
+		for i := 0; i+1 < len(headers); i += 2 {
+			req.Header.Set(headers[i], headers[i+1])
+		}
+		resp, err := (&http.Client{}).Do(req)
+		if err != nil {
+			return 0 // connection gone
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	// Attach the standalone SSE stream and hold it open.
+	getReq, err := http.NewRequest(http.MethodGet, base+"/mcp", nil)
+	if err != nil {
+		t.Fatalf("build GET: %v", err)
+	}
+	getReq.Header.Set("Accept", "text/event-stream")
+	getReq.Header.Set("Mcp-Session-Id", probe.SessionID)
+	attached := make(chan error, 1)
+	streamEnded := make(chan struct{})
+	go func() {
+		defer close(streamEnded)
+		resp, err := (&http.Client{}).Do(getReq)
+		if err != nil {
+			attached <- err
+			return
+		}
+		attached <- nil
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	select {
+	case err := <-attached:
+		if err != nil {
+			t.Fatalf("SSE attach: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SSE stream never attached")
+	}
+
+	// A tools/call whose response is parked at the upstream represents the
+	// legitimate in-flight work the drain exists to protect.
+	callDone := make(chan int, 1)
+	go func() {
+		callDone <- postStatus(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"fake.slow_tool","arguments":{}}}`,
+			"Mcp-Session-Id", probe.SessionID)
+	}()
+	waitDeadline := time.Now().Add(10 * time.Second)
+	for {
+		data, err := os.ReadFile(requestLog)
+		if err == nil && strings.Contains(string(data), "tools/call") {
+			break
+		}
+		if time.Now().After(waitDeadline) {
+			t.Fatal("upstream never received tools/call")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- srv.Shutdown(ctx) }()
+
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("Shutdown hit its context bound — the SSE stream still pins the drain")
+	}
+
+	// The in-flight round trip survived the drain: the session lived until
+	// the drain finished and the client got its response.
+	select {
+	case status := <-callDone:
+		if status != http.StatusOK {
+			t.Errorf("in-flight tools/call got status %d, want 200 (session abandoned mid-call?)", status)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("in-flight tools/call never completed")
+	}
+
+	select {
+	case <-streamEnded:
+	case <-time.After(2 * time.Second):
+		t.Error("SSE stream outlived Shutdown")
+	}
+
+	srv.mu.Lock()
+	remaining := len(srv.sessions)
+	srv.mu.Unlock()
+	if remaining != 0 {
+		t.Errorf("session table holds %d sessions after Shutdown, want 0 (teardown ran)", remaining)
+	}
+}
+
+// TestBeginDrainRefusesRegisterAndStreamAttach pins the ordering guarantees
+// of beginDrain directly: from the moment it returns, register refuses new
+// sessions (nothing can slip past the shutdown snapshot to leak its private
+// instances) and no hub accepts a new standalone stream.
+func TestBeginDrainRefusesRegisterAndStreamAttach(t *testing.T) {
+	srv, base := startServer(t, &config.Config{}, nil)
+	probe := &mcptest.HTTPProbe{BaseURL: base + "/mcp"}
+	probe.Initialize(t)
+
+	sessions := srv.beginDrain()
+	if len(sessions) != 1 {
+		t.Fatalf("beginDrain snapshot holds %d sessions, want 1", len(sessions))
+	}
+
+	if ok, _ := srv.register("fresh-session", &httpSession{}); ok {
+		srv.mu.Lock()
+		delete(srv.sessions, "fresh-session")
+		srv.mu.Unlock()
+		t.Error("register succeeded after beginDrain; an initialize during the drain could leak its session")
+	}
+
+	for id, hs := range sessions {
+		if _, _, ok := hs.hub.attach(); ok {
+			t.Errorf("hub for session %s accepted a new stream after beginDrain", id)
+		}
+	}
+
+	// Finish what beginDrain started so cleanup has nothing wedged.
+	for id, hs := range sessions {
+		srv.teardown(id, hs)
 	}
 }
 

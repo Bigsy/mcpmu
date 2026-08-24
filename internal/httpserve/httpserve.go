@@ -225,20 +225,40 @@ func (s *Server) Serve(l net.Listener) error {
 
 // Shutdown drains active requests, then tears down every session. The Core
 // is the caller's to close (it may outlive this listener in tests).
+//
+// beginDrain runs first, deliberately: it marks the server closed so register
+// refuses new sessions for the entire drain (one slipping past would
+// otherwise register after the snapshot below and its session/private
+// instances would never be stopped), and it ends only the standalone GET SSE
+// streams — they never idle, so http.Shutdown would otherwise wait out its
+// whole grace period on every Ctrl-C with a connected client. Ending just the
+// streams — not a full teardown — keeps sessions alive while in-flight POST
+// round trips finish.
 func (s *Server) Shutdown(ctx context.Context) error {
-	err := s.http.Shutdown(ctx)
+	sessions := s.beginDrain()
 
-	s.mu.Lock()
-	s.closed = true
-	sessions := make(map[string]*httpSession, len(s.sessions))
-	maps.Copy(sessions, s.sessions)
-	s.mu.Unlock()
+	err := s.http.Shutdown(ctx)
 
 	for id, hs := range sessions {
 		s.teardown(id, hs)
 	}
 	s.baseCancel()
 	return err
+}
+
+// beginDrain marks the server closed, ends every attached standalone GET SSE
+// stream, and returns the session snapshot the caller must tear down once the
+// drain finishes.
+func (s *Server) beginDrain() map[string]*httpSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	sessions := make(map[string]*httpSession, len(s.sessions))
+	maps.Copy(sessions, s.sessions)
+	for _, hs := range sessions {
+		hs.hub.closeStreams()
+	}
+	return sessions
 }
 
 // teardown is the single exit path for a session: DELETE, idle reap, and

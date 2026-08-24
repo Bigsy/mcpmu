@@ -30,6 +30,7 @@ type sseFrame struct {
 type sseHub struct {
 	mu       sync.Mutex
 	closed   bool
+	draining bool
 	queue    []sseFrame
 	attached bool
 	replaced chan struct{} // closed when a newer GET stream takes over
@@ -140,7 +141,7 @@ func coalesceKey(data []byte) string {
 func (h *sseHub) attach() (replaced, drain <-chan struct{}, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.closed {
+	if h.closed || h.draining {
 		return nil, nil, false
 	}
 	if h.attached && h.replaced != nil {
@@ -182,6 +183,27 @@ func (h *sseHub) takeAll(own <-chan struct{}) []sseFrame {
 	frames := h.queue
 	h.queue = nil
 	return frames
+}
+
+// closeStreams ends the standalone GET stream: the attached handler's
+// eviction signal fires (its select exits without detaching) and future
+// attaches are refused until teardown. This is deliberately narrower than
+// close — the session stays fully alive, so POST round trips in flight keep
+// dispatching and their notifications still queue — while ending the one
+// connection that never goes idle on its own and would otherwise pin
+// http.Shutdown for its whole grace period.
+func (h *sseHub) closeStreams() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
+	h.draining = true
+	if h.attached && h.replaced != nil {
+		close(h.replaced)
+	}
+	h.attached = false
+	h.replaced = nil
 }
 
 // close makes all future Write calls a no-op and evicts any attached stream.
