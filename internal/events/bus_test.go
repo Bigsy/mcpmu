@@ -114,75 +114,236 @@ func TestBus_Unsubscribe(t *testing.T) {
 	}
 }
 
-func TestBus_ChannelOverflow_DropsEvents(t *testing.T) {
-	// Create a bus but don't process events (don't subscribe or block the consumer)
-	bus := &Bus{
-		handlers: make([]Handler, 0),
-		ch:       make(chan Event, 100), // Same buffer size as production
-		done:     make(chan struct{}),
+// blockingHandler returns a handler that blocks until release is closed, plus
+// a channel that is closed once the handler has been entered.
+func blockingHandler(release <-chan struct{}) (Handler, <-chan struct{}) {
+	entered := make(chan struct{})
+	var once sync.Once
+	return func(Event) {
+		once.Do(func() { close(entered) })
+		<-release
+	}, entered
+}
+
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	original := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(original) })
+	return &buf
+}
+
+func TestBus_QueueOverflow_DropsEventsForThatSubscriber(t *testing.T) {
+	bus := newBusWithQueueSize(10)
+	defer bus.Close()
+	logBuf := captureLog(t)
+
+	release := make(chan struct{})
+	defer close(release)
+	slow, entered := blockingHandler(release)
+	bus.Subscribe(slow)
+
+	// First event is consumed by the worker and blocks in the handler.
+	bus.Publish(newTestEvent(0, "server-1"))
+	<-entered
+
+	// Next 10 fill the queue with no drops.
+	for i := 1; i <= 10; i++ {
+		bus.Publish(newTestEvent(i, "server-1"))
 	}
-	// Note: We intentionally don't start the run() goroutine to simulate a blocked consumer
+	if strings.Contains(logBuf.String(), "dropping event") {
+		t.Fatal("unexpected drop before the queue was full")
+	}
 
-	// Capture log output
-	var logBuf bytes.Buffer
-	originalOutput := log.Writer()
-	log.SetOutput(&logBuf)
-	defer log.SetOutput(originalOutput)
+	// One more overflows.
+	bus.Publish(newTestEvent(11, "server-overflow"))
+	out := logBuf.String()
+	if !strings.Contains(out, "dropping event") {
+		t.Error("expected 'dropping event' in log output")
+	}
+	if !strings.Contains(out, "type=") || !strings.Contains(out, "server-overflow") {
+		t.Errorf("drop message should carry type and server id, got %q", out)
+	}
 
-	// Fill the buffer completely
-	for i := range 100 {
+	// Ten more overflow too: exactly 11 drops in total.
+	for i := 12; i < 22; i++ {
+		bus.Publish(newTestEvent(i, "server-1"))
+	}
+	if got := strings.Count(logBuf.String(), "dropping event"); got != 11 {
+		t.Errorf("expected 11 dropped events, got %d", got)
+	}
+}
+
+func TestBus_SlowSubscriberDoesNotStarveFastOne(t *testing.T) {
+	bus := newBusWithQueueSize(50)
+	defer bus.Close()
+	captureLog(t)
+
+	release := make(chan struct{})
+	defer close(release)
+	slow, entered := blockingHandler(release)
+	bus.Subscribe(slow)
+
+	var fastCount atomic.Int32
+	done := make(chan struct{})
+	bus.Subscribe(func(Event) {
+		if fastCount.Add(1) == 50 {
+			close(done)
+		}
+	})
+
+	bus.Publish(newTestEvent(0, "server-1"))
+	<-entered
+	for i := 1; i < 50; i++ {
 		bus.Publish(newTestEvent(i, "server-1"))
 	}
 
-	// Verify no drops yet
-	if strings.Contains(logBuf.String(), "dropping event") {
-		t.Error("unexpected drop before buffer full")
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("fast subscriber got %d of 50 events while slow one was blocked", fastCount.Load())
 	}
-
-	// This one should be dropped
-	bus.Publish(newTestEvent(100, "server-overflow"))
-
-	// Check that drop was logged
-	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "dropping event") {
-		t.Error("expected 'dropping event' in log output")
-	}
-	if !strings.Contains(logOutput, "server-overflow") {
-		t.Error("expected server ID in log output")
-	}
-
-	bus.Close()
 }
 
-func TestBus_ChannelOverflow_CountsDrops(t *testing.T) {
-	// Create a bus with a small buffer to make testing easier
-	bus := &Bus{
-		handlers: make([]Handler, 0),
-		ch:       make(chan Event, 10),
-		done:     make(chan struct{}),
+func TestBus_NoDeliveryAfterUnsubscribeReturns(t *testing.T) {
+	bus := NewBus()
+	defer bus.Close()
+
+	release := make(chan struct{})
+	slow, entered := blockingHandler(release)
+	var calls atomic.Int32
+	unsub := bus.Subscribe(func(e Event) {
+		calls.Add(1)
+		slow(e)
+	})
+
+	// Handler is mid-call for event 0; events 1..4 sit in its queue.
+	bus.Publish(newTestEvent(0, "server-1"))
+	<-entered
+	for i := 1; i < 5; i++ {
+		bus.Publish(newTestEvent(i, "server-1"))
 	}
 
-	// Capture log output
-	var logBuf bytes.Buffer
-	originalOutput := log.Writer()
-	log.SetOutput(&logBuf)
-	defer log.SetOutput(originalOutput)
+	unsubReturned := make(chan struct{})
+	go func() {
+		unsub()
+		close(unsubReturned)
+	}()
 
-	// Publish more events than the buffer can hold
-	for i := range 20 {
-		bus.Publish(newTestEvent(i, fmt.Sprintf("server-%d", i)))
+	// Unsubscribe must wait for the in-flight call rather than return early.
+	select {
+	case <-unsubReturned:
+		t.Fatal("unsubscribe returned while the handler was still running")
+	case <-time.After(50 * time.Millisecond):
 	}
 
-	// Count how many "dropping event" messages were logged
-	logOutput := logBuf.String()
-	dropCount := strings.Count(logOutput, "dropping event")
-
-	// Should have dropped 10 events (20 published - 10 buffer capacity)
-	if dropCount != 10 {
-		t.Errorf("expected 10 dropped events, got %d", dropCount)
+	close(release)
+	select {
+	case <-unsubReturned:
+	case <-time.After(time.Second):
+		t.Fatal("unsubscribe did not return after the handler finished")
 	}
 
+	// Queued events are discarded, and later publishes are not delivered.
+	bus.Publish(newTestEvent(5, "server-1"))
+	time.Sleep(50 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Errorf("handler called %d times; want exactly the 1 in-flight call", got)
+	}
+
+	// Calling the unsubscribe function again is harmless.
+	unsub()
+}
+
+func TestBus_CloseIsIdempotentAndWaitsForHandlers(t *testing.T) {
+	bus := NewBus()
+
+	release := make(chan struct{})
+	slow, entered := blockingHandler(release)
+	bus.Subscribe(slow)
+	bus.Publish(newTestEvent(0, "server-1"))
+	<-entered
+
+	closed := make(chan struct{})
+	go func() {
+		bus.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a handler was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after the handler finished")
+	}
+
+	// Second Close must not panic; Publish/Subscribe after Close are no-ops.
 	bus.Close()
+	bus.Publish(newTestEvent(1, "server-1"))
+	unsub := bus.Subscribe(func(Event) { t.Error("handler called on closed bus") })
+	bus.Publish(newTestEvent(2, "server-1"))
+	unsub()
+}
+
+// TestBus_ConcurrentSubscribeUnsubscribePublishClose is a -race stress test:
+// subscribers churn while publishers hammer the bus, then Close lands under
+// everyone. Nothing may panic, and no handler may run after its unsubscribe.
+func TestBus_ConcurrentSubscribeUnsubscribePublishClose(t *testing.T) {
+	bus := NewBus()
+	captureLog(t)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			i := 0
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				bus.Publish(newTestEvent(i, "server-1"))
+				i++
+			}
+		}()
+	}
+
+	var afterUnsub atomic.Int32
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 50 {
+				var gone atomic.Bool
+				unsub := bus.Subscribe(func(Event) {
+					if gone.Load() {
+						afterUnsub.Add(1)
+					}
+				})
+				time.Sleep(time.Millisecond)
+				unsub()
+				gone.Store(true)
+			}
+		}()
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	bus.Close()
+	close(stop)
+	wg.Wait()
+
+	if n := afterUnsub.Load(); n != 0 {
+		t.Errorf("%d handler calls landed after unsubscribe returned", n)
+	}
 }
 
 func TestBus_EventOrdering(t *testing.T) {
@@ -363,32 +524,4 @@ func TestBus_Close(t *testing.T) {
 	// Publish after close should not panic
 	// (it will just put in channel which is never consumed, or drop if full)
 	bus.Publish(newTestEvent(2, "server-1"))
-}
-
-func TestBus_DropMessageIncludesEventType(t *testing.T) {
-	bus := &Bus{
-		handlers: make([]Handler, 0),
-		ch:       make(chan Event, 1),
-		done:     make(chan struct{}),
-	}
-
-	var logBuf bytes.Buffer
-	originalOutput := log.Writer()
-	log.SetOutput(&logBuf)
-	defer log.SetOutput(originalOutput)
-
-	// Fill buffer
-	bus.Publish(newTestEvent(1, "server-1"))
-	// This should be dropped
-	bus.Publish(NewErrorEvent("error-server", nil, "test error"))
-
-	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "type=") {
-		t.Error("expected event type in drop message")
-	}
-	if !strings.Contains(logOutput, "error-server") {
-		t.Error("expected server ID in drop message")
-	}
-
-	bus.Close()
 }
