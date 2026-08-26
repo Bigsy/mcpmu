@@ -141,11 +141,7 @@ func formChecked(r *http.Request, key string) bool {
 // (and any casing) is stored as "". Invalid levels are left as-is so
 // config validation reports them.
 func formCompression(r *http.Request) string {
-	level := strings.ToLower(strings.TrimSpace(r.FormValue("compression")))
-	if level == "off" {
-		return ""
-	}
-	return level
+	return config.NormalizeCompressionLevel(r.FormValue("compression"))
 }
 
 // parseEnvPairs extracts env key/value pairs from form data.

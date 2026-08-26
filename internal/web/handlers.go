@@ -272,6 +272,10 @@ func (s *Server) handleAPICreateNamespace(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// AddNamespace normalizes too; mirror it here so the echoed response body
+	// matches what was stored.
+	req.Config.Compression = config.NormalizeCompressionLevel(req.Config.Compression)
+
 	err := s.mutateConfig(func(cfg *config.Config) error {
 		return cfg.AddNamespace(name, req.Config)
 	})
@@ -323,11 +327,7 @@ func (s *Server) handleAPIUpdateNamespace(w http.ResponseWriter, r *http.Request
 			ns.DenyByDefault = *req.DenyByDefault
 		}
 		if req.Compression != nil {
-			level := strings.ToLower(strings.TrimSpace(*req.Compression))
-			if level == "off" {
-				level = ""
-			}
-			ns.Compression = level
+			ns.Compression = *req.Compression // normalized+validated by UpdateNamespace
 		}
 		if req.ServerIDs != nil {
 			ns.ServerIDs = *req.ServerIDs

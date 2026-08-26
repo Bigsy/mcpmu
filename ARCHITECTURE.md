@@ -376,6 +376,20 @@ must agree) and snapshot the namespace name under `s.mu`, mirroring the
 handshake as a string: `""` = flag absent (namespace config decides), `"off"` =
 explicit off, otherwise the level.
 
+Stored values are canonical — `config.NormalizeCompressionLevel` (lowercase,
+`"off"` → `""`) runs in `AddNamespace`/`UpdateNamespace` and again at load, so
+display and edit surfaces compare literally. The strict level check runs only
+on the mutation paths, where a user sees the error; config *load* deliberately
+tolerates an unknown level (hand-edited, or written by a future version) and
+serve degrades it to off at runtime — failing `Config.Validate` would brick
+every command, including the TUI needed to fix the field, and `Mutate`
+re-validates the whole config so even unrelated edits would be blocked. One
+reload edge to know: a reload that turns compression *off* invalidates a
+client's cached `invoke_tool` (it falls through as an unknown dotless name)
+until the client re-lists — self-healing, since the reload emits
+`tools/list_changed`. Turning it *on* is graceful because qualified names keep
+routing normally.
+
 ### Verified Upstream Catalog
 
 The Supervisor is the single owner of upstream initialization and initial

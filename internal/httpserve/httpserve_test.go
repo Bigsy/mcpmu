@@ -184,6 +184,54 @@ func TestCompressedSessionOverHTTP(t *testing.T) {
 	}
 }
 
+// TestNamespaceCompressionOverHTTP covers the per-namespace level on the HTTP
+// session-construction path: a namespace-configured level compresses with no
+// flag at all, and an explicit --compress off (CompressionForceOff) overrides
+// it back to the full listing.
+func TestNamespaceCompressionOverHTTP(t *testing.T) {
+	listNames := func(t *testing.T, base string) map[string]bool {
+		t.Helper()
+		probe := &mcptest.HTTPProbe{BaseURL: base + "/mcp"}
+		probe.Initialize(t)
+		list := probe.Call(t, 2, "tools/list", nil)
+		if list.Error != nil {
+			t.Fatalf("tools/list: %d %s", list.Error.Code, list.Error.Message)
+		}
+		var tools struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(list.Result, &tools); err != nil {
+			t.Fatalf("decode tools/list: %v", err)
+		}
+		names := make(map[string]bool, len(tools.Tools))
+		for _, tool := range tools.Tools {
+			names[tool.Name] = true
+		}
+		return names
+	}
+	namespacedConfig := func() *config.Config {
+		cfg := singleServerConfig(t, mcptest.DefaultConfig())
+		cfg.Namespaces = map[string]config.NamespaceConfig{
+			"work": {ServerIDs: []string{"fake"}, Compression: "medium"},
+		}
+		return cfg
+	}
+
+	_, base := startServer(t, namespacedConfig(), nil)
+	if names := listNames(t, base); !names["invoke_tool"] || names["fake.read_file"] {
+		t.Errorf("namespace-configured level should compress without a flag, got %v", names)
+	}
+
+	_, forcedOffBase := startServer(t, namespacedConfig(), func(o *Options) {
+		o.CompressionForceOff = true
+	})
+	if names := listNames(t, forcedOffBase); names["invoke_tool"] || !names["fake.read_file"] {
+		t.Errorf("CompressionForceOff should override the namespace level, got %v", names)
+	}
+}
+
 func TestSecondInitializeOnSessionIs400(t *testing.T) {
 	_, base := startServer(t, singleServerConfig(t, mcptest.DefaultConfig()), nil)
 	probe := &mcptest.HTTPProbe{BaseURL: base + "/mcp"}

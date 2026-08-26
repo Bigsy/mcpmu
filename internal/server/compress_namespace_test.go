@@ -53,6 +53,28 @@ func TestCompress_NamespaceConfiguredLevel(t *testing.T) {
 	}
 }
 
+// TestCompress_UnknownNamespaceLevelDegradesToOff pins the runtime fallback:
+// an unknown level can reach a session (config load tolerates hand-edited and
+// future-version values instead of bricking every command), and the session
+// must serve the full uncompressed listing rather than fail.
+func TestCompress_UnknownNamespaceLevelDegradesToOff(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping subprocess test in short mode")
+	}
+
+	script := initLine + "\n" + `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
+	responses := runCompressSession(t, Options{Config: nsCompressConfig("ultra")}, script)
+
+	tools := wrapperListFromResponse(t, responses[2])
+	if _, ok := tools["srv1.read_file"]; !ok {
+		t.Error("unknown level should degrade to off and list the real tool")
+	}
+	if _, ok := tools[wrapperInvokeTool]; ok {
+		t.Error("unknown level should not enable the wrapper surface")
+	}
+}
+
 // TestCompress_FlagOverridesNamespaceConfig verifies the --compress flag wins
 // over namespace config in both directions: an explicit level replaces the
 // configured one, and an explicit off (CompressionForceOff) disables the

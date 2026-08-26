@@ -71,6 +71,18 @@ func LoadFrom(path string) (*Config, error) {
 		cfg.Namespaces = make(map[string]NamespaceConfig)
 	}
 
+	// Canonicalize hand-edited compression values ("OFF", " medium ") so every
+	// display and edit surface can compare them literally — the same load-time
+	// migration spirit as ServerConfig's legacy OAuth fields. Unknown levels
+	// are kept as typed (visible in list/detail views) and degrade to off in
+	// serve mode; they deliberately do not fail the load (see Config.Validate).
+	for name, ns := range cfg.Namespaces {
+		if normalized := NormalizeCompressionLevel(ns.Compression); normalized != ns.Compression {
+			ns.Compression = normalized
+			cfg.Namespaces[name] = ns
+		}
+	}
+
 	// Validate all servers
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
@@ -326,7 +338,8 @@ func (c *Config) AddNamespace(name string, ns NamespaceConfig) error {
 		return fmt.Errorf("namespace %q already exists", name)
 	}
 
-	// Validate namespace config
+	// Canonicalize, then validate the namespace config
+	ns.Compression = NormalizeCompressionLevel(ns.Compression)
 	if err := ns.Validate(); err != nil {
 		return err
 	}
@@ -345,6 +358,7 @@ func (c *Config) UpdateNamespace(name string, ns NamespaceConfig) error {
 	if _, exists := c.Namespaces[name]; !exists {
 		return fmt.Errorf("namespace %q not found", name)
 	}
+	ns.Compression = NormalizeCompressionLevel(ns.Compression)
 	if err := ns.Validate(); err != nil {
 		return err
 	}
@@ -423,12 +437,12 @@ func (c *Config) DuplicateNamespace(oldName, newName string) error {
 		return fmt.Errorf("namespace %q already exists", newName)
 	}
 
-	// Deep copy the namespace config
-	newNS := NamespaceConfig{
-		Description:   ns.Description,
-		ServerIDs:     append([]string{}, ns.ServerIDs...),
-		DenyByDefault: ns.DenyByDefault,
-	}
+	// Deep copy the namespace config: struct copy carries every scalar field
+	// (so a newly added one cannot be silently dropped here), then re-clone
+	// the reference fields.
+	newNS := ns
+	newNS.ServerIDs = append([]string{}, ns.ServerIDs...)
+	newNS.ServerDefaults = nil
 	if len(ns.ServerDefaults) > 0 {
 		newNS.ServerDefaults = make(map[string]bool, len(ns.ServerDefaults))
 		maps.Copy(newNS.ServerDefaults, ns.ServerDefaults)

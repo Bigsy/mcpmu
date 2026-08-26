@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/spf13/cobra"
@@ -496,10 +495,9 @@ Examples:
 
 func runNamespaceSetCompression(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
-	level := strings.ToLower(args[1])
-	if level == "off" {
-		level = ""
-	}
+	level := config.NormalizeCompressionLevel(args[1])
+	// UpdateNamespace validates too; checking here reports a bad level before
+	// the namespace lookup, matching flag-style errors.
 	if err := config.ValidateCompression(level); err != nil {
 		return err
 	}

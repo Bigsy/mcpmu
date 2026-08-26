@@ -115,14 +115,24 @@ type NamespaceConfig struct {
 // the two in sync — the server package imports this one, not the other way).
 var CompressionLevels = []string{"low", "medium", "high", "max"}
 
-// ValidateCompression checks a namespace compression value. Empty and "off"
-// both mean disabled; mutation paths store "" for off.
-func ValidateCompression(level string) error {
-	switch strings.ToLower(level) {
-	case "", "off":
-		return nil
+// NormalizeCompressionLevel canonicalizes a compression value for storage:
+// whitespace trimmed, lowercased, and "off" mapped to "" — so a stored level
+// is always either absent or an exact CompressionLevels member, and every
+// display/edit surface can compare it literally. Unknown values are returned
+// (trimmed/lowercased) rather than dropped, so validation still sees them.
+func NormalizeCompressionLevel(level string) string {
+	level = strings.ToLower(strings.TrimSpace(level))
+	if level == "off" {
+		return ""
 	}
-	if slices.Contains(CompressionLevels, strings.ToLower(level)) {
+	return level
+}
+
+// ValidateCompression checks a namespace compression value. Empty and "off"
+// both mean disabled; mutation paths normalize before storing so only "" and
+// CompressionLevels members reach the config.
+func ValidateCompression(level string) error {
+	if level = NormalizeCompressionLevel(level); level == "" || slices.Contains(CompressionLevels, level) {
 		return nil
 	}
 	return fmt.Errorf("invalid compression level %q (valid: off, low, medium, high, max)", level)
@@ -406,17 +416,19 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// Validate checks that all servers and namespaces in the config are valid.
-// Returns an error describing the first invalid entry found.
+// Validate checks that all servers in the config are valid.
+// Returns an error describing the first invalid server found.
+//
+// Namespaces are deliberately NOT validated here: this runs on every load and
+// inside Mutate, so a hand-edited (or future-version) namespace compression
+// level would brick every command — including the TUI needed to fix it — over
+// an opt-in cosmetic field that serve mode already degrades to off at runtime.
+// Namespace validation runs in AddNamespace/UpdateNamespace instead, where a
+// user is present to see the error.
 func (c *Config) Validate() error {
 	for name, srv := range c.Servers {
 		if err := srv.Validate(); err != nil {
 			return fmt.Errorf("server %q: %w", name, err)
-		}
-	}
-	for name, ns := range c.Namespaces {
-		if err := ns.Validate(); err != nil {
-			return fmt.Errorf("namespace %q: %w", name, err)
 		}
 	}
 	return nil
