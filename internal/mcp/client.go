@@ -298,10 +298,21 @@ func (c *Client) Initialize(ctx context.Context) error {
 	return fmt.Errorf("initialize: no protocol versions to try")
 }
 
-// isProtocolVersionError checks if an error indicates a protocol version rejection.
+// isProtocolVersionError checks if an error indicates a protocol version
+// rejection: structurally for the HTTP transport (ProtocolVersionError), and
+// by message for a JSON-RPC error object, since the spec fixes no error code
+// for it. Unrecognised error types fall back to a scan of the message.
 func isProtocolVersionError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var pve *ProtocolVersionError
+	if errors.As(err, &pve) {
+		return true
+	}
+	var rpcErr *rpcError
+	if errors.As(err, &rpcErr) {
+		return mentionsVersion(rpcErr.Message) || strings.Contains(rpcErr.Message, "protocol")
 	}
 	errStr := err.Error()
 	// Common patterns in version rejection errors

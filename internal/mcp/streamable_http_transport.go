@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Bigsy/mcpmu/internal/httpclient"
 	"github.com/Bigsy/mcpmu/internal/oauth"
 )
 
@@ -25,7 +25,15 @@ const (
 	MaxSSEEventSize = 1024 * 1024
 
 	// DefaultConnectTimeout is the timeout for initial HTTP connections.
-	DefaultConnectTimeout = 30 * time.Second
+	DefaultConnectTimeout = httpclient.DefaultConnectTimeout
+
+	// MaxJSONResponseSize caps a direct (non-SSE) JSON-RPC response body from
+	// an HTTP upstream. Larger bodies fail with ErrBodyTooLarge instead of
+	// being buffered without bound.
+	MaxJSONResponseSize = 32 * 1024 * 1024
+
+	// MaxErrorBodySize is how much of an error response is kept for diagnostics.
+	MaxErrorBodySize = 1024
 
 	// SSEReconnectBaseDelay is the base delay for SSE reconnection.
 	SSEReconnectBaseDelay = 500 * time.Millisecond
@@ -39,6 +47,9 @@ const (
 	// backoff keeps growing instead of reconnecting every base delay forever.
 	SSEReconnectMinUptime = 5 * time.Second
 )
+
+// ErrBodyTooLarge is returned when an upstream response body exceeds its cap.
+var ErrBodyTooLarge = httpclient.ErrBodyTooLarge
 
 // SupportedProtocolVersions lists the MCP protocol versions we support,
 // in order of preference (newest first). During connection, we try each
@@ -124,8 +135,8 @@ func NewStreamableHTTPTransport(config StreamableHTTPConfig) *StreamableHTTPTran
 
 	// Ensure we don't use http.Client.Timeout for SSE or potentially streamed responses.
 	// Client timeouts are managed by context cancellation and transport-level timeouts.
-	sseClient := cloneHTTPClient(baseClient)
-	rpcClient := cloneHTTPClient(baseClient)
+	sseClient := httpclient.New(baseClient)
+	rpcClient := httpclient.New(baseClient)
 
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 
@@ -231,6 +242,17 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 		versionsToTry = SupportedProtocolVersions[startIdx:]
 	}
 
+	// Close cancels baseCtx, so an in-flight POST must die with the transport
+	// rather than with the caller's (possibly much longer) deadline. The
+	// request context is ctx bounded by baseCtx.
+	ctx, cancelReq := t.requestContext(ctx)
+	handedOff := false // true once a response stream owns cancelReq
+	defer func() {
+		if !handedOff {
+			cancelReq()
+		}
+	}()
+
 	var lastErr error
 	for i, version := range versionsToTry {
 		req, err := http.NewRequestWithContext(ctx, "POST", postURL, bytes.NewReader(msg))
@@ -258,14 +280,12 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 		// Allow re-negotiation even if we thought we had a version, since some servers
 		// are lenient on first request but strict on subsequent requests
 		if resp.StatusCode == http.StatusBadRequest {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-			_ = resp.Body.Close()
-			bodyStr := string(body)
+			httpErr := t.upstreamError(resp)
 
 			// Check if this is a version rejection
-			if isVersionRejection(bodyStr) {
+			if httpErr.IsVersionRejection() {
 				log.Printf("HTTP version %s rejected by server, trying next version", version)
-				lastErr = fmt.Errorf("version %s rejected: %s", version, bodyStr)
+				lastErr = &ProtocolVersionError{Version: version, Cause: httpErr}
 
 				// Clear the negotiated version since it was wrong
 				if negotiatedVersion != "" {
@@ -283,7 +303,7 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 			}
 
 			// Not a version rejection - return the error
-			return &UpstreamHTTPError{Code: resp.StatusCode, Status: resp.Status, Body: bodyStr}
+			return httpErr
 		}
 
 		// A server may rotate the session ID even on an error response (for
@@ -300,8 +320,7 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 
 		// Check response status
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-			_ = resp.Body.Close()
+			httpErr := t.upstreamError(resp)
 			if resp.StatusCode == http.StatusUnauthorized {
 				// Parse WWW-Authenticate headers for OAuth discovery (RFC 9728)
 				// Uses all header values to find Bearer challenge with resource_metadata
@@ -318,7 +337,7 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 				t.handleSessionExpired(sessionID)
 				return &SessionExpiredError{}
 			}
-			return &UpstreamHTTPError{Code: resp.StatusCode, Status: resp.Status, Body: string(body)}
+			return httpErr
 		}
 
 		// A successful POST with no session header means this server issues no
@@ -351,13 +370,12 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 			// stream open after the response event to push further messages, and
 			// reading it here would block Send — which holds Client.sendMu, so
 			// every other RPC on this transport would queue behind it.
-			t.drainResponseStream(ctx, resp.Body)
+			handedOff = true
+			t.drainResponseStream(ctx, resp.Body, cancelReq)
 			return nil
 		} else if strings.HasPrefix(contentType, "application/json") {
 			// Direct JSON response - queue it
-			err = t.handleJSONResponse(ctx, resp.Body)
-			_ = resp.Body.Close()
-			return err
+			return t.handleJSONResponse(ctx, resp)
 		}
 
 		_ = resp.Body.Close()
@@ -370,12 +388,20 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 	return errors.New("no protocol versions to try")
 }
 
-// isVersionRejection checks if an error response indicates a protocol version rejection.
-func isVersionRejection(body string) bool {
-	bodyLower := strings.ToLower(body)
-	return strings.Contains(bodyLower, "unsupported") && strings.Contains(bodyLower, "version") ||
-		strings.Contains(bodyLower, "protocol-version") ||
-		strings.Contains(bodyLower, "protocolversion")
+// requestContext derives a context for one outbound request that ends when
+// either the caller's ctx or the transport's baseCtx does.
+func (t *StreamableHTTPTransport) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(t.baseCtx, cancel)
+	return ctx, func() { stop(); cancel() }
+}
+
+// upstreamError builds an UpstreamHTTPError from an error response, keeping a
+// bounded prefix of the body for diagnostics and closing it.
+func (t *StreamableHTTPTransport) upstreamError(resp *http.Response) *UpstreamHTTPError {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, MaxErrorBodySize))
+	_ = resp.Body.Close()
+	return &UpstreamHTTPError{Code: resp.StatusCode, Status: resp.Status, Body: string(body)}
 }
 
 // pumpSSE reads an SSE stream and queues each message event for Receive. It
@@ -432,14 +458,16 @@ func (t *StreamableHTTPTransport) pumpSSE(ctx context.Context, body io.Reader) (
 // context does. That is the right lifetime for a response stream: the reply has
 // already been queued, and the standalone GET stream is the channel for
 // server-initiated messages.
-func (t *StreamableHTTPTransport) drainResponseStream(ctx context.Context, body io.ReadCloser) {
+func (t *StreamableHTTPTransport) drainResponseStream(ctx context.Context, body io.ReadCloser, release context.CancelFunc) {
 	if !t.trackGoroutine() {
 		_ = body.Close()
+		release()
 		return
 	}
 
 	go func() {
 		defer t.wg.Done()
+		defer release()
 		// Closing the body is what unblocks a scanner parked on a stream the
 		// server is holding open, so Close cannot be made to wait on it.
 		stop := context.AfterFunc(t.baseCtx, func() { _ = body.Close() })
@@ -670,11 +698,12 @@ func (t *StreamableHTTPTransport) openStandaloneSSE(ctx context.Context) (produc
 	return productive, true
 }
 
-// handleJSONResponse processes a JSON response.
-func (t *StreamableHTTPTransport) handleJSONResponse(ctx context.Context, body io.Reader) error {
-	data, err := io.ReadAll(body)
+// handleJSONResponse queues a direct JSON response, reading at most
+// MaxJSONResponseSize bytes and closing the body.
+func (t *StreamableHTTPTransport) handleJSONResponse(ctx context.Context, resp *http.Response) error {
+	data, err := httpclient.ReadBody(resp, MaxJSONResponseSize)
 	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+		return err
 	}
 	if len(data) > 0 {
 		if DebugLogging {
@@ -938,6 +967,61 @@ func (e *UpstreamHTTPError) Error() string {
 	return "request failed: " + e.Status
 }
 
+// IsVersionRejection reports whether this 400 says the MCP-Protocol-Version
+// we sent is unsupported. The spec gives no fixed shape for the body, so the
+// structured forms seen in the wild are tried first — a JSON-RPC error object
+// or a bare {"error": "..."} whose message mentions the version, or a body
+// listing supported versions — and a substring scan of the raw body is the
+// last resort.
+func (e *UpstreamHTTPError) IsVersionRejection() bool {
+	if e.Code != http.StatusBadRequest {
+		return false
+	}
+	var body struct {
+		Error             json.RawMessage `json:"error"`
+		SupportedVersions json.RawMessage `json:"supportedVersions"`
+		SupportedVersion2 json.RawMessage `json:"supported_versions"`
+	}
+	if json.Unmarshal([]byte(e.Body), &body) == nil {
+		if len(body.SupportedVersions) > 0 || len(body.SupportedVersion2) > 0 {
+			return true
+		}
+		var msg string
+		if json.Unmarshal(body.Error, &msg) != nil {
+			var obj struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(body.Error, &obj) == nil {
+				msg = obj.Message
+			}
+		}
+		if msg != "" {
+			return mentionsVersion(msg)
+		}
+	}
+	return mentionsVersion(e.Body)
+}
+
+func mentionsVersion(s string) bool {
+	s = strings.ToLower(s)
+	return strings.Contains(s, "unsupported") && strings.Contains(s, "version") ||
+		strings.Contains(s, "protocol-version") ||
+		strings.Contains(s, "protocolversion")
+}
+
+// ProtocolVersionError is returned when an upstream rejects the protocol
+// version we offered. Cause is the 400 that said so.
+type ProtocolVersionError struct {
+	Version string
+	Cause   *UpstreamHTTPError
+}
+
+func (e *ProtocolVersionError) Error() string {
+	return fmt.Sprintf("version %s rejected: %s", e.Version, e.Cause.Body)
+}
+
+func (e *ProtocolVersionError) Unwrap() error { return e.Cause }
+
 // HTTPClientConfig holds configuration for creating an HTTP transport from server config.
 type HTTPClientConfig struct {
 	URL         string
@@ -967,63 +1051,6 @@ func ValidateBearerTokenEnvVar(envVarName string) (string, error) {
 // MarshalJSON for AuthStatus to use string representation.
 func (a AuthStatus) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(a))
-}
-
-func cloneHTTPClient(base *http.Client) *http.Client {
-	c := &http.Client{}
-	if base != nil {
-		*c = *base
-	}
-	c.Timeout = 0
-
-	if c.Transport == nil {
-		c.Transport = defaultHTTPTransport()
-		return c
-	}
-	if t, ok := c.Transport.(*http.Transport); ok {
-		tt := t.Clone()
-		if tt.ResponseHeaderTimeout == 0 {
-			tt.ResponseHeaderTimeout = DefaultConnectTimeout
-		}
-		if tt.TLSHandshakeTimeout == 0 {
-			tt.TLSHandshakeTimeout = DefaultConnectTimeout
-		}
-		if tt.DialContext == nil {
-			tt.DialContext = (&net.Dialer{
-				Timeout:   DefaultConnectTimeout,
-				KeepAlive: 30 * time.Second,
-			}).DialContext
-		}
-		c.Transport = tt
-	}
-	return c
-}
-
-func defaultHTTPTransport() *http.Transport {
-	// Start from Go's defaults and add a header timeout so requests that never
-	// respond don't hang indefinitely, without imposing a hard deadline for
-	// long-lived response bodies like SSE.
-	if dt, ok := http.DefaultTransport.(*http.Transport); ok {
-		t := dt.Clone()
-		t.ResponseHeaderTimeout = DefaultConnectTimeout
-		if t.TLSHandshakeTimeout == 0 {
-			t.TLSHandshakeTimeout = DefaultConnectTimeout
-		}
-		return t
-	}
-	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   DefaultConnectTimeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   DefaultConnectTimeout,
-		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: DefaultConnectTimeout,
-	}
 }
 
 func isValidEnvVarName(s string) bool {

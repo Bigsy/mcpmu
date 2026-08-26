@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/Bigsy/mcpmu/internal/config"
@@ -49,14 +48,18 @@ func requireServer(cfg *config.Config, name string) error {
 	return nil
 }
 
-func parseBoolFlag(value string, trueValues, falseValues []string, noun, expected string) (bool, error) {
-	if slices.Contains(trueValues, value) {
+// parseBool is the one boolean parser for CLI positional values. It accepts
+// true/yes/1/allow/on and false/no/0/deny/off, case-insensitively. Every call
+// site states what "true" means there (for example `denyByDefault := !allow`)
+// so the three permission/namespace commands cannot drift apart again.
+func parseBool(s string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "true", "yes", "1", "allow", "on":
 		return true, nil
-	}
-	if slices.Contains(falseValues, value) {
+	case "false", "no", "0", "deny", "off":
 		return false, nil
 	}
-	return false, fmt.Errorf("invalid %s %q: expected %s", noun, value, expected)
+	return false, fmt.Errorf("invalid value %q: expected true/false (also yes/no, allow/deny, on/off)", s)
 }
 
 // mutateConfig applies fn to the config file at configPath (the default path

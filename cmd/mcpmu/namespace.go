@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/spf13/cobra"
@@ -448,9 +447,8 @@ func init() {
 
 func runNamespaceSetDenyDefault(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
-	valueStr := strings.ToLower(args[1])
-
-	denyByDefault, err := parseBoolFlag(valueStr, []string{"true", "yes", "1"}, []string{"false", "no", "0"}, "value", "true or false")
+	// "true"/"deny" turn deny-by-default on.
+	denyByDefault, err := parseBool(args[1])
 	if err != nil {
 		return err
 	}

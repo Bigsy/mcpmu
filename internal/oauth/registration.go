@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
-	"time"
+
+	"github.com/Bigsy/mcpmu/internal/httpclient"
 )
 
 // ClientRegistrationRequest is the request for dynamic client registration (RFC 7591).
@@ -69,6 +69,8 @@ func RegisterClient(ctx context.Context, registrationEndpoint string, redirectUR
 		return nil, fmt.Errorf("marshal registration request: %w", err)
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, TokenTimeout)
+	defer cancel()
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", registrationEndpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -78,16 +80,14 @@ func RegisterClient(ctx context.Context, registrationEndpoint string, redirectUR
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("MCP-Protocol-Version", MCPProtocolVersion)
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(httpReq)
+	resp, err := newHTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("registration request: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	respBody, err := httpclient.ReadBody(resp, MaxMetadataSize)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {

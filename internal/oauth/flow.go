@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Bigsy/mcpmu/internal/httpclient"
 )
 
 // FlowConfig holds configuration for an OAuth flow.
@@ -209,7 +210,8 @@ func (f *Flow) Run(ctx context.Context) error {
 // to discover the OAuth server.
 func (f *Flow) discoverViaChallenge(ctx context.Context) (*DiscoverResult, error) {
 	// Send a request to trigger a 401
-	client := &http.Client{Timeout: DiscoveryTimeout}
+	ctx, cancel := context.WithTimeout(ctx, DiscoveryTimeout)
+	defer cancel()
 
 	// Send a proper MCP initialize request shape to ensure servers return the expected 401
 	req, err := http.NewRequestWithContext(ctx, "POST", f.config.ServerURL, strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"`+MCPProtocolVersion+`","clientInfo":{"name":"mcpmu","version":"1.0.0"},"capabilities":{}}}`))
@@ -220,7 +222,7 @@ func (f *Flow) discoverViaChallenge(ctx context.Context) (*DiscoverResult, error
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("MCP-Protocol-Version", MCPProtocolVersion)
 
-	resp, err := client.Do(req)
+	resp, err := newHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("challenge request: %w", err)
 	}
@@ -336,16 +338,17 @@ func doTokenRequest(ctx context.Context, cfg TokenRequestConfig) (*TokenResponse
 		req.SetBasicAuth(cfg.ClientID, cfg.ClientSecret)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	ctx, cancel := context.WithTimeout(ctx, TokenTimeout)
+	defer cancel()
+	req = req.WithContext(ctx)
+	resp, err := newHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	body, err := httpclient.ReadBody(resp, MaxMetadataSize)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {

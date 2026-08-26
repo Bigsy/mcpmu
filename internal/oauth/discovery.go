@@ -5,17 +5,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/Bigsy/mcpmu/internal/httpclient"
 )
 
 const (
 	// DiscoveryTimeout is the timeout for OAuth discovery requests.
 	DiscoveryTimeout = 5 * time.Second
+
+	// TokenTimeout is the timeout for token and registration requests.
+	TokenTimeout = 30 * time.Second
+
+	// MaxMetadataSize caps any OAuth metadata, token or registration response.
+	MaxMetadataSize = 1024 * 1024
 
 	// MCPProtocolVersion is the MCP protocol version header value.
 	MCPProtocolVersion = "2025-11-25"
@@ -70,9 +77,7 @@ func Discover(ctx context.Context, serverURL string) (*DiscoverResult, error) {
 	// 3. /.well-known/oauth-authorization-server
 	paths := buildDiscoveryPaths(parsed)
 
-	client := &http.Client{
-		Timeout: DiscoveryTimeout,
-	}
+	client := newHTTPClient()
 
 	var lastErr error
 	for _, discoveryURL := range paths {
@@ -116,6 +121,8 @@ func buildDiscoveryPaths(serverURL *url.URL) []string {
 
 // tryDiscovery attempts to fetch and parse OAuth metadata from a URL.
 func tryDiscovery(ctx context.Context, client *http.Client, discoveryURL string) (*DiscoverResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, DiscoveryTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", discoveryURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -128,15 +135,13 @@ func tryDiscovery(ctx context.Context, client *http.Client, discoveryURL string)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	body, err := httpclient.ReadBody(resp, MaxMetadataSize)
+	if err != nil {
+		return nil, err
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024)) // 1MB limit
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	var metadata AuthorizationServerMetadata
@@ -232,7 +237,8 @@ func DiscoverFromChallenge(ctx context.Context, challenge *BearerChallenge) (*Di
 
 // fetchResourceMetadata fetches and parses OAuth Protected Resource Metadata (RFC 9728).
 func fetchResourceMetadata(ctx context.Context, metadataURL string) (*ResourceMetadata, error) {
-	client := &http.Client{Timeout: DiscoveryTimeout}
+	ctx, cancel := context.WithTimeout(ctx, DiscoveryTimeout)
+	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", metadataURL, nil)
 	if err != nil {
@@ -241,19 +247,17 @@ func fetchResourceMetadata(ctx context.Context, metadataURL string) (*ResourceMe
 
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := newHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	body, err := httpclient.ReadBody(resp, MaxMetadataSize)
+	if err != nil {
+		return nil, err
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	var metadata ResourceMetadata

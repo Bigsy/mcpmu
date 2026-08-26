@@ -66,9 +66,8 @@ func runPermissionSet(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
 	serverName := args[1]
 	toolNameRaw := strings.TrimSpace(args[2])
-	permStr := strings.ToLower(args[3])
-
-	enabled, err := parseBoolFlag(permStr, []string{"allow", "yes", "true", "1"}, []string{"deny", "no", "false", "0"}, "permission", "allow or deny")
+	// "allow"/true enables the tool.
+	enabled, err := parseBool(args[3])
 	if err != nil {
 		return err
 	}
@@ -364,12 +363,13 @@ func init() {
 func runPermissionSetServerDefault(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
 	serverName := args[1]
-	permStr := strings.ToLower(args[2])
-
-	denyByDefault, err := parseBoolFlag(permStr, []string{"deny", "no", "false", "0"}, []string{"allow", "yes", "true", "1"}, "value", "deny or allow")
+	// The value is a policy, as for `permission set`: "allow"/true permits
+	// tools from this server by default, "deny"/false blocks them.
+	allow, err := parseBool(args[2])
 	if err != nil {
 		return err
 	}
+	denyByDefault := !allow
 
 	if err := mutateConfig(permissionSetServerDefaultConfigPath, func(cfg *config.Config) error {
 		if err := cfg.SetServerDefault(namespaceName, serverName, denyByDefault); err != nil {
