@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 )
@@ -71,9 +72,7 @@ func BuildServerConfig(form ServerFormData, existing *ServerConfig) (ServerConfi
 
 	if len(form.Env) > 0 {
 		srv.Env = make(map[string]string, len(form.Env))
-		for k, v := range form.Env {
-			srv.Env[k] = v
-		}
+		maps.Copy(srv.Env, form.Env)
 	} else {
 		srv.Env = nil
 	}

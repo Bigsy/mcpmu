@@ -26,7 +26,7 @@ func TestMutate_ConcurrentWritersBothSurvive(t *testing.T) {
 	const rounds = 20
 	var wg sync.WaitGroup
 	errs := make(chan error, 2*rounds)
-	for i := 0; i < rounds; i++ {
+	for i := range rounds {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()

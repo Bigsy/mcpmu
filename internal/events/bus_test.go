@@ -301,9 +301,7 @@ func TestBus_ConcurrentSubscribeUnsubscribePublishClose(t *testing.T) {
 	stop := make(chan struct{})
 
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			i := 0
 			for {
 				select {
@@ -314,14 +312,12 @@ func TestBus_ConcurrentSubscribeUnsubscribePublishClose(t *testing.T) {
 				bus.Publish(newTestEvent(i, "server-1"))
 				i++
 			}
-		}()
+		})
 	}
 
 	var afterUnsub atomic.Int32
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 50 {
 				var gone atomic.Bool
 				unsub := bus.Subscribe(func(Event) {
@@ -333,7 +329,7 @@ func TestBus_ConcurrentSubscribeUnsubscribePublishClose(t *testing.T) {
 				unsub()
 				gone.Store(true)
 			}
-		}()
+		})
 	}
 
 	time.Sleep(50 * time.Millisecond)

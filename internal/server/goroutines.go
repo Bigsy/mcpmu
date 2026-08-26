@@ -54,24 +54,20 @@ func (s *Session) spawn(name string, fn func(ctx context.Context) error) {
 // spawnRequest is spawn for a goroutine that owes the client a response with
 // the given id; if fn panics the client receives -32603 for that id.
 func (s *Session) spawnRequest(requestID json.RawMessage, name string, fn func(ctx context.Context) error) {
-	s.handlersWG.Add(1)
-	go func() {
-		defer s.handlersWG.Done()
+	s.handlersWG.Go(func() {
 		s.protect(name, requestID, fn)
-	}()
+	})
 }
 
 // spawn runs fn on a Core-tracked goroutine under the Core lifetime context.
 // Core.Close cancels the context and waits for fn to return.
 func (c *Core) spawn(name string, fn func(ctx context.Context) error) {
-	c.bgWG.Add(1)
-	go func() {
-		defer c.bgWG.Done()
+	c.bgWG.Go(func() {
 		defer recoverPanic(name, nil)
 		if err := fn(c.lifetime); err != nil {
 			log.Printf("%s: %v", name, err)
 		}
-	}()
+	})
 }
 
 // goSafe starts an untracked goroutine with panic recovery. For scoped

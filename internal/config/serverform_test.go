@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-func boolPtr(b bool) *bool { return &b }
-
 func TestBuildServerConfig_EditPreservesClientSecretAndUnexposedFields(t *testing.T) {
 	port := 3118
 	shared := false
@@ -32,7 +30,7 @@ func TestBuildServerConfig_EditPreservesClientSecretAndUnexposedFields(t *testin
 		OAuthCallbackPort: "3118",
 		OAuthScopes:       "a",
 		Autostart:         true,
-		Enabled:           boolPtr(true),
+		Enabled:           new(true),
 	}, &existing)
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +152,7 @@ func TestBuildServerConfig_Errors(t *testing.T) {
 }
 
 func TestBuildServerConfig_EnabledNilKeepsExisting(t *testing.T) {
-	existing := ServerConfig{Command: "x", Enabled: boolPtr(false)}
+	existing := ServerConfig{Command: "x", Enabled: new(false)}
 	got, err := BuildServerConfig(ServerFormData{Command: "x"}, &existing)
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +160,7 @@ func TestBuildServerConfig_EnabledNilKeepsExisting(t *testing.T) {
 	if got.IsEnabled() {
 		t.Error("Enabled=false should survive when the form has no enabled field")
 	}
-	got, err = BuildServerConfig(ServerFormData{Command: "x", Enabled: boolPtr(true)}, &existing)
+	got, err = BuildServerConfig(ServerFormData{Command: "x", Enabled: new(true)}, &existing)
 	if err != nil {
 		t.Fatal(err)
 	}

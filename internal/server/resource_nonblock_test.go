@@ -99,7 +99,6 @@ func stalledListSession(t *testing.T, holdFor time.Duration) *Server {
 		return srv.initialized
 	})
 
-	const listID = 2
 	if _, err := stdinW.Write([]byte(`{"jsonrpc":"2.0","id":2,"method":"resources/list"}` + "\n")); err != nil {
 		t.Fatalf("write resources/list: %v", err)
 	}

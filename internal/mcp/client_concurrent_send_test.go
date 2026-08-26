@@ -38,7 +38,7 @@ func TestConcurrentSendsNotHeadOfLineBlocked(t *testing.T) {
 		switch req.Method {
 		case "initialize":
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18",`+
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18",`+
 				`"capabilities":{},"serverInfo":{"name":"t","version":"1"}}}`, *req.ID)
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusAccepted)
@@ -48,10 +48,10 @@ func TestConcurrentSendsNotHeadOfLineBlocked(t *testing.T) {
 				<-slowRelease.Load().(chan struct{}) // hold the POST open
 			}
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"content":[]}}`, *req.ID)
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"content":[]}}`, *req.ID)
 		default:
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{}}`, *req.ID)
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{}}`, *req.ID)
 		}
 	}))
 	defer upstream.Close()
