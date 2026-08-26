@@ -107,6 +107,33 @@ type NamespaceConfig struct {
 	ServerIDs      []string        `json:"serverIds"`
 	DenyByDefault  bool            `json:"denyByDefault,omitempty"`  // If true, unconfigured tools are denied
 	ServerDefaults map[string]bool `json:"serverDefaults,omitempty"` // Per-server deny-default override (true = deny)
+	Compression    string          `json:"compression,omitempty"`    // Serve-mode compressed tool surface level ("" = off; see CompressionLevels)
+}
+
+// CompressionLevels are the valid non-off values for NamespaceConfig.Compression.
+// They mirror server.ParseCompressionLevel's levels (a cross-package test keeps
+// the two in sync — the server package imports this one, not the other way).
+var CompressionLevels = []string{"low", "medium", "high", "max"}
+
+// ValidateCompression checks a namespace compression value. Empty and "off"
+// both mean disabled; mutation paths store "" for off.
+func ValidateCompression(level string) error {
+	switch strings.ToLower(level) {
+	case "", "off":
+		return nil
+	}
+	if slices.Contains(CompressionLevels, strings.ToLower(level)) {
+		return nil
+	}
+	return fmt.Errorf("invalid compression level %q (valid: off, low, medium, high, max)", level)
+}
+
+// Validate checks that the NamespaceConfig is in a valid state.
+func (n NamespaceConfig) Validate() error {
+	if err := ValidateCompression(n.Compression); err != nil {
+		return err
+	}
+	return nil
 }
 
 // NamespaceEntry pairs a namespace name with its configuration.
@@ -379,12 +406,17 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// Validate checks that all servers in the config are valid.
-// Returns an error describing the first invalid server found.
+// Validate checks that all servers and namespaces in the config are valid.
+// Returns an error describing the first invalid entry found.
 func (c *Config) Validate() error {
 	for name, srv := range c.Servers {
 		if err := srv.Validate(); err != nil {
 			return fmt.Errorf("server %q: %w", name, err)
+		}
+	}
+	for name, ns := range c.Namespaces {
+		if err := ns.Validate(); err != nil {
+			return fmt.Errorf("namespace %q: %w", name, err)
 		}
 	}
 	return nil

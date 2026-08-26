@@ -137,6 +137,17 @@ func formChecked(r *http.Request, key string) bool {
 	return slices.Contains(r.Form[key], "true")
 }
 
+// formCompression normalizes the namespace compression select value: "off"
+// (and any casing) is stored as "". Invalid levels are left as-is so
+// config validation reports them.
+func formCompression(r *http.Request) string {
+	level := strings.ToLower(strings.TrimSpace(r.FormValue("compression")))
+	if level == "off" {
+		return ""
+	}
+	return level
+}
+
 // parseEnvPairs extracts env key/value pairs from form data.
 func parseEnvPairs(r *http.Request) []envPair {
 	keys := r.Form["env_key"]
@@ -419,6 +430,7 @@ type namespaceFormData struct {
 	Name          string
 	Description   string
 	DenyByDefault bool
+	Compression   string
 }
 
 // namespaceFormPageData is the template data for the namespace add/edit form page.
@@ -476,6 +488,7 @@ func (s *Server) handleNamespaceEditPage(w http.ResponseWriter, r *http.Request)
 			Name:          name,
 			Description:   ns.Description,
 			DenyByDefault: ns.DenyByDefault,
+			Compression:   ns.Compression,
 		},
 		AssignedServers:  ns.ServerIDs,
 		AvailableServers: available,
@@ -500,6 +513,7 @@ func (s *Server) handleNamespaceCreate(w http.ResponseWriter, r *http.Request) {
 	ns := config.NamespaceConfig{
 		Description:   strings.TrimSpace(r.FormValue("description")),
 		DenyByDefault: formChecked(r, "deny_by_default"),
+		Compression:   formCompression(r),
 		ServerIDs:     []string{},
 	}
 
@@ -512,6 +526,7 @@ func (s *Server) handleNamespaceCreate(w http.ResponseWriter, r *http.Request) {
 			Name:          name,
 			Description:   ns.Description,
 			DenyByDefault: ns.DenyByDefault,
+			Compression:   ns.Compression,
 		}
 		s.renderNamespaceFormError(w, fd, false, "", err.Error())
 		return
@@ -535,6 +550,7 @@ func (s *Server) handleNamespaceUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		ns.Description = strings.TrimSpace(r.FormValue("description"))
 		ns.DenyByDefault = formChecked(r, "deny_by_default")
+		ns.Compression = formCompression(r)
 		return cfg.UpdateNamespace(name, ns)
 	})
 
@@ -543,6 +559,7 @@ func (s *Server) handleNamespaceUpdate(w http.ResponseWriter, r *http.Request) {
 			Name:          name,
 			Description:   r.FormValue("description"),
 			DenyByDefault: formChecked(r, "deny_by_default"),
+			Compression:   formCompression(r),
 		}
 		s.renderNamespaceFormError(w, fd, true, name, err.Error())
 		return

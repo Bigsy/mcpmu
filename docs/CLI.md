@@ -91,6 +91,12 @@ mcpmu serve --stdio --compress medium
   permissions and usage metrics are enforced/recorded against the real target
   tool; note that client-side per-tool allow/deny rules only ever see
   `invoke_tool`, so use mcpmu permissions to restrict tools in this mode.
+  Compression can also be configured per namespace with
+  `mcpmu namespace set-compression` (see Namespaces below); the flag overrides
+  that setting in both directions — a level replaces the configured one, and an
+  explicit `--compress off` forces compression off. With no flag, the session
+  follows its active namespace's configured level, including across hot config
+  reloads.
 
 Resource URIs are passed through unmodified from upstream servers. Prompt names are qualified as `serverName.promptName`.
 
@@ -225,8 +231,15 @@ mcpmu namespace assign <namespace> <server>
 mcpmu namespace unassign <namespace> <server>
 mcpmu namespace default <name>
 mcpmu namespace set-deny-default <namespace> <true|false>
+mcpmu namespace set-compression <namespace> <level|off>
 mcpmu namespace rename <old-name> <new-name>
 ```
+
+`set-compression` stores a serve-mode compressed-tool-surface level on the
+namespace (`low`, `medium`, `high`, `max`; `off` clears it) — serve sessions on
+that namespace compress without needing `--compress`, and an explicit
+`--compress` flag overrides the stored level. The level shows in
+`namespace list` (COMPRESS column, `compression` JSON field).
 
 ## Server-level global deny list
 

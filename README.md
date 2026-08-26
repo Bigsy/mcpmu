@@ -344,6 +344,21 @@ real target tool, and denied tools never appear in the listing. One caveat:
 client-side per-tool allow/deny rules only ever see `invoke_tool`, so use
 mcpmu's tool permissions to restrict tools in this mode.
 
+Compression can also be configured per namespace, so a large "work" namespace
+compresses while a three-tool "dev" one doesn't — no `--compress` flag needed:
+
+```bash
+mcpmu namespace set-compression work medium
+mcpmu namespace set-compression work off     # clear it
+```
+
+The setting is also editable in the TUI and web namespace forms, and shows in
+`mcpmu namespace list`. An explicit `--compress` flag overrides the namespace
+setting in both directions: `--compress high` wins over a configured `medium`,
+and `--compress off` forces compression off. The effective level follows the
+session's *active* namespace, so a hot config reload that changes the namespace
+or its level takes effect on the next `tools/list`.
+
 Security: pass a bearer token via `--token` or `MCPMU_SERVE_TOKEN`; loopback
 binds may run tokenless (the unauthenticated endpoint is then loopback-only,
 plus an Origin check against browsers). Binding a

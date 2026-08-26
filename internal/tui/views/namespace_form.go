@@ -39,11 +39,13 @@ type NamespaceFormModel struct {
 	name          string
 	description   string
 	denyByDefault bool
+	compression   string
 
 	// Initial values for dirty checking
 	initialName          string
 	initialDescription   string
 	initialDenyByDefault bool
+	initialCompression   string
 
 	// Confirm discard state
 	showConfirmDiscard bool
@@ -73,10 +75,12 @@ func (m *NamespaceFormModel) ShowAdd() tea.Cmd {
 	m.name = ""
 	m.description = ""
 	m.denyByDefault = false
+	m.compression = ""
 	// Save initial values
 	m.initialName = ""
 	m.initialDescription = ""
 	m.initialDenyByDefault = false
+	m.initialCompression = ""
 	m.buildForm()
 	return m.form.Init()
 }
@@ -91,10 +95,12 @@ func (m *NamespaceFormModel) ShowEdit(name string, ns config.NamespaceConfig) te
 	m.name = name
 	m.description = ns.Description
 	m.denyByDefault = ns.DenyByDefault
+	m.compression = ns.Compression
 	// Save initial values
 	m.initialName = m.name
 	m.initialDescription = m.description
 	m.initialDenyByDefault = m.denyByDefault
+	m.initialCompression = m.compression
 	m.buildForm()
 	return m.form.Init()
 }
@@ -107,6 +113,11 @@ func (m *NamespaceFormModel) buildForm() {
 	keymap.Text.Next.SetKeys("down", "tab")
 	keymap.Confirm.Prev.SetKeys("up", "shift+tab")
 	keymap.Confirm.Next.SetKeys("down", "tab")
+	// The compression select is inline (left/right cycles values), which
+	// disables its own up/down bindings — reuse them for field navigation like
+	// every other field.
+	keymap.Select.Prev.SetKeys("up", "shift+tab")
+	keymap.Select.Next.SetKeys("down", "tab", "enter")
 
 	// Custom theme with orange titles
 	formTheme := huh.ThemeBase16()
@@ -133,6 +144,19 @@ func (m *NamespaceFormModel) buildForm() {
 				Title("Deny by Default").
 				Description("Block tools without explicit permission").
 				Value(&m.denyByDefault),
+
+			huh.NewSelect[string]().
+				Title("Serve Compression").
+				Description("Compress serve-mode tools/list into wrapper tools (--compress overrides)").
+				Options(
+					huh.NewOption("off", ""),
+					huh.NewOption("low", "low"),
+					huh.NewOption("medium", "medium"),
+					huh.NewOption("high", "high"),
+					huh.NewOption("max", "max"),
+				).
+				Inline(true).
+				Value(&m.compression),
 		),
 	).WithTheme(formTheme).
 		WithWidth(60).
@@ -144,7 +168,8 @@ func (m *NamespaceFormModel) buildForm() {
 func (m *NamespaceFormModel) isDirty() bool {
 	return m.name != m.initialName ||
 		m.description != m.initialDescription ||
-		m.denyByDefault != m.initialDenyByDefault
+		m.denyByDefault != m.initialDenyByDefault ||
+		m.compression != m.initialCompression
 }
 
 // Hide hides the form.
@@ -262,6 +287,7 @@ func (m NamespaceFormModel) buildNamespaceConfig() config.NamespaceConfig {
 
 	ns.Description = strings.TrimSpace(m.description)
 	ns.DenyByDefault = m.denyByDefault
+	ns.Compression = m.compression
 
 	return ns
 }

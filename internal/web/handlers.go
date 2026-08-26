@@ -298,6 +298,7 @@ type apiUpdateNamespaceRequest struct {
 	ServerDefaults map[string]bool          `json:"serverDefaults,omitempty"` // replace server defaults
 	Description    *string                  `json:"description,omitempty"`
 	DenyByDefault  *bool                    `json:"denyByDefault,omitempty"`
+	Compression    *string                  `json:"compression,omitempty"` // serve-mode compressed tool surface level ("" or "off" = off)
 }
 
 func (s *Server) handleAPIUpdateNamespace(w http.ResponseWriter, r *http.Request) {
@@ -321,13 +322,24 @@ func (s *Server) handleAPIUpdateNamespace(w http.ResponseWriter, r *http.Request
 		if req.DenyByDefault != nil {
 			ns.DenyByDefault = *req.DenyByDefault
 		}
+		if req.Compression != nil {
+			level := strings.ToLower(strings.TrimSpace(*req.Compression))
+			if level == "off" {
+				level = ""
+			}
+			ns.Compression = level
+		}
 		if req.ServerIDs != nil {
 			ns.ServerIDs = *req.ServerIDs
 		}
 		if req.ServerDefaults != nil {
 			ns.ServerDefaults = req.ServerDefaults
 		}
-		cfg.Namespaces[name] = ns
+		// UpdateNamespace rather than a direct map write so the namespace-level
+		// validation (compression level) applies to API edits too.
+		if err := cfg.UpdateNamespace(name, ns); err != nil {
+			return err
+		}
 
 		// Replace permissions for this namespace
 		if req.Permissions != nil {

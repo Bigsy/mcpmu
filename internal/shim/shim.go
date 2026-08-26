@@ -32,8 +32,9 @@ type Options struct {
 	Resources          bool
 	Prompts            bool
 	Eager              bool
-	// Compression is the serve-side CompressionLevel as a string; the shim
-	// forwards it opaquely in the handshake and the daemon parses it.
+	// Compression is the tri-state --compress flag as a string ("" = flag
+	// absent, "off" = explicit off, otherwise the level); the shim forwards it
+	// opaquely in the handshake and the daemon parses it.
 	Compression string
 
 	startupTimeout   time.Duration

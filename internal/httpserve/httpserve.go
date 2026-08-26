@@ -75,13 +75,14 @@ type Options struct {
 	SessionIdleTimeout time.Duration
 
 	// Per-Session defaults, mirroring the serve flags.
-	Namespace          string // default when the URL has no namespace segment
-	EagerStart         bool
-	ExposeManagerTools bool
-	ExposeResources    bool
-	ExposePrompts      bool
-	Compression        server.CompressionLevel
-	ServerVersion      string
+	Namespace           string // default when the URL has no namespace segment
+	EagerStart          bool
+	ExposeManagerTools  bool
+	ExposeResources     bool
+	ExposePrompts       bool
+	Compression         server.CompressionLevel
+	CompressionForceOff bool // explicit `--compress off` (see server.Options)
+	ServerVersion       string
 }
 
 // Server is the Streamable HTTP listener plus its session table.

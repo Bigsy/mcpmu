@@ -14,6 +14,9 @@
       {{else}}
         <span class="badge badge-success">Allow by default</span>
       {{end}}
+      {{if .Config.Compression}}
+        <span class="badge badge-info" title="Serve-mode compressed tool surface">Compression: {{.Config.Compression}}</span>
+      {{end}}
     </div>
     {{if .Config.Description}}
       <p class="text-sm text-muted" style="margin-top:4px">{{.Config.Description}}</p>

@@ -23,8 +23,10 @@ type Handshake struct {
 	Resources          bool   `json:"resources,omitempty"`
 	Prompts            bool   `json:"prompts,omitempty"`
 	Eager              bool   `json:"eager,omitempty"`
-	Compression        string `json:"compression,omitempty"`
-	PID                int    `json:"pid,omitempty"`
+	// Compression is tri-state: "" = --compress absent (the active namespace's
+	// configured level decides), "off" = explicit off, otherwise the level.
+	Compression string `json:"compression,omitempty"`
+	PID         int    `json:"pid,omitempty"`
 }
 
 type HandshakeResponse struct {

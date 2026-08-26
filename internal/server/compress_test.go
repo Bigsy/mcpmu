@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/Bigsy/mcpmu/internal/config"
 )
 
 func TestParseCompressionLevel(t *testing.T) {
@@ -35,6 +37,31 @@ func TestParseCompressionLevel(t *testing.T) {
 	}
 	if !CompressionMedium.enabled() {
 		t.Error("medium should be enabled")
+	}
+}
+
+// TestCompressionLevelsMatchConfig keeps config.CompressionLevels (the config
+// package cannot import this one) in sync with ParseCompressionLevel: every
+// config-valid level must parse to an enabled level here, and every enabled
+// level here must be config-valid.
+func TestCompressionLevelsMatchConfig(t *testing.T) {
+	t.Parallel()
+	for _, level := range config.CompressionLevels {
+		parsed, err := ParseCompressionLevel(level)
+		if err != nil {
+			t.Errorf("config level %q rejected by ParseCompressionLevel: %v", level, err)
+		}
+		if !parsed.enabled() {
+			t.Errorf("config level %q parses to disabled", level)
+		}
+	}
+	for _, level := range []CompressionLevel{CompressionLow, CompressionMedium, CompressionHigh, CompressionMax} {
+		if err := config.ValidateCompression(string(level)); err != nil {
+			t.Errorf("server level %q rejected by config.ValidateCompression: %v", level, err)
+		}
+	}
+	if len(config.CompressionLevels) != 4 {
+		t.Errorf("config.CompressionLevels has %d entries, want 4", len(config.CompressionLevels))
 	}
 }
 

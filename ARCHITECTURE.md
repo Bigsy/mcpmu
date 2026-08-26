@@ -360,6 +360,22 @@ per-tool allow/deny rules only ever see `invoke_tool`; mcpmu's permissions are
 unaffected because they run on the real target, which is the reason this mode
 is opt-in rather than the default.
 
+**Per-namespace configuration.** `NamespaceConfig.Compression`
+(`mcpmu namespace set-compression <ns> <level|off>`, also editable in the TUI
+and web namespace forms) stores a level on the namespace, so a large "work"
+namespace compresses while a three-tool "dev" one doesn't. Resolution happens
+per request in `Session.compressionLevel()`, not at session construction: an
+explicit `--compress` flag wins in both directions (`Options.Compression`
+carries a level, `Options.CompressionForceOff` carries an explicit
+`--compress off`), otherwise the *active* namespace's configured level from the
+*current* config applies — a hot reload that changes the namespace or its level
+takes effect on the next `tools/list`. The handlers resolve the level once per
+request (the intercept in `handleToolsCall` and the listing a wrapper renders
+must agree) and snapshot the namespace name under `s.mu`, mirroring the
+`router` snapshot pattern. The flag's tri-state travels in the daemon
+handshake as a string: `""` = flag absent (namespace config decides), `"off"` =
+explicit off, otherwise the level.
+
 ### Verified Upstream Catalog
 
 The Supervisor is the single owner of upstream initialization and initial

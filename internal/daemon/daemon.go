@@ -237,6 +237,9 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 		_ = conn.Close()
 		return
 	}
+	// The handshake string is tri-state: "" = flag absent (namespace config
+	// decides), "off" = explicit off, otherwise the explicit level.
+	compressionForceOff := handshake.Compression != "" && compression == server.CompressionOff
 	ctx, cancel := context.WithCancel(d.lifetime)
 	id, ok := d.addSession(cancel, conn)
 	if !ok {
@@ -262,8 +265,8 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 		Namespace:  handshake.Namespace, EagerStart: handshake.Eager,
 		ExposeManagerTools: handshake.ExposeManagerTools,
 		ExposeResources:    handshake.Resources, ExposePrompts: handshake.Prompts,
-		Compression: compression,
-		Stdin:       reader, Stdout: writer, Stderr: io.Discard,
+		Compression: compression, CompressionForceOff: compressionForceOff,
+		Stdin: reader, Stdout: writer, Stderr: io.Discard,
 		ServerName: "mcpmu", ServerVersion: d.opts.Version,
 	})
 	if err != nil {

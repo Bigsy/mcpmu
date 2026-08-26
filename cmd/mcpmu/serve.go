@@ -68,7 +68,7 @@ func init() {
 	serveCmd.Flags().BoolVar(&serveResources, "resources", true, "Passthrough resources/* from upstream servers")
 	serveCmd.Flags().BoolVar(&servePrompts, "prompts", true, "Passthrough prompts/* from upstream servers")
 	serveCmd.Flags().BoolVar(&serveIsolated, "isolated", false, "Run embedded with private upstream server instances")
-	serveCmd.Flags().StringVar(&serveCompress, "compress", "", "Compress tools/list into list_tools/get_tool_schema/invoke_tool wrappers (levels: low, medium, high, max; medium recommended)")
+	serveCmd.Flags().StringVar(&serveCompress, "compress", "", "Compress tools/list into list_tools/get_tool_schema/invoke_tool wrappers (levels: low, medium, high, max; medium recommended; overrides the namespace's configured level, \"off\" forces it off)")
 
 	serveCmd.Flags().BoolVar(&serveHTTP, "http", false, "Expose the endpoint over MCP Streamable HTTP instead of stdio")
 	serveCmd.Flags().StringVar(&serveAddr, "addr", httpserve.DefaultAddr, "Listen address for --http")
@@ -93,6 +93,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// An explicit `--compress off` must override a namespace-configured level,
+	// while an absent flag defers to it — so "flag not given" and "explicit
+	// off" travel separately from here on.
+	serveCompressForceOff := cmd.Flags().Changed("compress") && serveCompression == server.CompressionOff
 
 	log.Printf("mcpmu serve starting (version=%s)", version)
 
@@ -141,7 +145,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// linger-driven lifetime can't outlive its sessions to accept the next
 	// connection).
 	if serveHTTP {
-		return runHTTPServe(ctx, cfg, resolvedConfigPath, serveCompression)
+		return runHTTPServe(ctx, cfg, resolvedConfigPath, serveCompression, serveCompressForceOff)
 	}
 
 	// Windows has no daemon transport yet; use embedded mode directly instead
@@ -152,7 +156,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			LogLevel: serveLogLevel, Eager: serveEager,
 			ExposeManagerTools: serveExposeManagerTools,
 			Resources:          serveResources, Prompts: servePrompts,
-			Compression: string(serveCompression),
+			Compression: compressionWireValue(serveCompression, serveCompressForceOff),
 		})
 		if connectErr == nil {
 			if err := shim.Pump(ctx, connection, os.Stdin, os.Stdout); err != nil && err != context.Canceled {
@@ -164,7 +168,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(os.Stderr, "mcpmu: shared daemon unavailable; falling back to embedded serve: %v\n", connectErr)
 	}
 
-	return runEmbeddedServe(ctx, cfg, resolvedConfigPath, serveCompression)
+	return runEmbeddedServe(ctx, cfg, resolvedConfigPath, serveCompression, serveCompressForceOff)
+}
+
+// compressionWireValue encodes the tri-state --compress flag for the daemon
+// handshake: "" = flag absent (the active namespace's config decides), "off" =
+// explicit off, anything else = the explicit level.
+func compressionWireValue(level server.CompressionLevel, forceOff bool) string {
+	if forceOff {
+		return "off"
+	}
+	return string(level)
 }
 
 // validateHTTPServeFlags rejects flag combinations that make no sense with
@@ -192,7 +206,7 @@ func validateHTTPServeFlags(cmd *cobra.Command) error {
 
 // runHTTPServe owns one Core directly and serves it over Streamable HTTP
 // until the context ends.
-func runHTTPServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string, compression server.CompressionLevel) error {
+func runHTTPServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string, compression server.CompressionLevel, compressForceOff bool) error {
 	core, err := server.NewCore(server.Options{
 		Config:     cfg,
 		ConfigPath: resolvedConfigPath, // For hot-reload watching
@@ -204,18 +218,19 @@ func runHTTPServe(ctx context.Context, cfg *config.Config, resolvedConfigPath st
 	core.StartWatching(ctx)
 
 	httpSrv, err := httpserve.New(httpserve.Options{
-		Core:               core,
-		Addr:               serveAddr,
-		Token:              serveToken,
-		AllowedOrigins:     serveAllowOrigins,
-		SessionIdleTimeout: serveSessionIdleTimeout,
-		Namespace:          serveNamespace,
-		EagerStart:         serveEager,
-		ExposeManagerTools: serveExposeManagerTools,
-		ExposeResources:    serveResources,
-		ExposePrompts:      servePrompts,
-		Compression:        compression,
-		ServerVersion:      version,
+		Core:                core,
+		Addr:                serveAddr,
+		Token:               serveToken,
+		AllowedOrigins:      serveAllowOrigins,
+		SessionIdleTimeout:  serveSessionIdleTimeout,
+		Namespace:           serveNamespace,
+		EagerStart:          serveEager,
+		ExposeManagerTools:  serveExposeManagerTools,
+		ExposeResources:     serveResources,
+		ExposePrompts:       servePrompts,
+		Compression:         compression,
+		CompressionForceOff: compressForceOff,
+		ServerVersion:       version,
 	})
 	if err != nil {
 		return err
@@ -266,23 +281,24 @@ func serveUntilShutdown(ctx context.Context, srv httpListener, grace time.Durati
 	return nil
 }
 
-func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string, compression server.CompressionLevel) error {
+func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string, compression server.CompressionLevel, compressForceOff bool) error {
 	// Create server options
 	opts := server.Options{
-		Config:             cfg,
-		ConfigPath:         resolvedConfigPath, // For hot-reload watching
-		Namespace:          serveNamespace,
-		EagerStart:         serveEager,
-		ExposeManagerTools: serveExposeManagerTools,
-		ExposeResources:    serveResources,
-		ExposePrompts:      servePrompts,
-		Compression:        compression,
-		LogLevel:           serveLogLevel,
-		Stdin:              os.Stdin,
-		Stdout:             os.Stdout,
-		Stderr:             os.Stderr,
-		ServerName:         "mcpmu",
-		ServerVersion:      version,
+		Config:              cfg,
+		ConfigPath:          resolvedConfigPath, // For hot-reload watching
+		Namespace:           serveNamespace,
+		EagerStart:          serveEager,
+		ExposeManagerTools:  serveExposeManagerTools,
+		ExposeResources:     serveResources,
+		ExposePrompts:       servePrompts,
+		Compression:         compression,
+		CompressionForceOff: compressForceOff,
+		LogLevel:            serveLogLevel,
+		Stdin:               os.Stdin,
+		Stdout:              os.Stdout,
+		Stderr:              os.Stderr,
+		ServerName:          "mcpmu",
+		ServerVersion:       version,
 	}
 
 	// Create and run server

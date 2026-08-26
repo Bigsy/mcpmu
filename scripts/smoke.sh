@@ -1331,6 +1331,34 @@ EOF
     rc=1
   fi
 
+  # Phase 2: a namespace-configured level compresses without the flag, and an
+  # explicit --compress off overrides it.
+  ./mcpmu namespace add work --config "$cfg" >/dev/null
+  ./mcpmu namespace assign work pinger --config "$cfg" >/dev/null
+  ./mcpmu namespace set-compression work medium --config "$cfg" >/dev/null
+
+  local ns_script
+  ns_script=$(printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
+
+  response=$({ printf '%s\n' "$ns_script"; sleep 3; } \
+    | ./mcpmu serve --stdio --isolated --config "$cfg" 2>/dev/null)
+  if ! printf '%s\n' "$response" \
+    | jq -e 'select(.id == 2) | .result.tools | map(.name) | sort == ["get_tool_schema","invoke_tool","list_tools"]' >/dev/null; then
+    echo "FAIL: namespace-configured compression did not compress tools/list without --compress"
+    rc=1
+  fi
+
+  response=$({ printf '%s\n' "$ns_script"; sleep 3; } \
+    | ./mcpmu serve --stdio --isolated --config "$cfg" --compress off 2>/dev/null)
+  if ! printf '%s\n' "$response" \
+    | jq -e 'select(.id == 2) | .result.tools | map(.name) == ["pinger.ping"]' >/dev/null; then
+    echo "FAIL: --compress off did not override the namespace-configured level"
+    rc=1
+  fi
+
   rm -rf "$tmp"
   return "$rc"
 }

@@ -103,6 +103,14 @@ permissions still apply to the real target tool; note that client-side
 per-tool rules only ever see `invoke_tool`, so prefer mcpmu permissions when
 compression is on.
 
+Compression can also be stored on a namespace, so serve sessions compress
+without the flag (an explicit `--compress` flag — including `--compress off` —
+overrides it):
+```bash
+mcpmu namespace set-compression work medium
+mcpmu namespace set-compression work off     # clear
+```
+
 You can verify the registration:
 ```bash
 claude mcp list
@@ -221,6 +229,7 @@ mcpmu namespace unassign <namespace> <server>
 mcpmu namespace default <name>
 mcpmu namespace rename <old> <new>
 mcpmu namespace set-deny-default <namespace> <true|false>
+mcpmu namespace set-compression <namespace> <level|off>
 ```
 
 ### Common namespace patterns

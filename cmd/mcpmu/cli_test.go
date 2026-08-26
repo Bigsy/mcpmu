@@ -979,6 +979,78 @@ func TestCLI_Namespace_List_Empty(t *testing.T) {
 	}
 }
 
+func TestCLI_Namespace_SetCompression(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "namespace", "add", "work")
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "namespace", "set-compression", "work", "medium")
+	if err != nil {
+		t.Fatalf("set-compression failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, `Compression set to "medium" for namespace "work"`) {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
+	cfg, err := config.LoadFrom(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if ns, _ := cfg.GetNamespace("work"); ns.Compression != "medium" {
+		t.Errorf("compression = %q, want %q", ns.Compression, "medium")
+	}
+
+	// Shown in list --json.
+	stdout, stderr, err = runCLI(testBinary, configPath, "namespace", "list", "--json")
+	if err != nil {
+		t.Fatalf("namespace list --json failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	var namespaces []map[string]any
+	if err := json.Unmarshal([]byte(stdout), &namespaces); err != nil {
+		t.Fatalf("failed to parse JSON: %v\noutput: %s", err, stdout)
+	}
+	if len(namespaces) != 1 || namespaces[0]["compression"] != "medium" {
+		t.Errorf("expected compression 'medium' in JSON output, got: %s", stdout)
+	}
+
+	// "off" clears the setting (stored as absent, not "off").
+	stdout, stderr, err = runCLI(testBinary, configPath, "namespace", "set-compression", "work", "off")
+	if err != nil {
+		t.Fatalf("set-compression off failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, `Compression disabled for namespace "work"`) {
+		t.Errorf("expected disabled message, got: %s", stdout)
+	}
+	data, _ := os.ReadFile(configPath)
+	if strings.Contains(string(data), `"compression"`) {
+		t.Errorf("expected compression key removed from config, got: %s", data)
+	}
+}
+
+func TestCLI_Namespace_SetCompression_Invalid(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+
+	_, _, _ = runCLI(testBinary, configPath, "namespace", "add", "work")
+
+	stdout, stderr, err := runCLI(testBinary, configPath, "namespace", "set-compression", "work", "bogus")
+	if err == nil {
+		t.Fatal("expected error for invalid level")
+	}
+	if output := stdout + stderr; !strings.Contains(output, "invalid compression level") {
+		t.Errorf("expected 'invalid compression level' error, got: %s", output)
+	}
+
+	stdout, stderr, err = runCLI(testBinary, configPath, "namespace", "set-compression", "missing", "medium")
+	if err == nil {
+		t.Fatal("expected error for missing namespace")
+	}
+	if output := stdout + stderr; !strings.Contains(output, "not found") {
+		t.Errorf("expected 'not found' error, got: %s", output)
+	}
+}
+
 func TestCLI_Namespace_Remove(t *testing.T) {
 	t.Parallel()
 	configPath := setupTestConfig(t)

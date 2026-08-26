@@ -51,6 +51,19 @@
           <p class="hint" style="margin-top:0">When enabled, tools from assigned servers are denied unless explicitly allowed.</p>
         </div>
 
+        <!-- Serve compression -->
+        <div class="form-group">
+          <label for="compression">Serve compression</label>
+          <select id="compression" name="compression">
+            <option value=""{{if eq .Form.Compression ""}} selected{{end}}>Off — full tools/list</option>
+            <option value="low"{{if eq .Form.Compression "low"}} selected{{end}}>Low — full descriptions</option>
+            <option value="medium"{{if eq .Form.Compression "medium"}} selected{{end}}>Medium — first sentence (recommended)</option>
+            <option value="high"{{if eq .Form.Compression "high"}} selected{{end}}>High — args only</option>
+            <option value="max"{{if eq .Form.Compression "max"}} selected{{end}}>Max — names only</option>
+          </select>
+          <p class="hint">When set, <code>mcpmu serve</code> sessions on this namespace compress tools/list into the list_tools / get_tool_schema / invoke_tool wrapper surface. An explicit <code>--compress</code> flag overrides this.</p>
+        </div>
+
         {{if .IsEdit}}
         <!-- Server assignments -->
         <hr style="border: none; border-top: 1px solid var(--border); margin: 20px 0;">

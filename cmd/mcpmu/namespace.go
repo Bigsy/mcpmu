@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/spf13/cobra"
@@ -36,6 +37,7 @@ func init() {
 	namespaceCmd.AddCommand(namespaceUnassignCmd)
 	namespaceCmd.AddCommand(namespaceDefaultCmd)
 	namespaceCmd.AddCommand(namespaceSetDenyDefaultCmd)
+	namespaceCmd.AddCommand(namespaceSetCompressionCmd)
 }
 
 // ============================================================================
@@ -134,6 +136,7 @@ func outputNamespacesJSON(cfg *config.Config, namespaces []config.NamespaceEntry
 		ServerCount   int      `json:"serverCount"`
 		Servers       []string `json:"servers"`
 		DenyByDefault bool     `json:"denyByDefault"`
+		Compression   string   `json:"compression,omitempty"`
 		IsDefault     bool     `json:"isDefault"`
 	}
 
@@ -145,6 +148,7 @@ func outputNamespacesJSON(cfg *config.Config, namespaces []config.NamespaceEntry
 			ServerCount:   len(entry.Config.ServerIDs),
 			Servers:       entry.Config.ServerIDs, // Server names are stored directly
 			DenyByDefault: entry.Config.DenyByDefault,
+			Compression:   entry.Config.Compression,
 			IsDefault:     entry.Name == cfg.DefaultNamespace,
 		}
 	}
@@ -182,7 +186,7 @@ func outputNamespacesTable(cfg *config.Config, namespaces []config.NamespaceEntr
 	}
 
 	// Print header
-	fmt.Printf("%-*s  %-*s  %s  %s  %s\n", nameWidth, "NAME", descWidth, "DESCRIPTION", "SERVERS", "DENY-DEFAULT", "DEFAULT")
+	fmt.Printf("%-*s  %-*s  %s  %s  %s  %s\n", nameWidth, "NAME", descWidth, "DESCRIPTION", "SERVERS", "DENY-DEFAULT", "COMPRESS", "DEFAULT")
 
 	// Print namespaces
 	for _, entry := range namespaces {
@@ -196,12 +200,17 @@ func outputNamespacesTable(cfg *config.Config, namespaces []config.NamespaceEntr
 			denyDefault = "yes"
 		}
 
+		compression := entry.Config.Compression
+		if compression == "" {
+			compression = "off"
+		}
+
 		isDefault := ""
 		if entry.Name == cfg.DefaultNamespace {
 			isDefault = "*"
 		}
 
-		fmt.Printf("%-*s  %-*s  %-7d  %-12s  %s\n", nameWidth, entry.Name, descWidth, desc, len(entry.Config.ServerIDs), denyDefault, isDefault)
+		fmt.Printf("%-*s  %-*s  %-7d  %-12s  %-8s  %s\n", nameWidth, entry.Name, descWidth, desc, len(entry.Config.ServerIDs), denyDefault, compression, isDefault)
 	}
 
 	return nil
@@ -458,5 +467,60 @@ func runNamespaceSetDenyDefault(cmd *cobra.Command, args []string) error {
 		setting = "enabled"
 	}
 	fmt.Printf("Deny-by-default %s for namespace %q\n", setting, namespaceName)
+	return nil
+}
+
+// ============================================================================
+// namespace set-compression
+// ============================================================================
+
+var namespaceSetCompressionCmd = &cobra.Command{
+	Use:   "set-compression <namespace> <level|off>",
+	Short: "Set the serve-mode compressed tool surface level",
+	Long: `Set the compression level 'mcpmu serve' uses for this namespace.
+
+When set, serve sessions on this namespace replace tools/list with the
+list_tools/get_tool_schema/invoke_tool wrapper surface at the given level,
+without needing the --compress flag. An explicit --compress flag overrides
+this setting in both directions (--compress off forces it off).
+
+Levels: low (full descriptions), medium (first sentence; recommended),
+high (args only), max (names only). "off" clears the setting.
+
+Examples:
+  mcpmu namespace set-compression work medium
+  mcpmu namespace set-compression work off`,
+	Args: cobra.ExactArgs(2),
+	RunE: runNamespaceSetCompression,
+}
+
+func runNamespaceSetCompression(cmd *cobra.Command, args []string) error {
+	namespaceName := args[0]
+	level := strings.ToLower(args[1])
+	if level == "off" {
+		level = ""
+	}
+	if err := config.ValidateCompression(level); err != nil {
+		return err
+	}
+
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
+		ns, ok := cfg.GetNamespace(namespaceName)
+		if !ok {
+			return fmt.Errorf("namespace %q not found", namespaceName)
+		}
+
+		ns.Compression = level
+
+		return cfg.UpdateNamespace(namespaceName, ns)
+	}); err != nil {
+		return err
+	}
+
+	if level == "" {
+		fmt.Printf("Compression disabled for namespace %q\n", namespaceName)
+	} else {
+		fmt.Printf("Compression set to %q for namespace %q\n", level, namespaceName)
+	}
 	return nil
 }

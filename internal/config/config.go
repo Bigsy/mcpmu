@@ -326,6 +326,11 @@ func (c *Config) AddNamespace(name string, ns NamespaceConfig) error {
 		return fmt.Errorf("namespace %q already exists", name)
 	}
 
+	// Validate namespace config
+	if err := ns.Validate(); err != nil {
+		return err
+	}
+
 	// Initialize ServerIDs if nil
 	if ns.ServerIDs == nil {
 		ns.ServerIDs = []string{}
@@ -339,6 +344,9 @@ func (c *Config) AddNamespace(name string, ns NamespaceConfig) error {
 func (c *Config) UpdateNamespace(name string, ns NamespaceConfig) error {
 	if _, exists := c.Namespaces[name]; !exists {
 		return fmt.Errorf("namespace %q not found", name)
+	}
+	if err := ns.Validate(); err != nil {
+		return err
 	}
 	c.Namespaces[name] = ns
 	return nil

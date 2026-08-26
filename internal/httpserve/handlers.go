@@ -171,17 +171,18 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, routeN
 	// is never read because HTTP sessions never call Run (hot reload and the
 	// notification fan-out run at Core scope).
 	sess, err := server.NewSession(s.core, server.Options{
-		Namespace:          namespace,
-		EagerStart:         s.opts.EagerStart,
-		ExposeManagerTools: s.opts.ExposeManagerTools,
-		ExposeResources:    s.opts.ExposeResources,
-		ExposePrompts:      s.opts.ExposePrompts,
-		Compression:        s.opts.Compression,
-		Stdin:              strings.NewReader(""),
-		Stdout:             hub,
-		Stderr:             io.Discard,
-		ServerName:         "mcpmu",
-		ServerVersion:      s.opts.ServerVersion,
+		Namespace:           namespace,
+		EagerStart:          s.opts.EagerStart,
+		ExposeManagerTools:  s.opts.ExposeManagerTools,
+		ExposeResources:     s.opts.ExposeResources,
+		ExposePrompts:       s.opts.ExposePrompts,
+		Compression:         s.opts.Compression,
+		CompressionForceOff: s.opts.CompressionForceOff,
+		Stdin:               strings.NewReader(""),
+		Stdout:              hub,
+		Stderr:              io.Discard,
+		ServerName:          "mcpmu",
+		ServerVersion:       s.opts.ServerVersion,
 	})
 	if err != nil {
 		cancel()

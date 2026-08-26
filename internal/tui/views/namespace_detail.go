@@ -112,6 +112,15 @@ func (m *NamespaceDetailModel) updateContent() {
 	}
 	content.WriteString("\n")
 
+	// Serve-mode compressed tool surface
+	content.WriteString(labelStyle.Render("Serve Compression: "))
+	if m.namespace.Compression != "" {
+		content.WriteString(m.theme.Primary.Render(m.namespace.Compression))
+	} else {
+		content.WriteString(m.theme.Faint.Render("off"))
+	}
+	content.WriteString("\n")
+
 	// Estimated tokens
 	content.WriteString(labelStyle.Render("Estimated Tokens: "))
 	if m.hasCache {
