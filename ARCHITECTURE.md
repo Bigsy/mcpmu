@@ -176,6 +176,12 @@ process group), removes the socket and pidfile, and retains the per-config log.
 The pidfile records the full config path, PID/start identity, and executable;
 control fallback validates all of that identity before signalling anything.
 
+**Platform support (2026-08-26, D2)**: macOS and Linux are the supported
+platforms. Windows builds and runs in embedded mode but is *best-effort*: there
+is no Windows CI job, process-tree termination uses `Kill()` on the leader only,
+and the PID tracker/orphan cleanup are disabled there. Windows-only defects are
+tracked at P3 in `PLAN.md` until a CI job exists.
+
 ### HTTP Serve Mode
 
 `mcpmu serve --http` exposes the same aggregation endpoint over the MCP
@@ -655,6 +661,10 @@ mcpmu embeds a `SKILL.md` file in the binary (`cmd/mcpmu/skill_data/SKILL.md` vi
 - `middleware.go` — Request logging, panic recovery
 
 **Data flow**: Browser requests go through middleware to handlers, which read/write config (same `internal/config` package as TUI), interact with the supervisor for start/stop, and subscribe to the event bus for live status and logs.
+
+**Scope decision (2026-08-26, D1)**: `internal/web/` is kept, read-mostly. Pages, metrics, SSE and the unused-tools panel stay; config mutation happens only through `config.Mutate`; no new forms or write endpoints are added until the control-plane direction below is settled. Hardening work on the existing surface (data races, template bugs, secret redaction in exports) is in scope; new features are not.
+
+**Direction (F4): TUI and web as daemon clients.** Today `cmd/mcpmu/manager_startup.go` (`startManager`, shared by `mcpmu tui` and `mcpmu web`) builds a private `Supervisor`, so in daemon mode the managers show and control a *different* set of upstream processes than the one agents are using — the root cause of "status is wrong" reports and of a manager spawning a duplicate upstream. The intended end state is that both managers are thin clients of the daemon's control socket and own no supervision of their own; every change to `web/` or `tui/` from here on should move toward that and not deepen their private supervision. Control-protocol additions this needs (not yet built): a `status` request returning per-server runtime state, PID, session count and last error; a `subscribe` stream forwarding `events.Bus` events (status, log lines, tool discovery) over the socket; `start`/`stop`/`restart` requests resolved the same way manager tools are (shared vs private instance); a `reload` request so a manager that has just written config can ask the daemon to pick it up immediately; and a `tools` request serving the verified catalog so the managers stop reading `toolcache.json` directly. When no daemon is running the managers fall back to today's embedded `Supervisor`.
 
 **Config mutations**: every write goes through `config.Mutate` / `config.MutateWithCache` (`internal/config/mutate.go`): take the cross-process lock (`config.json.lock`), reload from disk, apply the caller's function, validate, save atomically, and return the saved config for the caller to adopt. CLI, TUI and web all use it — a load→edit→save anywhere else would lose a concurrent writer's update. `RenameServer`, `DeleteServer` and `UpdateServer` (when command/args/URL change) record ToolCache side effects on the `Config`, which `Mutate` applies after the save, so a rename keeps the server's cached tools and a removal drops them regardless of which surface did it. The web `mutateConfig` method is a thin adapter that also serialises on `cfgMu` and swaps `s.cfg`. The form-to-`ServerConfig` merge rules (what an edit preserves — `OAuth.ClientSecret`, `Shared`, `DeniedTools` — and what switching transport clears) live once in `config.BuildServerConfig`, shared by the TUI and web forms.
 

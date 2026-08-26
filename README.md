@@ -258,6 +258,10 @@ and falls back to embedded serve. Use `--isolated` for one private embedded
 client, or set top-level `"daemonMode": false` as a global kill switch.
 Windows remains embedded.
 
+mcpmu supports macOS and Linux. Windows builds and runs in embedded mode on a
+best-effort basis: it is not covered by CI, and stopping a server there kills
+only the leader process, not its children.
+
 The daemon inherits the environment and working directory of its first
 spawner. Prefer absolute server `cwd` values and explicit config `env` entries.
 Servers are shared by default. Stateful servers such as browser automation,
