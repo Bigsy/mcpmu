@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +29,17 @@ func newTestModel(t *testing.T) Model {
 		CredentialStoreMode: "file",
 	})
 
-	return NewModel(cfg, supervisor, bus, "", nil)
+	return NewModel(cfg, supervisor, bus, filepath.Join(t.TempDir(), "config.json"), nil)
+}
+
+// persistConfig writes the model's in-memory config to its config path.
+// Mutations reload from disk, so a test that sets up state directly on m.cfg
+// must persist it before driving an action that saves.
+func persistConfig(t *testing.T, m Model) {
+	t.Helper()
+	if err := config.SaveTo(m.cfg, m.configPath); err != nil {
+		t.Fatalf("persist config: %v", err)
+	}
 }
 
 // updateModel is a helper that calls Update and returns the Model (with type assertion).
@@ -398,6 +409,7 @@ func TestModel_NamespaceTab_SetDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to add namespace: %v", err)
 	}
+	persistConfig(t, m)
 	m.refreshNamespaceList()
 
 	// Switch to Namespaces tab
@@ -535,6 +547,7 @@ func TestModel_HandleServerPickerResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to add namespace: %v", err)
 	}
+	persistConfig(t, m)
 
 	m.detailNamespaceID = "Test"
 
@@ -567,6 +580,7 @@ func TestModel_HandleToolPermissionsResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to add namespace: %v", err)
 	}
+	persistConfig(t, m)
 
 	m.detailNamespaceID = "Test"
 

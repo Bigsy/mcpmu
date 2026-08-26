@@ -656,7 +656,7 @@ mcpmu embeds a `SKILL.md` file in the binary (`cmd/mcpmu/skill_data/SKILL.md` vi
 
 **Data flow**: Browser requests go through middleware to handlers, which read/write config (same `internal/config` package as TUI), interact with the supervisor for start/stop, and subscribe to the event bus for live status and logs.
 
-**Config mutations**: The `mutateConfig` helper reloads config from disk, applies the mutation, and atomically saves — safe for the single-manager design.
+**Config mutations**: every write goes through `config.Mutate` / `config.MutateWithCache` (`internal/config/mutate.go`): take the cross-process lock (`config.json.lock`), reload from disk, apply the caller's function, validate, save atomically, and return the saved config for the caller to adopt. CLI, TUI and web all use it — a load→edit→save anywhere else would lose a concurrent writer's update. `RenameServer`, `DeleteServer` and `UpdateServer` (when command/args/URL change) record ToolCache side effects on the `Config`, which `Mutate` applies after the save, so a rename keeps the server's cached tools and a removal drops them regardless of which surface did it. The web `mutateConfig` method is a thin adapter that also serialises on `cfgMu` and swaps `s.cfg`. The form-to-`ServerConfig` merge rules (what an edit preserves — `OAuth.ClientSecret`, `Shared`, `DeniedTools` — and what switching transport clears) live once in `config.BuildServerConfig`, shared by the TUI and web forms.
 
 ## Usage Metrics
 

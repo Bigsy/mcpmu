@@ -68,7 +68,7 @@ func serverFormDataFromConfig(name string, srv config.ServerConfig) serverFormDa
 		Name:           name,
 		IsHTTP:         srv.IsHTTP(),
 		Command:        srv.Command,
-		Args:           strings.Join(srv.Args, " "),
+		Args:           config.JoinArgs(srv.Args),
 		Cwd:            srv.Cwd,
 		URL:            srv.URL,
 		HTTPHeaders:    config.FormatHeaderLines(srv.HTTPHeaders),
@@ -156,96 +156,37 @@ func parseEnvPairs(r *http.Request) []envPair {
 	return pairs
 }
 
-// buildServerConfig constructs a ServerConfig from form data.
-// For edit mode, it merges into the existing config to preserve fields not exposed in the form.
-// Returns an error if any input fails parse-level validation (currently: header maps).
+// buildServerConfig maps the web form onto config.BuildServerConfig, which
+// owns the merge-with-existing rules shared with the TUI form.
 func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config.ServerConfig, error) {
-	var srv config.ServerConfig
-	if existing != nil {
-		srv = *existing // start from existing to preserve unexposed fields
+	form := config.ServerFormData{
+		IsHTTP:            fd.IsHTTP,
+		Command:           fd.Command,
+		Args:              fd.Args,
+		Cwd:               fd.Cwd,
+		URL:               fd.URL,
+		AuthMode:          fd.AuthMode,
+		BearerEnv:         fd.BearerEnv,
+		HTTPHeaders:       fd.HTTPHeaders,
+		EnvHTTPHeaders:    fd.EnvHTTPHeaders,
+		OAuthClientID:     fd.OAuthClientID,
+		OAuthCallbackPort: fd.OAuthCallbackPort,
+		OAuthScopes:       fd.OAuthScopes,
+		Enabled:           &fd.Enabled,
+		Autostart:         fd.Autostart,
+		StartupTimeoutSec: fd.StartupTimeout,
+		ToolTimeoutSec:    fd.ToolTimeout,
 	}
-
-	srv.SetEnabled(fd.Enabled)
-	srv.Autostart = fd.Autostart
-	srv.StartupTimeoutSec = fd.StartupTimeout
-	srv.ToolTimeoutSec = fd.ToolTimeout
-
-	// Env vars
+	if form.AuthMode == "" {
+		form.AuthMode = config.AuthModeNone
+	}
 	if len(fd.EnvPairs) > 0 {
-		srv.Env = make(map[string]string, len(fd.EnvPairs))
+		form.Env = make(map[string]string, len(fd.EnvPairs))
 		for _, kv := range fd.EnvPairs {
-			srv.Env[kv.Key] = kv.Val
-		}
-	} else {
-		srv.Env = nil
-	}
-
-	if fd.IsHTTP {
-		// HTTP server
-		srv.Command = ""
-		srv.Args = nil
-		srv.Cwd = ""
-		srv.URL = fd.URL
-
-		headers, err := config.ParseHeaderLines(fd.HTTPHeaders)
-		if err != nil {
-			return srv, fmt.Errorf("custom headers: %w", err)
-		}
-		envHeaders, err := config.ParseHeaderLines(fd.EnvHTTPHeaders)
-		if err != nil {
-			return srv, fmt.Errorf("headers from env vars: %w", err)
-		}
-		for name := range envHeaders {
-			if _, dup := headers[name]; dup {
-				return srv, fmt.Errorf("header %q is set by both custom headers and headers from env vars", name)
-			}
-		}
-		srv.HTTPHeaders = headers
-		srv.EnvHTTPHeaders = envHeaders
-
-		switch fd.AuthMode {
-		case "bearer":
-			srv.BearerTokenEnvVar = fd.BearerEnv
-			srv.OAuth = nil
-		case "oauth":
-			srv.BearerTokenEnvVar = ""
-			oauth := &config.OAuthConfig{
-				ClientID: fd.OAuthClientID,
-			}
-			if fd.OAuthScopes != "" {
-				oauth.Scopes = strings.Split(fd.OAuthScopes, ",")
-				for i := range oauth.Scopes {
-					oauth.Scopes[i] = strings.TrimSpace(oauth.Scopes[i])
-				}
-			}
-			if fd.OAuthCallbackPort != "" {
-				if port, err := strconv.Atoi(fd.OAuthCallbackPort); err == nil {
-					oauth.CallbackPort = &port
-				}
-			}
-			srv.OAuth = oauth
-		default:
-			srv.BearerTokenEnvVar = ""
-			srv.OAuth = nil
-		}
-	} else {
-		// Stdio server — header fields are silently dropped (consistent with
-		// bearer-env handling) since stdio rejects them at the config layer.
-		srv.URL = ""
-		srv.BearerTokenEnvVar = ""
-		srv.HTTPHeaders = nil
-		srv.EnvHTTPHeaders = nil
-		srv.OAuth = nil
-		srv.Command = fd.Command
-		srv.Cwd = fd.Cwd
-		if fd.Args != "" {
-			srv.Args = strings.Fields(fd.Args)
-		} else {
-			srv.Args = nil
+			form.Env[kv.Key] = kv.Val
 		}
 	}
-
-	return srv, nil
+	return config.BuildServerConfig(form, existing)
 }
 
 // handleServerAddPage renders the add server form.

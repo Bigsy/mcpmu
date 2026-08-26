@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -48,27 +49,24 @@ func runServerDenyTool(cmd *cobra.Command, args []string) error {
 	serverName := args[0]
 	toolNames := args[1:]
 
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
-	}
-
-	if err := requireServer(cfg, serverName); err != nil {
-		return err
-	}
-
-	for _, toolName := range toolNames {
-		toolName = strings.TrimSpace(toolName)
-		if toolName == "" {
-			continue
-		}
-		toolName = normalizeToolName(toolName, serverName)
-		if err := cfg.DenyTool(serverName, toolName); err != nil {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
+		if err := requireServer(cfg, serverName); err != nil {
 			return err
 		}
-	}
 
-	if err := saveConfig(cfg, configPath); err != nil {
+		for _, toolName := range toolNames {
+			toolName = strings.TrimSpace(toolName)
+			if toolName == "" {
+				continue
+			}
+			toolName = normalizeToolName(toolName, serverName)
+			if err := cfg.DenyTool(serverName, toolName); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -102,27 +100,24 @@ func runServerAllowTool(cmd *cobra.Command, args []string) error {
 	serverName := args[0]
 	toolNames := args[1:]
 
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
-	}
-
-	if err := requireServer(cfg, serverName); err != nil {
-		return err
-	}
-
-	for _, toolName := range toolNames {
-		toolName = strings.TrimSpace(toolName)
-		if toolName == "" {
-			continue
-		}
-		toolName = normalizeToolName(toolName, serverName)
-		if err := cfg.AllowTool(serverName, toolName); err != nil {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
+		if err := requireServer(cfg, serverName); err != nil {
 			return err
 		}
-	}
 
-	if err := saveConfig(cfg, configPath); err != nil {
+		for _, toolName := range toolNames {
+			toolName = strings.TrimSpace(toolName)
+			if toolName == "" {
+				continue
+			}
+			toolName = normalizeToolName(toolName, serverName)
+			if err := cfg.AllowTool(serverName, toolName); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}); err != nil {
 		return err
 	}
 

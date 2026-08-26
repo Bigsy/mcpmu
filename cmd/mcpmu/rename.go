@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -33,16 +34,13 @@ func runRename(cmd *cobra.Command, args []string) error {
 	oldName := args[0]
 	newName := args[1]
 
-	cfg, err := loadConfig(renameConfigPath)
-	if err != nil {
-		return err
-	}
+	if err := mutateConfig(renameConfigPath, func(cfg *config.Config) error {
+		if err := cfg.RenameServer(oldName, newName); err != nil {
+			return err
+		}
 
-	if err := cfg.RenameServer(oldName, newName); err != nil {
-		return err
-	}
-
-	if err := saveConfig(cfg, renameConfigPath); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -78,16 +76,13 @@ func runNamespaceRename(cmd *cobra.Command, args []string) error {
 	oldName := args[0]
 	newName := args[1]
 
-	cfg, err := loadConfig(namespaceRenameConfigPath)
-	if err != nil {
-		return err
-	}
+	if err := mutateConfig(namespaceRenameConfigPath, func(cfg *config.Config) error {
+		if err := cfg.RenameNamespace(oldName, newName); err != nil {
+			return err
+		}
 
-	if err := cfg.RenameNamespace(oldName, newName); err != nil {
-		return err
-	}
-
-	if err := saveConfig(cfg, namespaceRenameConfigPath); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 

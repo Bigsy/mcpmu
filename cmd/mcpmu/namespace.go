@@ -70,20 +70,17 @@ func init() {
 func runNamespaceAdd(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
-	cfg, err := loadConfig(namespaceAddConfigPath)
-	if err != nil {
-		return err
-	}
+	if err := mutateConfig(namespaceAddConfigPath, func(cfg *config.Config) error {
+		ns := config.NamespaceConfig{
+			Description: namespaceAddDescription,
+		}
 
-	ns := config.NamespaceConfig{
-		Description: namespaceAddDescription,
-	}
+		if err := cfg.AddNamespace(name, ns); err != nil {
+			return err
+		}
 
-	if err := cfg.AddNamespace(name, ns); err != nil {
-		return err
-	}
-
-	if err := saveConfig(cfg, namespaceAddConfigPath); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -268,11 +265,9 @@ func runNamespaceRemove(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := cfg.DeleteNamespace(name); err != nil {
-		return err
-	}
-
-	if err := saveConfig(cfg, namespaceRemoveConfigPath); err != nil {
+	if err := mutateConfig(namespaceRemoveConfigPath, func(cfg *config.Config) error {
+		return cfg.DeleteNamespace(name)
+	}); err != nil {
 		return err
 	}
 
@@ -308,26 +303,23 @@ func runNamespaceAssign(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
 	serverName := args[1]
 
-	cfg, err := loadConfig(namespaceAssignConfigPath)
-	if err != nil {
-		return err
-	}
+	if err := mutateConfig(namespaceAssignConfigPath, func(cfg *config.Config) error {
+		// Lookup namespace by name
+		if err := requireNamespace(cfg, namespaceName); err != nil {
+			return err
+		}
 
-	// Lookup namespace by name
-	if err := requireNamespace(cfg, namespaceName); err != nil {
-		return err
-	}
+		// Lookup server by name
+		if err := requireServer(cfg, serverName); err != nil {
+			return err
+		}
 
-	// Lookup server by name
-	if err := requireServer(cfg, serverName); err != nil {
-		return err
-	}
+		if err := cfg.AssignServerToNamespace(namespaceName, serverName); err != nil {
+			return err
+		}
 
-	if err := cfg.AssignServerToNamespace(namespaceName, serverName); err != nil {
-		return err
-	}
-
-	if err := saveConfig(cfg, namespaceAssignConfigPath); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -362,26 +354,23 @@ func runNamespaceUnassign(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
 	serverName := args[1]
 
-	cfg, err := loadConfig(namespaceUnassignConfigPath)
-	if err != nil {
-		return err
-	}
+	if err := mutateConfig(namespaceUnassignConfigPath, func(cfg *config.Config) error {
+		// Lookup namespace by name
+		if err := requireNamespace(cfg, namespaceName); err != nil {
+			return err
+		}
 
-	// Lookup namespace by name
-	if err := requireNamespace(cfg, namespaceName); err != nil {
-		return err
-	}
+		// Lookup server by name (optional - might want to unassign even if server was removed)
+		if err := requireServer(cfg, serverName); err != nil {
+			return err
+		}
 
-	// Lookup server by name (optional - might want to unassign even if server was removed)
-	if err := requireServer(cfg, serverName); err != nil {
-		return err
-	}
+		if err := cfg.UnassignServerFromNamespace(namespaceName, serverName); err != nil {
+			return err
+		}
 
-	if err := cfg.UnassignServerFromNamespace(namespaceName, serverName); err != nil {
-		return err
-	}
-
-	if err := saveConfig(cfg, namespaceUnassignConfigPath); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -415,19 +404,16 @@ func init() {
 func runNamespaceDefault(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
-	cfg, err := loadConfig(namespaceDefaultConfigPath)
-	if err != nil {
-		return err
-	}
+	if err := mutateConfig(namespaceDefaultConfigPath, func(cfg *config.Config) error {
+		// Lookup namespace by name
+		if err := requireNamespace(cfg, name); err != nil {
+			return err
+		}
 
-	// Lookup namespace by name
-	if err := requireNamespace(cfg, name); err != nil {
-		return err
-	}
+		cfg.DefaultNamespace = name
 
-	cfg.DefaultNamespace = name
-
-	if err := saveConfig(cfg, namespaceDefaultConfigPath); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -469,24 +455,21 @@ func runNamespaceSetDenyDefault(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg, err := loadConfig(namespaceSetDenyDefaultConfigPath)
-	if err != nil {
-		return err
-	}
+	if err := mutateConfig(namespaceSetDenyDefaultConfigPath, func(cfg *config.Config) error {
+		// Lookup namespace by name
+		ns, ok := cfg.GetNamespace(namespaceName)
+		if !ok {
+			return fmt.Errorf("namespace %q not found", namespaceName)
+		}
 
-	// Lookup namespace by name
-	ns, ok := cfg.GetNamespace(namespaceName)
-	if !ok {
-		return fmt.Errorf("namespace %q not found", namespaceName)
-	}
+		ns.DenyByDefault = denyByDefault
 
-	ns.DenyByDefault = denyByDefault
+		if err := cfg.UpdateNamespace(namespaceName, ns); err != nil {
+			return err
+		}
 
-	if err := cfg.UpdateNamespace(namespaceName, ns); err != nil {
-		return err
-	}
-
-	if err := saveConfig(cfg, namespaceSetDenyDefaultConfigPath); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 

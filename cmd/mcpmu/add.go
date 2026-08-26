@@ -152,29 +152,21 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load config
-	cfg, err := loadConfig(addConfigPath)
-	if err != nil {
-		return err
-	}
+	if err := mutateConfig(addConfigPath, func(cfg *config.Config) error {
+		// Build server config
+		srv := config.ServerConfig{
+			Command:           cmdArgs[0],
+			Args:              cmdArgs[1:],
+			Cwd:               addCwd,
+			Env:               env,
+			Autostart:         addAutostart,
+			StartupTimeoutSec: addStartupTimeout,
+			ToolTimeoutSec:    addToolTimeout,
+		}
 
-	// Build server config
-	srv := config.ServerConfig{
-		Command:           cmdArgs[0],
-		Args:              cmdArgs[1:],
-		Cwd:               addCwd,
-		Env:               env,
-		Autostart:         addAutostart,
-		StartupTimeoutSec: addStartupTimeout,
-		ToolTimeoutSec:    addToolTimeout,
-	}
-
-	// Add server (this enforces name uniqueness)
-	if err := cfg.AddServer(name, srv); err != nil {
-		return err
-	}
-
-	// Save config
-	if err := saveConfig(cfg, addConfigPath); err != nil {
+		// Add server (this enforces name uniqueness)
+		return cfg.AddServer(name, srv)
+	}); err != nil {
 		return err
 	}
 
@@ -221,42 +213,34 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load config
-	cfg, err := loadConfig(addConfigPath)
-	if err != nil {
-		return err
-	}
-
-	// Build server config
-	srv := config.ServerConfig{
-		URL:               addURL,
-		BearerTokenEnvVar: addBearerEnv,
-		HTTPHeaders:       headers,
-		EnvHTTPHeaders:    envHeaders,
-		Env:               env,
-		Autostart:         addAutostart,
-		StartupTimeoutSec: addStartupTimeout,
-		ToolTimeoutSec:    addToolTimeout,
-	}
-
-	// Build OAuth config if any OAuth-related flags are provided
-	if len(addScopes) > 0 || addOAuthClientID != "" || addOAuthCallbackPort > 0 {
-		srv.OAuth = &config.OAuthConfig{
-			ClientID: addOAuthClientID,
-			Scopes:   addScopes,
+	if err := mutateConfig(addConfigPath, func(cfg *config.Config) error {
+		// Build server config
+		srv := config.ServerConfig{
+			URL:               addURL,
+			BearerTokenEnvVar: addBearerEnv,
+			HTTPHeaders:       headers,
+			EnvHTTPHeaders:    envHeaders,
+			Env:               env,
+			Autostart:         addAutostart,
+			StartupTimeoutSec: addStartupTimeout,
+			ToolTimeoutSec:    addToolTimeout,
 		}
-		if addOAuthCallbackPort > 0 {
-			port := addOAuthCallbackPort
-			srv.OAuth.CallbackPort = &port
+
+		// Build OAuth config if any OAuth-related flags are provided
+		if len(addScopes) > 0 || addOAuthClientID != "" || addOAuthCallbackPort > 0 {
+			srv.OAuth = &config.OAuthConfig{
+				ClientID: addOAuthClientID,
+				Scopes:   addScopes,
+			}
+			if addOAuthCallbackPort > 0 {
+				port := addOAuthCallbackPort
+				srv.OAuth.CallbackPort = &port
+			}
 		}
-	}
 
-	// Add server (this enforces name uniqueness)
-	if err := cfg.AddServer(name, srv); err != nil {
-		return err
-	}
-
-	// Save config
-	if err := saveConfig(cfg, addConfigPath); err != nil {
+		// Add server (this enforces name uniqueness)
+		return cfg.AddServer(name, srv)
+	}); err != nil {
 		return err
 	}
 

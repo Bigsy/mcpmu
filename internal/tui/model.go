@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -174,9 +175,23 @@ func NewModel(cfg *config.Config, supervisor *process.Supervisor, bus *events.Bu
 	return m
 }
 
-// saveConfig saves the config to the resolved config path.
-func (m *Model) saveConfig() error {
-	return config.SaveTo(m.cfg, m.configPath)
+// mutate applies fn to the config file through config.MutateWithCache and
+// adopts the saved result as the model's config. Every TUI config change goes
+// through here: the in-memory copy is never written back wholesale, so a
+// concurrent CLI or web edit is merged instead of overwritten, and ToolCache
+// upkeep for renames/removals happens inside the helper.
+func (m *Model) mutate(fn func(*config.Config) error) error {
+	if m.configPath == "" {
+		// cmd/mcpmu always resolves the path before building the model; an
+		// empty one must not fall through to config.Mutate's default path.
+		return errors.New("config path not set")
+	}
+	fresh, err := config.MutateWithCache(m.configPath, m.toolCache, fn)
+	if err != nil {
+		return err
+	}
+	m.cfg = fresh
+	return nil
 }
 
 func (m *Model) switchToTab(tab Tab) {
@@ -790,53 +805,27 @@ func (m *Model) showConfirmQuit() {
 
 func (m Model) handleServerFormResult(result views.ServerFormResult) (tea.Model, tea.Cmd) {
 	if !result.Submitted {
+		if result.Err != nil {
+			return m, m.toast.ShowError(fmt.Sprintf("Invalid server: %v", result.Err))
+		}
 		// Form was cancelled
 		return m, nil
 	}
 
-	var err error
-	if result.IsEdit {
-		// Check if name changed (rename)
+	err := m.mutate(func(cfg *config.Config) error {
+		if !result.IsEdit {
+			return cfg.AddServer(result.Name, result.Server)
+		}
 		if result.OriginalName != "" && result.Name != result.OriginalName {
-			if err = m.cfg.RenameServer(result.OriginalName, result.Name); err != nil {
-				log.Printf("Failed to rename server: %v", err)
-				return m, m.toast.ShowError(fmt.Sprintf("Failed to rename server: %v", err))
-			}
-			// Migrate cache entry to new server name (recomputes tokens)
-			if m.toolCache != nil {
-				_ = m.toolCache.Rename(result.OriginalName, result.Name)
+			if err := cfg.RenameServer(result.OriginalName, result.Name); err != nil {
+				return fmt.Errorf("rename server: %w", err)
 			}
 		}
-
-		// If command/args or URL changed, clear stale cache (tool set likely different)
-		if m.toolCache != nil {
-			if old, ok := m.cfg.GetServer(result.Name); ok {
-				if old.Command != result.Server.Command || old.URL != result.Server.URL ||
-					strings.Join(old.Args, "\x00") != strings.Join(result.Server.Args, "\x00") {
-					_ = m.toolCache.Delete(result.Name)
-				}
-			}
-		}
-
-		// Update existing server config
-		err = m.cfg.UpdateServer(result.Name, result.Server)
-		if err != nil {
-			log.Printf("Failed to update server: %v", err)
-			return m, m.toast.ShowError(fmt.Sprintf("Failed to update server: %v", err))
-		}
-	} else {
-		// Add new server
-		err = m.cfg.AddServer(result.Name, result.Server)
-		if err != nil {
-			log.Printf("Failed to add server: %v", err)
-			return m, m.toast.ShowError(fmt.Sprintf("Failed to add server: %v", err))
-		}
-	}
-
-	// Save config
-	if err := m.saveConfig(); err != nil {
-		log.Printf("Failed to save config: %v", err)
-		return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
+		return cfg.UpdateServer(result.Name, result.Server)
+	})
+	if err != nil {
+		log.Printf("Failed to save server: %v", err)
+		return m, m.toast.ShowError(fmt.Sprintf("Failed to save server: %v", err))
 	}
 
 	// Refresh the list
@@ -861,28 +850,16 @@ func (m Model) handleConfirmResult(result views.ConfirmResult) (tea.Model, tea.C
 			}
 		}
 
-		// Delete from config
-		if err := m.cfg.DeleteServer(m.pendingDeleteID); err != nil {
+		// Delete from config (the ToolCache entry goes with it)
+		if err := m.mutate(func(cfg *config.Config) error { return cfg.DeleteServer(serverName) }); err != nil {
 			log.Printf("Failed to delete server: %v", err)
 			m.pendingDeleteID = ""
 			return m, m.toast.ShowError(fmt.Sprintf("Failed to delete server: %v", err))
 		}
 
-		// Save config
-		if err := m.saveConfig(); err != nil {
-			log.Printf("Failed to save config: %v", err)
-			m.pendingDeleteID = ""
-			return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
-		}
-
 		// Clear status tracking
 		delete(m.serverStatuses, m.pendingDeleteID)
 		delete(m.serverTools, m.pendingDeleteID)
-
-		// Remove stale cache entry for deleted server
-		if m.toolCache != nil {
-			_ = m.toolCache.Delete(m.pendingDeleteID)
-		}
 
 		// Refresh list
 		m.refreshServerList()
@@ -896,16 +873,10 @@ func (m Model) handleConfirmResult(result views.ConfirmResult) (tea.Model, tea.C
 		// Namespace name is the ID now
 		namespaceName := m.pendingDeleteNamespaceID
 
-		if err := m.cfg.DeleteNamespace(m.pendingDeleteNamespaceID); err != nil {
+		if err := m.mutate(func(cfg *config.Config) error { return cfg.DeleteNamespace(namespaceName) }); err != nil {
 			log.Printf("Failed to delete namespace: %v", err)
 			m.pendingDeleteNamespaceID = ""
 			return m, m.toast.ShowError(fmt.Sprintf("Failed to delete namespace: %v", err))
-		}
-
-		if err := m.saveConfig(); err != nil {
-			log.Printf("Failed to save config: %v", err)
-			m.pendingDeleteNamespaceID = ""
-			return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
 		}
 
 		m.refreshNamespaceList()
@@ -991,11 +962,16 @@ func (m *Model) toggleServerEnabled(id string) {
 			go func() { _ = m.supervisor.Stop(id) }()
 		}
 	}
-	srv.SetEnabled(newEnabled)
-	m.cfg.Servers[id] = srv
-
-	// Save config synchronously (fast operation, avoids race conditions)
-	if err := m.saveConfig(); err != nil {
+	err := m.mutate(func(cfg *config.Config) error {
+		srv, ok := cfg.GetServer(id)
+		if !ok {
+			return fmt.Errorf("server %q not found", id)
+		}
+		srv.SetEnabled(newEnabled)
+		cfg.Servers[id] = srv
+		return nil
+	})
+	if err != nil {
 		log.Printf("Failed to save config after toggle: %v", err)
 	}
 
@@ -1609,8 +1585,7 @@ func (m *Model) handleNamespaceListKey(msg tea.KeyMsg) (handled bool, model tea.
 
 	case msg.String() == "D": // Set as default
 		if item := m.namespaceList.SelectedItem(); item != nil {
-			m.cfg.DefaultNamespace = item.Name
-			if err := m.saveConfig(); err != nil {
+			if err := m.mutate(func(cfg *config.Config) error { cfg.DefaultNamespace = item.Name; return nil }); err != nil {
 				log.Printf("Failed to save config: %v", err)
 				return true, m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 			}
@@ -1622,13 +1597,9 @@ func (m *Model) handleNamespaceListKey(msg tea.KeyMsg) (handled bool, model tea.
 	case key.Matches(msg, m.keys.Duplicate):
 		if item := m.namespaceList.SelectedItem(); item != nil {
 			newName := m.uniqueNamespaceCopyName(item.Name)
-			if err := m.cfg.DuplicateNamespace(item.Name, newName); err != nil {
+			if err := m.mutate(func(cfg *config.Config) error { return cfg.DuplicateNamespace(item.Name, newName) }); err != nil {
 				log.Printf("Failed to duplicate namespace: %v", err)
 				return true, m, m.toast.ShowError(fmt.Sprintf("Failed to duplicate: %v", err))
-			}
-			if err := m.saveConfig(); err != nil {
-				log.Printf("Failed to save config: %v", err)
-				return true, m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 			}
 			m.refreshNamespaceList()
 			return true, m, m.toast.ShowSuccess(fmt.Sprintf("Namespace \"%s\" duplicated", item.Name))
@@ -1668,8 +1639,7 @@ func (m *Model) handleNamespaceDetailKey(msg tea.KeyMsg) (handled bool, model te
 		return m.startToolPermissionEditor(m.detailNamespaceID, &ns)
 
 	case msg.String() == "D": // Set as default
-		m.cfg.DefaultNamespace = m.detailNamespaceID
-		if err := m.saveConfig(); err != nil {
+		if err := m.mutate(func(cfg *config.Config) error { cfg.DefaultNamespace = m.detailNamespaceID; return nil }); err != nil {
 			log.Printf("Failed to save config: %v", err)
 			return true, m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 		}
@@ -1871,35 +1841,26 @@ func (m Model) handleNamespaceFormResult(result views.NamespaceFormResult) (tea.
 		return m, nil
 	}
 
-	var err error
-	if result.IsEdit {
-		// Check if name changed (rename)
-		if result.OriginalName != "" && result.Name != result.OriginalName {
-			if err = m.cfg.RenameNamespace(result.OriginalName, result.Name); err != nil {
-				log.Printf("Failed to rename namespace: %v", err)
-				return m, m.toast.ShowError(fmt.Sprintf("Failed to rename namespace: %v", err))
-			}
-			// Update detail tracking if we renamed the currently viewed namespace
-			if m.detailNamespaceID == result.OriginalName {
-				m.detailNamespaceID = result.Name
+	renamed := result.IsEdit && result.OriginalName != "" && result.Name != result.OriginalName
+	err := m.mutate(func(cfg *config.Config) error {
+		if !result.IsEdit {
+			return cfg.AddNamespace(result.Name, result.Namespace)
+		}
+		if renamed {
+			if err := cfg.RenameNamespace(result.OriginalName, result.Name); err != nil {
+				return fmt.Errorf("rename namespace: %w", err)
 			}
 		}
-		err = m.cfg.UpdateNamespace(result.Name, result.Namespace)
-		if err != nil {
-			log.Printf("Failed to update namespace: %v", err)
-			return m, m.toast.ShowError(fmt.Sprintf("Failed to update namespace: %v", err))
-		}
-	} else {
-		err = m.cfg.AddNamespace(result.Name, result.Namespace)
-		if err != nil {
-			log.Printf("Failed to add namespace: %v", err)
-			return m, m.toast.ShowError(fmt.Sprintf("Failed to add namespace: %v", err))
-		}
+		return cfg.UpdateNamespace(result.Name, result.Namespace)
+	})
+	if err != nil {
+		log.Printf("Failed to save namespace: %v", err)
+		return m, m.toast.ShowError(fmt.Sprintf("Failed to save namespace: %v", err))
 	}
 
-	if err := m.saveConfig(); err != nil {
-		log.Printf("Failed to save config: %v", err)
-		return m, m.toast.ShowError(fmt.Sprintf("Failed to save config: %v", err))
+	// Update detail tracking if we renamed the currently viewed namespace
+	if renamed && m.detailNamespaceID == result.OriginalName {
+		m.detailNamespaceID = result.Name
 	}
 
 	m.refreshNamespaceList()
@@ -1925,18 +1886,23 @@ func (m Model) handleServerPickerResult(result views.ServerPickerResult) (tea.Mo
 		return m, nil
 	}
 
+	// Update server assignments
+	err := m.mutate(func(cfg *config.Config) error {
+		ns, ok := cfg.GetNamespace(m.detailNamespaceID)
+		if !ok {
+			return fmt.Errorf("namespace %q not found", m.detailNamespaceID)
+		}
+		ns.ServerIDs = result.SelectedIDs
+		cfg.Namespaces[m.detailNamespaceID] = ns
+		return nil
+	})
+	if err != nil {
+		log.Printf("Failed to save config: %v", err)
+		return m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
+	}
 	ns, ok := m.cfg.GetNamespace(m.detailNamespaceID)
 	if !ok {
 		return m, nil
-	}
-
-	// Update server assignments
-	ns.ServerIDs = result.SelectedIDs
-	m.cfg.Namespaces[m.detailNamespaceID] = ns
-
-	if err := m.saveConfig(); err != nil {
-		log.Printf("Failed to save config: %v", err)
-		return m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 	}
 
 	// Refresh detail view
@@ -1960,31 +1926,33 @@ func (m Model) handleToolPermissionsResult(result views.ToolPermissionsResult) (
 		return m, nil
 	}
 
-	// Apply permission changes
-	for key, enabled := range result.Changes {
-		parts := strings.SplitN(key, ":", 2)
-		if len(parts) != 2 {
-			continue
+	err := m.mutate(func(cfg *config.Config) error {
+		// Apply permission changes
+		for key, enabled := range result.Changes {
+			parts := strings.SplitN(key, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			serverName, toolName := parts[0], parts[1]
+			if err := cfg.SetToolPermission(m.detailNamespaceID, serverName, toolName, enabled); err != nil {
+				log.Printf("Failed to set permission: %v", err)
+			}
 		}
-		serverName, toolName := parts[0], parts[1]
-		if err := m.cfg.SetToolPermission(m.detailNamespaceID, serverName, toolName, enabled); err != nil {
-			log.Printf("Failed to set permission: %v", err)
-		}
-	}
 
-	// Apply permission deletions (revert to default)
-	for _, key := range result.Deletions {
-		parts := strings.SplitN(key, ":", 2)
-		if len(parts) != 2 {
-			continue
+		// Apply permission deletions (revert to default)
+		for _, key := range result.Deletions {
+			parts := strings.SplitN(key, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			serverName, toolName := parts[0], parts[1]
+			if err := cfg.UnsetToolPermission(m.detailNamespaceID, serverName, toolName); err != nil {
+				log.Printf("Failed to unset permission: %v", err)
+			}
 		}
-		serverName, toolName := parts[0], parts[1]
-		if err := m.cfg.UnsetToolPermission(m.detailNamespaceID, serverName, toolName); err != nil {
-			log.Printf("Failed to unset permission: %v", err)
-		}
-	}
-
-	if err := m.saveConfig(); err != nil {
+		return nil
+	})
+	if err != nil {
 		log.Printf("Failed to save config: %v", err)
 		return m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 	}
@@ -2029,27 +1997,27 @@ func (m Model) handleToolDenyResult(result views.ToolDenyResult) (tea.Model, tea
 		return m, nil
 	}
 
-	srv, ok := m.cfg.GetServer(result.ServerName)
-	if !ok {
-		return m, m.toast.ShowError(fmt.Sprintf("Server %q not found", result.ServerName))
-	}
-
-	// Replace the deny list
-	if len(result.DeniedTools) == 0 {
-		srv.DeniedTools = nil
-	} else {
-		srv.DeniedTools = result.DeniedTools
-		slices.Sort(srv.DeniedTools)
-	}
-	m.cfg.Servers[result.ServerName] = srv
-
-	if err := m.saveConfig(); err != nil {
-		log.Printf("Failed to save config: %v", err)
+	err := m.mutate(func(cfg *config.Config) error {
+		srv, ok := cfg.GetServer(result.ServerName)
+		if !ok {
+			return fmt.Errorf("server %q not found", result.ServerName)
+		}
+		// Replace the deny list
+		if len(result.DeniedTools) == 0 {
+			srv.DeniedTools = nil
+		} else {
+			srv.DeniedTools = slices.Sorted(slices.Values(result.DeniedTools))
+		}
+		cfg.Servers[result.ServerName] = srv
+		return nil
+	})
+	if err != nil {
+		log.Printf("Failed to save denied tools: %v", err)
 		return m, m.toast.ShowError(fmt.Sprintf("Failed to save: %v", err))
 	}
 
 	// Refresh server detail view
-	if m.detailServerID == result.ServerName {
+	if srv, ok := m.cfg.GetServer(result.ServerName); ok && m.detailServerID == result.ServerName {
 		status := m.serverStatuses[result.ServerName]
 		tools, toolTokens, fromCache := m.getServerToolsForDetail(result.ServerName)
 		m.serverDetail.SetServer(result.ServerName, &srv, &status, tools, toolTokens, fromCache)

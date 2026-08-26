@@ -59,15 +59,11 @@ func parseBoolFlag(value string, trueValues, falseValues []string, noun, expecte
 	return false, fmt.Errorf("invalid %s %q: expected %s", noun, value, expected)
 }
 
-func saveConfig(cfg *config.Config, configPath string) error {
-	if configPath != "" {
-		if err := config.SaveTo(cfg, configPath); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
-		}
-	} else {
-		if err := config.Save(cfg); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
-		}
-	}
-	return nil
+// mutateConfig applies fn to the config file at configPath (the default path
+// when empty) through config.Mutate: locked reload → fn → validate → save, so
+// a CLI edit racing a TUI, web or daemon write loses nothing. It is the only
+// way a command writes config.
+func mutateConfig(configPath string, fn func(*config.Config) error) error {
+	_, err := config.Mutate(configPath, fn)
+	return err
 }

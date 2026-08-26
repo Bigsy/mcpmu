@@ -14,7 +14,6 @@ import (
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/events"
-	"github.com/Bigsy/mcpmu/internal/flock"
 	"github.com/Bigsy/mcpmu/internal/httpguard"
 	"github.com/Bigsy/mcpmu/internal/metrics"
 	"github.com/Bigsy/mcpmu/internal/process"
@@ -373,42 +372,18 @@ func kindBadge(srv config.ServerConfig) string {
 	return "stdio"
 }
 
-// mutateConfig safely applies a config mutation using a read-modify-write cycle.
-// It reloads config from disk, applies the mutation function, saves back to disk,
-// and updates the in-memory config pointer. The mutex ensures atomicity within
-// this process; the file lock extends it across processes (a daemon or CLI
-// saving the same file concurrently used to be able to interleave with this
-// cycle, corrupting the file or losing one side's update).
+// mutateConfig applies fn to the config file through config.MutateWithCache
+// and adopts the saved result as this server's in-memory config. The mutex
+// serialises this process's handlers so s.cfg is never replaced mid-cycle; the
+// cross-process lock, reload-merge and ToolCache upkeep live in config.Mutate.
 func (s *Server) mutateConfig(fn func(cfg *config.Config) error) error {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 
-	// Derive the lock path exactly as SaveTo resolves the data path, so
-	// every process lands on the same lock file.
-	lockPath, err := config.ResolvePath(s.configPath)
+	fresh, err := config.MutateWithCache(s.configPath, s.toolCache, fn)
 	if err != nil {
 		return err
 	}
-
-	var fresh *config.Config
-	err = flock.WithLock(lockPath, func() error {
-		reloaded, err := config.LoadFrom(s.configPath)
-		if err != nil {
-			return fmt.Errorf("reload config: %w", err)
-		}
-		if err := fn(reloaded); err != nil {
-			return err
-		}
-		if err := config.SaveTo(reloaded, s.configPath); err != nil {
-			return fmt.Errorf("save config: %w", err)
-		}
-		fresh = reloaded
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
 	s.cfg = fresh
 	return nil
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -58,13 +59,11 @@ func runRemove(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Remove server
-	if err := cfg.DeleteServer(name); err != nil {
-		return err
-	}
-
-	// Save config
-	if err := saveConfig(cfg, removeConfigPath); err != nil {
+	// Remove server (re-checks existence under the lock; the ToolCache entry
+	// goes with it)
+	if err := mutateConfig(removeConfigPath, func(cfg *config.Config) error {
+		return cfg.DeleteServer(name)
+	}); err != nil {
 		return err
 	}
 

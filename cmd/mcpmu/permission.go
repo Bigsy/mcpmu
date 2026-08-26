@@ -73,28 +73,25 @@ func runPermissionSet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg, err := loadConfig(permissionSetConfigPath)
-	if err != nil {
-		return err
-	}
-
-	// Lookup namespace by name
-	if err := requireNamespace(cfg, namespaceName); err != nil {
-		return err
-	}
-
-	// Lookup server by name
-	if err := requireServer(cfg, serverName); err != nil {
-		return err
-	}
-
 	toolName := normalizeToolName(toolNameRaw, serverName)
 
-	if err := cfg.SetToolPermission(namespaceName, serverName, toolName, enabled); err != nil {
-		return err
-	}
+	if err := mutateConfig(permissionSetConfigPath, func(cfg *config.Config) error {
+		// Lookup namespace by name
+		if err := requireNamespace(cfg, namespaceName); err != nil {
+			return err
+		}
 
-	if err := saveConfig(cfg, permissionSetConfigPath); err != nil {
+		// Lookup server by name
+		if err := requireServer(cfg, serverName); err != nil {
+			return err
+		}
+
+		if err := cfg.SetToolPermission(namespaceName, serverName, toolName, enabled); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -137,28 +134,25 @@ func runPermissionUnset(cmd *cobra.Command, args []string) error {
 	serverName := args[1]
 	toolNameRaw := strings.TrimSpace(args[2])
 
-	cfg, err := loadConfig(permissionUnsetConfigPath)
-	if err != nil {
-		return err
-	}
-
-	// Lookup namespace by name
-	if err := requireNamespace(cfg, namespaceName); err != nil {
-		return err
-	}
-
-	// Lookup server by name
-	if err := requireServer(cfg, serverName); err != nil {
-		return err
-	}
-
 	toolName := normalizeToolName(toolNameRaw, serverName)
 
-	if err := cfg.UnsetToolPermission(namespaceName, serverName, toolName); err != nil {
-		return err
-	}
+	if err := mutateConfig(permissionUnsetConfigPath, func(cfg *config.Config) error {
+		// Lookup namespace by name
+		if err := requireNamespace(cfg, namespaceName); err != nil {
+			return err
+		}
 
-	if err := saveConfig(cfg, permissionUnsetConfigPath); err != nil {
+		// Lookup server by name
+		if err := requireServer(cfg, serverName); err != nil {
+			return err
+		}
+
+		if err := cfg.UnsetToolPermission(namespaceName, serverName, toolName); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -377,16 +371,13 @@ func runPermissionSetServerDefault(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg, err := loadConfig(permissionSetServerDefaultConfigPath)
-	if err != nil {
-		return err
-	}
+	if err := mutateConfig(permissionSetServerDefaultConfigPath, func(cfg *config.Config) error {
+		if err := cfg.SetServerDefault(namespaceName, serverName, denyByDefault); err != nil {
+			return err
+		}
 
-	if err := cfg.SetServerDefault(namespaceName, serverName, denyByDefault); err != nil {
-		return err
-	}
-
-	if err := saveConfig(cfg, permissionSetServerDefaultConfigPath); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -423,24 +414,21 @@ func runPermissionUnsetServerDefault(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
 	serverName := args[1]
 
-	cfg, err := loadConfig(permissionUnsetServerDefaultConfigPath)
-	if err != nil {
-		return err
-	}
+	if err := mutateConfig(permissionUnsetServerDefaultConfigPath, func(cfg *config.Config) error {
+		if err := requireNamespace(cfg, namespaceName); err != nil {
+			return err
+		}
 
-	if err := requireNamespace(cfg, namespaceName); err != nil {
-		return err
-	}
+		if err := requireServer(cfg, serverName); err != nil {
+			return err
+		}
 
-	if err := requireServer(cfg, serverName); err != nil {
-		return err
-	}
+		if err := cfg.UnsetServerDefault(namespaceName, serverName); err != nil {
+			return err
+		}
 
-	if err := cfg.UnsetServerDefault(namespaceName, serverName); err != nil {
-		return err
-	}
-
-	if err := saveConfig(cfg, permissionUnsetServerDefaultConfigPath); err != nil {
+		return nil
+	}); err != nil {
 		return err
 	}
 

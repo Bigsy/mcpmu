@@ -98,7 +98,7 @@ func TestShowAddWithDefaults_SubmitProducesCorrectResult(t *testing.T) {
 	)
 
 	// Verify buildServerConfig produces the expected config from pre-populated fields
-	srv := form.buildServerConfig()
+	srv, _ := form.buildServerConfig()
 	if srv.Command != "npx" {
 		t.Errorf("Command: got %q, want %q", srv.Command, "npx")
 	}
@@ -133,7 +133,7 @@ func TestShowAddWithDefaults_SubmitHTTPProducesCorrectResult(t *testing.T) {
 		"",
 	)
 
-	srv := form.buildServerConfig()
+	srv, _ := form.buildServerConfig()
 	if srv.URL != "https://server.smithery.ai/my-server" {
 		t.Errorf("URL: got %q", srv.URL)
 	}
@@ -219,7 +219,7 @@ func TestShowAddWithDefaults_PrePopulatesOAuthFields(t *testing.T) {
 	}
 
 	// Verify buildServerConfig produces correct OAuth config
-	srv := form.buildServerConfig()
+	srv, _ := form.buildServerConfig()
 	if srv.OAuth == nil {
 		t.Fatal("expected OAuth config in built server")
 	}
@@ -250,7 +250,7 @@ func TestBuildServerConfig_BearerClearsOAuth(t *testing.T) {
 	// User switches to bearer auth by entering a bearer token env var
 	form.bearerTokenEnvVar = "SLACK_TOKEN"
 
-	srv := form.buildServerConfig()
+	srv, _ := form.buildServerConfig()
 	if srv.OAuth != nil {
 		t.Error("expected OAuth to be nil when bearer token is set")
 	}
@@ -269,7 +269,7 @@ func TestShowEdit_AutostartPrePopulated(t *testing.T) {
 	if !form.autostart {
 		t.Error("expected autostart to be true in edit mode")
 	}
-	srv := form.buildServerConfig()
+	srv, _ := form.buildServerConfig()
 	if !srv.Autostart {
 		t.Error("expected built config to have Autostart=true")
 	}
@@ -299,7 +299,7 @@ func TestShowEdit_HTTPHeadersRoundtrip(t *testing.T) {
 		t.Errorf("form should not be dirty immediately after ShowEdit (got httpHeaders=%q envHTTPHeaders=%q)", form.httpHeaders, form.envHTTPHeaders)
 	}
 
-	srv := form.buildServerConfig()
+	srv, _ := form.buildServerConfig()
 	if got := srv.HTTPHeaders["CF-Access-Client-Id"]; got != "id" {
 		t.Errorf("HTTPHeaders[CF-Access-Client-Id] = %q, want %q", got, "id")
 	}
@@ -321,7 +321,7 @@ func TestShowEdit_StdioClearsHeadersOnSave(t *testing.T) {
 	})
 	form.httpHeaders = "X-Foo: bar"
 
-	srv := form.buildServerConfig()
+	srv, _ := form.buildServerConfig()
 	if len(srv.HTTPHeaders) != 0 {
 		t.Errorf("expected HTTPHeaders cleared on stdio, got %v", srv.HTTPHeaders)
 	}
@@ -387,11 +387,10 @@ func TestServerForm_HeaderParseErrorPreservesValue(t *testing.T) {
 		t.Errorf("form.httpHeaders mutated by validator: got %q, want %q", form.httpHeaders, bad)
 	}
 
-	// And buildServerConfig in this state falls back to nil HTTPHeaders
-	// rather than silently writing the unparseable string anywhere.
-	srv := form.buildServerConfig()
-	if len(srv.HTTPHeaders) != 0 {
-		t.Errorf("expected HTTPHeaders nil when input fails to parse, got %v", srv.HTTPHeaders)
+	// And buildServerConfig in this state refuses to build rather than
+	// silently writing the unparseable string anywhere.
+	if _, err := form.buildServerConfig(); err == nil {
+		t.Error("expected buildServerConfig to fail when headers do not parse")
 	}
 }
 
@@ -409,7 +408,7 @@ func TestShowEdit_TimeoutsPrePopulated(t *testing.T) {
 	if form.toolTimeout != "120" {
 		t.Errorf("toolTimeout: got %q, want %q", form.toolTimeout, "120")
 	}
-	srv := form.buildServerConfig()
+	srv, _ := form.buildServerConfig()
 	if srv.StartupTimeoutSec != 30 {
 		t.Errorf("StartupTimeoutSec: got %d, want 30", srv.StartupTimeoutSec)
 	}
@@ -423,7 +422,7 @@ func TestShowEdit_PreservesUnexposedSharedField(t *testing.T) {
 	shared := false
 	_ = form.ShowEdit("browser", config.ServerConfig{Command: "browser-mcp", Shared: &shared})
 
-	got := form.buildServerConfig()
+	got, _ := form.buildServerConfig()
 	if got.Shared == nil || *got.Shared {
 		t.Fatal("editing through the TUI dropped shared: false")
 	}
@@ -436,7 +435,7 @@ func TestBuildServerConfig_EmptyTimeoutsAreZero(t *testing.T) {
 	form.commandOrURL = "echo"
 	form.startupTimeout = ""
 	form.toolTimeout = ""
-	srv := form.buildServerConfig()
+	srv, _ := form.buildServerConfig()
 	if srv.StartupTimeoutSec != 0 {
 		t.Errorf("expected StartupTimeoutSec 0, got %d", srv.StartupTimeoutSec)
 	}
@@ -457,7 +456,7 @@ func TestShowEdit_OAuthScopesRoundTrip(t *testing.T) {
 	if form.oauthScopes != "channels:read, channels:write" {
 		t.Errorf("oauthScopes: got %q", form.oauthScopes)
 	}
-	srv := form.buildServerConfig()
+	srv, _ := form.buildServerConfig()
 	if srv.OAuth == nil {
 		t.Fatal("expected OAuth config")
 	}

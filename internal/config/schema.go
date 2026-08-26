@@ -144,6 +144,11 @@ type Config struct {
 	// OAuth settings (Codex-compatible)
 	MCPOAuthCredentialStore string `json:"mcp_oauth_credentials_store,omitempty"` // "auto", "keyring", "file"
 	MCPOAuthCallbackPort    *int   `json:"mcp_oauth_callback_port,omitempty"`     // nil = random, 0 invalid
+
+	// toolCacheOps records ToolCache side effects implied by mutations made
+	// through the methods below (rename/delete/tool-set change). Mutate drains
+	// and applies them after saving. Never serialised.
+	toolCacheOps []toolCacheOp
 }
 
 // DefaultDaemonMode controls the behavior when daemonMode is absent. Unix

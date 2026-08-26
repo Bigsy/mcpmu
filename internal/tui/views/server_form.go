@@ -19,7 +19,8 @@ type ServerFormResult struct {
 	OriginalName string // Original name (for rename detection in edit mode)
 	Server       config.ServerConfig
 	Submitted    bool
-	IsEdit       bool // true if editing an existing server
+	IsEdit       bool  // true if editing an existing server
+	Err          error // set (with Submitted=false) when the input could not be turned into a config
 }
 
 // ServerFormModel is a form for adding/editing servers.
@@ -202,7 +203,7 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 		}
 	} else {
 		m.commandOrURL = srv.Command
-		m.args = formatArgs(srv.Args) // Properly quote args with spaces
+		m.args = config.JoinArgs(srv.Args) // quote args with spaces so they round-trip
 		m.bearerTokenEnvVar = ""
 		m.httpHeaders = ""
 		m.envHTTPHeaders = ""
@@ -442,18 +443,7 @@ func (m *ServerFormModel) Update(msg tea.Msg) tea.Cmd {
 				// Save and close
 				m.visible = false
 				m.showConfirmDiscard = false
-				srv := m.buildServerConfig()
-				name := m.getName()
-				originalName := m.originalName
-				return func() tea.Msg {
-					return ServerFormResult{
-						Name:         name,
-						OriginalName: originalName,
-						Server:       srv,
-						Submitted:    true,
-						IsEdit:       m.isEdit,
-					}
-				}
+				return m.submitResult()
 			case "n", "N":
 				// Discard and close
 				m.visible = false
@@ -498,19 +488,7 @@ func (m *ServerFormModel) Update(msg tea.Msg) tea.Cmd {
 	// Check if form was completed
 	if m.form.State == huh.StateCompleted {
 		m.visible = false
-		srv := m.buildServerConfig()
-		name := m.getName()
-		originalName := m.originalName
-		isEdit := m.isEdit
-		return func() tea.Msg {
-			return ServerFormResult{
-				Name:         name,
-				OriginalName: originalName,
-				Server:       srv,
-				Submitted:    true,
-				IsEdit:       isEdit,
-			}
-		}
+		return m.submitResult()
 	}
 
 	// Check if form was aborted
@@ -561,107 +539,65 @@ func isHTTPURL(s string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
-func (m ServerFormModel) buildServerConfig() config.ServerConfig {
-	var srv config.ServerConfig
+// submitResult builds the ServerFormResult for a completed form. A build error
+// (unterminated quote in Arguments, bad OAuth port) is reported through
+// Result.Err rather than saving a half-right config.
+func (m *ServerFormModel) submitResult() tea.Cmd {
+	srv, err := m.buildServerConfig()
+	name := m.getName()
+	originalName := m.originalName
+	isEdit := m.isEdit
+	return func() tea.Msg {
+		if err != nil {
+			return ServerFormResult{Submitted: false, Err: err}
+		}
+		return ServerFormResult{
+			Name:         name,
+			OriginalName: originalName,
+			Server:       srv,
+			Submitted:    true,
+			IsEdit:       isEdit,
+		}
+	}
+}
 
-	// For edit mode, start with the original to preserve non-form fields
-	// (Enabled, Kind, Headers, OAuth fields, Scopes, etc.)
+// buildServerConfig maps the form fields onto config.BuildServerConfig, which
+// owns the merge-with-existing rules shared with the web form. The transport is
+// auto-detected: an http(s):// value in "Command or URL" means HTTP.
+func (m ServerFormModel) buildServerConfig() (config.ServerConfig, error) {
+	var existing *config.ServerConfig
 	if m.isEdit && m.originalServer != nil {
-		srv = *m.originalServer
+		existing = m.originalServer
 	}
 
 	commandOrURL := strings.TrimSpace(m.commandOrURL)
-
-	// Auto-detect server type based on input
-	if isHTTPURL(commandOrURL) {
-		// HTTP server
-		srv.URL = commandOrURL
-		srv.Command = ""
-		srv.Args = nil
-		srv.BearerTokenEnvVar = strings.TrimSpace(m.bearerTokenEnvVar)
-		srv.Kind = config.ServerKindStreamableHTTP
-
-		// Headers — the textarea Validate has already accepted these, so a
-		// parse error here means the user bypassed validation (or we have a
-		// bug). In that case, fall back to nil rather than silently keeping
-		// stale headers from the original config.
-		if headers, err := config.ParseHeaderLines(m.httpHeaders); err == nil {
-			srv.HTTPHeaders = headers
-		} else {
-			srv.HTTPHeaders = nil
-		}
-		if envHeaders, err := config.ParseHeaderLines(m.envHTTPHeaders); err == nil {
-			srv.EnvHTTPHeaders = envHeaders
-		} else {
-			srv.EnvHTTPHeaders = nil
-		}
-
-		// Build OAuth config from form fields.
-		// Bearer token and OAuth are mutually exclusive — if bearer is set, clear OAuth.
-		if srv.BearerTokenEnvVar != "" {
-			srv.OAuth = nil
-		} else {
-			clientID := strings.TrimSpace(m.oauthClientID)
-			portStr := strings.TrimSpace(m.oauthCallbackPort)
-			// Preserve existing OAuth scopes/secret from original if editing
-			var existingOAuth *config.OAuthConfig
-			if m.isEdit && m.originalServer != nil {
-				existingOAuth = m.originalServer.OAuth
-			}
-			scopeStr := strings.TrimSpace(m.oauthScopes)
-			if clientID != "" || portStr != "" || scopeStr != "" || existingOAuth != nil {
-				srv.OAuth = &config.OAuthConfig{}
-				if existingOAuth != nil {
-					srv.OAuth.ClientSecret = existingOAuth.ClientSecret
-				}
-				if clientID != "" {
-					srv.OAuth.ClientID = clientID
-				}
-				if portStr != "" {
-					if port, err := strconv.Atoi(portStr); err == nil && port > 0 {
-						srv.OAuth.CallbackPort = &port
-					}
-				}
-				if scopeStr != "" {
-					for s := range strings.SplitSeq(scopeStr, ",") {
-						s = strings.TrimSpace(s)
-						if s != "" {
-							srv.OAuth.Scopes = append(srv.OAuth.Scopes, s)
-						}
-					}
-				}
-			}
-		}
-	} else {
-		// Stdio server
-		srv.Command = commandOrURL
-		srv.Args = parseArgs(m.args)
-		srv.URL = ""
-		srv.BearerTokenEnvVar = ""
-		srv.HTTPHeaders = nil
-		srv.EnvHTTPHeaders = nil
-		srv.OAuth = nil
-		srv.Kind = config.ServerKindStdio
+	form := config.ServerFormData{
+		IsHTTP:            isHTTPURL(commandOrURL),
+		Command:           commandOrURL,
+		Args:              m.args,
+		Cwd:               m.cwd,
+		URL:               commandOrURL,
+		BearerEnv:         m.bearerTokenEnvVar,
+		HTTPHeaders:       m.httpHeaders,
+		EnvHTTPHeaders:    m.envHTTPHeaders,
+		OAuthClientID:     m.oauthClientID,
+		OAuthCallbackPort: m.oauthCallbackPort,
+		OAuthScopes:       m.oauthScopes,
+		Env:               parseEnvVars(m.env),
+		Autostart:         m.autostart,
 	}
-
-	srv.Cwd = strings.TrimSpace(m.cwd)
-	srv.Env = parseEnvVars(m.env)
-	srv.Autostart = m.autostart
-
-	srv.StartupTimeoutSec = 0
 	if s := strings.TrimSpace(m.startupTimeout); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {
-			srv.StartupTimeoutSec = n
+			form.StartupTimeoutSec = n
 		}
 	}
-	srv.ToolTimeoutSec = 0
 	if s := strings.TrimSpace(m.toolTimeout); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {
-			srv.ToolTimeoutSec = n
+			form.ToolTimeoutSec = n
 		}
 	}
 
-	return srv
+	return config.BuildServerConfig(form, existing)
 }
 
 // getName returns the server name, using command/URL as fallback for new servers
@@ -755,75 +691,6 @@ func (m ServerFormModel) RenderOverlay(base string, width, height int) string {
 		lipgloss.WithWhitespaceChars(" "),
 		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#E5E7EB", Dark: "#1F2937"}),
 	)
-}
-
-// formatArgs converts args slice to space-separated string, quoting args with spaces.
-func formatArgs(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-
-	var parts []string
-	for _, arg := range args {
-		escaped := strings.ReplaceAll(arg, "\\", "\\\\")
-		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
-		if strings.Contains(arg, " ") || strings.Contains(arg, "'") || strings.Contains(arg, "\"") {
-			// Quote args containing spaces or quotes
-			// Use double quotes and escape any existing double quotes
-			parts = append(parts, "\""+escaped+"\"")
-		} else {
-			parts = append(parts, escaped)
-		}
-	}
-	return strings.Join(parts, " ")
-}
-
-// parseArgs splits space-separated arguments, respecting quoted strings and escapes.
-func parseArgs(s string) []string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-
-	var args []string
-	var current strings.Builder
-	inQuote := false
-	quoteChar := rune(0)
-	escaped := false
-
-	for _, r := range s {
-		if escaped {
-			// Previous char was backslash - add this char literally
-			current.WriteRune(r)
-			escaped = false
-			continue
-		}
-
-		switch {
-		case r == '\\':
-			// Start escape sequence
-			escaped = true
-		case (r == '"' || r == '\'') && !inQuote:
-			inQuote = true
-			quoteChar = r
-		case r == quoteChar && inQuote:
-			inQuote = false
-			quoteChar = 0
-		case r == ' ' && !inQuote:
-			if current.Len() > 0 {
-				args = append(args, current.String())
-				current.Reset()
-			}
-		default:
-			current.WriteRune(r)
-		}
-	}
-
-	if current.Len() > 0 {
-		args = append(args, current.String())
-	}
-
-	return args
 }
 
 // parseEnvVars parses KEY=value lines into a map.

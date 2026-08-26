@@ -229,6 +229,9 @@ func (c *Config) UpdateServer(name string, srv ServerConfig) error {
 		return fmt.Errorf("invalid server config: %w", err)
 	}
 
+	if toolSetChanged(c.Servers[name], srv) {
+		c.noteToolCacheDelete(name)
+	}
 	c.Servers[name] = srv
 	return nil
 }
@@ -240,6 +243,7 @@ func (c *Config) DeleteServer(name string) error {
 		return fmt.Errorf("server %q not found", name)
 	}
 	delete(c.Servers, name)
+	c.noteToolCacheDelete(name)
 
 	// Clean up namespace references and server defaults
 	for nsName, ns := range c.Namespaces {
@@ -281,6 +285,7 @@ func (c *Config) RenameServer(oldName, newName string) error {
 	// Move in servers map
 	delete(c.Servers, oldName)
 	c.Servers[newName] = srv
+	c.noteToolCacheRename(oldName, newName)
 
 	// Update namespace references and server defaults
 	for nsName, ns := range c.Namespaces {
