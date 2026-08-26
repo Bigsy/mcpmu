@@ -340,8 +340,9 @@ Where it plugs in (`internal/server`):
   *target* tool with zero changes. `get_tool_schema` applies the same
   namespace/enabled/permission checks the direct path does, and falls back to
   `Aggregator.DiscoverServer` for servers not discovered yet — the compressed
-  analogue of lazy startup. With compression off, wrapper names fall through
-  and get the same error any unknown dotless name does.
+  analogue of lazy startup. Any dotless non-manager name (wrapper names with
+  compression off included) is answered with a tool-not-found error that says
+  how to recover, instead of falling through to `Server not found: ""`.
 - Wrapper names contain no dot, so they cannot collide with `{server}.{tool}`;
   an upstream tool literally named `invoke_tool` stays callable as
   `{server}.invoke_tool`.
@@ -385,10 +386,10 @@ serve degrades it to off at runtime — failing `Config.Validate` would brick
 every command, including the TUI needed to fix the field, and `Mutate`
 re-validates the whole config so even unrelated edits would be blocked. One
 reload edge to know: a reload that turns compression *off* invalidates a
-client's cached `invoke_tool` (it falls through as an unknown dotless name)
-until the client re-lists — self-healing, since the reload emits
-`tools/list_changed`. Turning it *on* is graceful because qualified names keep
-routing normally.
+client's cached `invoke_tool` until the client re-lists — self-healing, since
+the reload emits `tools/list_changed`, and the error itself says "compression
+is off on this session; call tools/list". Turning it *on* is graceful because
+qualified names keep routing normally.
 
 ### Verified Upstream Catalog
 

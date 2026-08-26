@@ -218,8 +218,10 @@ func TestFormatListing(t *testing.T) {
 		})
 	}
 
-	if got := formatListing(CompressionMedium, nil); got != "" {
-		t.Errorf("empty listing = %q, want empty string", got)
+	// An empty listing must say so explicitly — a bare "Available tools:"
+	// header with nothing under it invites the model to invent a tool name.
+	if got := formatListing(CompressionMedium, nil); got != "(none)" {
+		t.Errorf("empty listing = %q, want %q", got, "(none)")
 	}
 }
 

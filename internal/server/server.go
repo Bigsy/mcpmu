@@ -1030,10 +1030,10 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 	}
 
 	// Compressed surface: intercept the wrapper tools before ParseToolName.
-	// With compression off these names fall through and get the same error any
-	// unknown dotless name does. Resolved once per request so the intercept
-	// and the listing a wrapper renders agree.
-	if compression := s.compressionLevel(); compression.enabled() {
+	// Resolved once per request so the intercept and the listing a wrapper
+	// renders agree.
+	compression := s.compressionLevel()
+	if compression.enabled() {
 		switch req.Name {
 		case wrapperListTools:
 			return s.handleListToolsWrapper(ctx, router, compression)
@@ -1067,8 +1067,24 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 	// Parse tool name to check namespace enforcement
 	serverName, _, isManager := ParseToolName(req.Name)
 
+	// A dotless non-manager name can never route — aggregated tools are
+	// always qualified as "server.tool" — and letting it fall through used to
+	// produce `Server not found: ""`, useless to a model reading the error.
+	// Name the actual problem instead (matching resolveToolSchema's
+	// deliberate divergence). A wrapper name reaching this point means
+	// compression is off — typically a client cache made stale by a reload
+	// that disabled it — so that error additionally says how to recover.
+	if !isManager && serverName == "" {
+		msg := fmt.Sprintf("Tool not found: %s (tool names are qualified as \"server.tool\")", req.Name)
+		switch req.Name {
+		case wrapperListTools, wrapperGetToolSchema, wrapperInvokeTool:
+			msg = fmt.Sprintf("Tool not found: %s (compression is off on this session; call tools/list for the available tools)", req.Name)
+		}
+		return nil, NewRPCError(ErrCodeToolNotFound, msg, map[string]string{"toolName": req.Name})
+	}
+
 	// Manager tools are always allowed
-	if !isManager && serverName != "" {
+	if !isManager {
 		// Check if the server is in the active namespace
 		allowed := slices.Contains(activeServerNames, serverName)
 		if !allowed {

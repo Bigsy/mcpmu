@@ -369,15 +369,31 @@ func TestCompress_WrappersUnknownWhenOff(t *testing.T) {
 	script := initLine + "\n" +
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"invoke_tool","arguments":{"tool":"a.b"}}}` + "\n" +
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_tools","arguments":{}}}` + "\n" +
-		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_tool_schema","arguments":{"tool":"a.b"}}}` + "\n"
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_tool_schema","arguments":{"tool":"a.b"}}}` + "\n" +
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"someword","arguments":{}}}` + "\n"
 	responses := runCompressSession(t, Options{Config: cfg}, script)
 
-	// With compression off the wrapper names fall through to the normal
-	// dispatch path and get the same error any unknown dotless name does.
+	// A wrapper name with compression off is the error a model actually hits
+	// when a reload disabled compression under its cached tools — it must be
+	// tool-not-found and say how to recover, not `Server not found: ""`.
 	for id := 2; id <= 4; id++ {
-		if rpcErr := rpcErrorFromResponse(t, responses[id]); rpcErr == nil || rpcErr.Code != ErrCodeServerNotFound {
-			t.Errorf("response %d error = %v, want ErrCodeServerNotFound", id, rpcErr)
+		rpcErr := rpcErrorFromResponse(t, responses[id])
+		if rpcErr == nil || rpcErr.Code != ErrCodeToolNotFound {
+			t.Errorf("response %d error = %v, want ErrCodeToolNotFound", id, rpcErr)
+			continue
 		}
+		if !strings.Contains(rpcErr.Message, "compression is off") {
+			t.Errorf("response %d message %q missing recovery hint", id, rpcErr.Message)
+		}
+	}
+
+	// Any other dotless name gets tool-not-found with the qualified-name hint.
+	rpcErr := rpcErrorFromResponse(t, responses[5])
+	if rpcErr == nil || rpcErr.Code != ErrCodeToolNotFound {
+		t.Fatalf("dotless name error = %v, want ErrCodeToolNotFound", rpcErr)
+	}
+	if !strings.Contains(rpcErr.Message, `qualified as "server.tool"`) {
+		t.Errorf("dotless name message %q missing qualified-name hint", rpcErr.Message)
 	}
 }
 

@@ -104,6 +104,12 @@ func wrapperTools(listing string) []AggregatedTool {
 // exposed form (qualified name, "[server]" description prefix) and in the same
 // order handleToolsList produces, so the output is stable across calls.
 func formatListing(level CompressionLevel, tools []AggregatedTool) string {
+	if len(tools) == 0 {
+		// A deny-by-default namespace with no allows, or one with no servers,
+		// has nothing to list — but a bare "Available tools:" header with
+		// nothing under it invites the model to invent a name. Say so.
+		return "(none)"
+	}
 	var b strings.Builder
 	for i, t := range tools {
 		if i > 0 {
