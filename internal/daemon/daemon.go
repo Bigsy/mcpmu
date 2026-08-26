@@ -231,6 +231,12 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 		_ = conn.Close()
 		return
 	}
+	compression, err := server.ParseCompressionLevel(handshake.Compression)
+	if err != nil {
+		d.writeHandshakeError(conn, err.Error())
+		_ = conn.Close()
+		return
+	}
 	ctx, cancel := context.WithCancel(d.lifetime)
 	id, ok := d.addSession(cancel, conn)
 	if !ok {
@@ -256,7 +262,8 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 		Namespace:  handshake.Namespace, EagerStart: handshake.Eager,
 		ExposeManagerTools: handshake.ExposeManagerTools,
 		ExposeResources:    handshake.Resources, ExposePrompts: handshake.Prompts,
-		Stdin: reader, Stdout: writer, Stderr: io.Discard,
+		Compression: compression,
+		Stdin:       reader, Stdout: writer, Stderr: io.Discard,
 		ServerName: "mcpmu", ServerVersion: d.opts.Version,
 	})
 	if err != nil {

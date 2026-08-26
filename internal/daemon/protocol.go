@@ -23,6 +23,7 @@ type Handshake struct {
 	Resources          bool   `json:"resources,omitempty"`
 	Prompts            bool   `json:"prompts,omitempty"`
 	Eager              bool   `json:"eager,omitempty"`
+	Compression        string `json:"compression,omitempty"`
 	PID                int    `json:"pid,omitempty"`
 }
 

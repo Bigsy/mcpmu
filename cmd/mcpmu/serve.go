@@ -26,6 +26,7 @@ var (
 	serveResources          bool
 	servePrompts            bool
 	serveIsolated           bool
+	serveCompress           string
 
 	serveHTTP               bool
 	serveAddr               string
@@ -67,6 +68,7 @@ func init() {
 	serveCmd.Flags().BoolVar(&serveResources, "resources", true, "Passthrough resources/* from upstream servers")
 	serveCmd.Flags().BoolVar(&servePrompts, "prompts", true, "Passthrough prompts/* from upstream servers")
 	serveCmd.Flags().BoolVar(&serveIsolated, "isolated", false, "Run embedded with private upstream server instances")
+	serveCmd.Flags().StringVar(&serveCompress, "compress", "", "Compress tools/list into list_tools/get_tool_schema/invoke_tool wrappers (levels: low, medium, high, max; medium recommended)")
 
 	serveCmd.Flags().BoolVar(&serveHTTP, "http", false, "Expose the endpoint over MCP Streamable HTTP instead of stdio")
 	serveCmd.Flags().StringVar(&serveAddr, "addr", httpserve.DefaultAddr, "Listen address for --http")
@@ -85,6 +87,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if err := validateHTTPServeFlags(cmd); err != nil {
+		return err
+	}
+	serveCompression, err := server.ParseCompressionLevel(serveCompress)
+	if err != nil {
 		return err
 	}
 
@@ -135,7 +141,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// linger-driven lifetime can't outlive its sessions to accept the next
 	// connection).
 	if serveHTTP {
-		return runHTTPServe(ctx, cfg, resolvedConfigPath)
+		return runHTTPServe(ctx, cfg, resolvedConfigPath, serveCompression)
 	}
 
 	// Windows has no daemon transport yet; use embedded mode directly instead
@@ -146,6 +152,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			LogLevel: serveLogLevel, Eager: serveEager,
 			ExposeManagerTools: serveExposeManagerTools,
 			Resources:          serveResources, Prompts: servePrompts,
+			Compression: string(serveCompression),
 		})
 		if connectErr == nil {
 			if err := shim.Pump(ctx, connection, os.Stdin, os.Stdout); err != nil && err != context.Canceled {
@@ -157,7 +164,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(os.Stderr, "mcpmu: shared daemon unavailable; falling back to embedded serve: %v\n", connectErr)
 	}
 
-	return runEmbeddedServe(ctx, cfg, resolvedConfigPath)
+	return runEmbeddedServe(ctx, cfg, resolvedConfigPath, serveCompression)
 }
 
 // validateHTTPServeFlags rejects flag combinations that make no sense with
@@ -185,7 +192,7 @@ func validateHTTPServeFlags(cmd *cobra.Command) error {
 
 // runHTTPServe owns one Core directly and serves it over Streamable HTTP
 // until the context ends.
-func runHTTPServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string) error {
+func runHTTPServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string, compression server.CompressionLevel) error {
 	core, err := server.NewCore(server.Options{
 		Config:     cfg,
 		ConfigPath: resolvedConfigPath, // For hot-reload watching
@@ -207,6 +214,7 @@ func runHTTPServe(ctx context.Context, cfg *config.Config, resolvedConfigPath st
 		ExposeManagerTools: serveExposeManagerTools,
 		ExposeResources:    serveResources,
 		ExposePrompts:      servePrompts,
+		Compression:        compression,
 		ServerVersion:      version,
 	})
 	if err != nil {
@@ -258,7 +266,7 @@ func serveUntilShutdown(ctx context.Context, srv httpListener, grace time.Durati
 	return nil
 }
 
-func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string) error {
+func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string, compression server.CompressionLevel) error {
 	// Create server options
 	opts := server.Options{
 		Config:             cfg,
@@ -268,6 +276,7 @@ func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPat
 		ExposeManagerTools: serveExposeManagerTools,
 		ExposeResources:    serveResources,
 		ExposePrompts:      servePrompts,
+		Compression:        compression,
 		LogLevel:           serveLogLevel,
 		Stdin:              os.Stdin,
 		Stdout:             os.Stdout,

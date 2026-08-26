@@ -87,6 +87,22 @@ codex mcp add work -- mcpmu serve --stdio --namespace work
 claude mcp add mcpmu -- mcpmu serve --stdio --expose-manager-tools
 ```
 
+**With a compressed tool surface (saves context on large namespaces):**
+```bash
+claude mcp add mcpmu -- mcpmu serve --stdio --compress medium
+```
+
+With `--compress`, `tools/list` returns only three wrapper tools —
+`list_tools`, `get_tool_schema`, and `invoke_tool` — with a compact
+one-line-per-tool listing embedded in `invoke_tool`'s description. The agent
+fetches full schemas on demand and calls tools through `invoke_tool`, so it
+only pays context for the schemas it actually uses. Levels: `low` (full
+descriptions), `medium` (first sentence — recommended), `high` (argument names
+only), `max` (tool names only). Works with `--http` too. mcpmu tool
+permissions still apply to the real target tool; note that client-side
+per-tool rules only ever see `invoke_tool`, so prefer mcpmu permissions when
+compression is on.
+
 You can verify the registration:
 ```bash
 claude mcp list

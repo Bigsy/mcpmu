@@ -301,6 +301,65 @@ assume it); PID tracking and the `metrics.json` file lock keep it safe.
 daemon rendezvous, and there is no daemon to skip; per-session privacy is the
 per-server `shared: false` config property.
 
+### Compressed Tool Surface
+
+`mcpmu serve --compress <level>` (opt-in; `low`/`medium`/`high`/`max`) shrinks
+what `tools/list` costs a client: instead of every tool's full schema, the
+session exposes three wrapper tools and the client fetches schemas on demand.
+Modelled on atlassian-labs/mcp-compressor, but implemented natively inside the
+serve-mode Session — there is one wrapper set, not one per backend server,
+because tools are already namespaced as `{server}.{tool}`.
+
+| Wrapper | Behaviour |
+|---|---|
+| `list_tools` | Returns the compact listing (below) as text |
+| `get_tool_schema` | `{"tool": "a.b"}` or `{"tools": [...]}` — returns the full `AggregatedTool` (description, `inputSchema`, `outputSchema`, annotations) as text + `structuredContent`; the multi form reports unknown/denied names per entry without failing the call |
+| `invoke_tool` | `{"tool": "a.b", "input": {…}}` — rewrites the request and falls through to the normal `tools/call` path |
+
+The listing is one line per tool —
+`<tool>server.name(required, optional?): description</tool>` — and is embedded
+in `invoke_tool`'s description at every level, so the model sees the available
+tools on the first `tools/list` without an extra call. The level sets what
+each line carries: `low` full description, `medium` first sentence, `high`
+argument names only, `max` name only. Argument names come from
+`inputSchema.properties` walked with `json.Decoder` tokens to preserve the
+author's key order (a map would shuffle them between calls); invalid or
+non-object schemas render as `name()`.
+
+Where it plugs in (`internal/server`):
+
+- `compress.go` holds the pure pieces: `CompressionLevel`, the listing
+  formatter, and the wrapper tool definitions.
+- `handleToolsList` branches after the shared `visibleTools` helper (grace
+  period, background discovery, and permission filter — identical to the
+  uncompressed path), so denied tools never appear in the listing.
+- `handleToolsCall` intercepts the wrapper names before `ParseToolName`.
+  `invoke_tool` rewrites `req.Name`/`req.Arguments` and falls through —
+  namespace enforcement, `_meta` rewriting, `Router.CallTool` permission
+  checks, the stale-session retry, and metrics recording all run on the
+  *target* tool with zero changes. `get_tool_schema` applies the same
+  namespace/enabled/permission checks the direct path does, and falls back to
+  `Aggregator.DiscoverServer` for servers not discovered yet — the compressed
+  analogue of lazy startup. With compression off, wrapper names fall through
+  and get the same error any unknown dotless name does.
+- Wrapper names contain no dot, so they cannot collide with `{server}.{tool}`;
+  an upstream tool literally named `invoke_tool` stays callable as
+  `{server}.invoke_tool`.
+
+Interactions: metrics for `invoke_tool` record against the target server/tool;
+`list_tools`/`get_tool_schema` are meta-calls recorded under `server="mcpmu"`
+like manager tools. Manager tools stay real tools when
+`--expose-manager-tools` is set. The listing is rebuilt per call from the
+current config and catalog, so hot reload needs no extra plumbing, and
+straggler discovery works unchanged — the client re-lists on
+`tools/list_changed` and gets a wrapper whose description now includes the
+late server's tools. Compression is a Session option, not a Core one: two
+daemon-attached serves can run different levels against the same daemon (the
+level travels in the shim handshake). One trade-off to know: a client's own
+per-tool allow/deny rules only ever see `invoke_tool`; mcpmu's permissions are
+unaffected because they run on the real target, which is the reason this mode
+is opt-in rather than the default.
+
 ### Verified Upstream Catalog
 
 The Supervisor is the single owner of upstream initialization and initial

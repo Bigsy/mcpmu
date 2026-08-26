@@ -28,20 +28,24 @@ var DebugLogging bool
 // Options configures the MCP server.
 type Options struct {
 	Config             *config.Config
-	ConfigPath         string        // Expanded path for hot-reload watching (empty = no watching)
-	PIDTrackerDir      string        // Directory for per-owner PID registries (empty = derive from ConfigPath or default)
-	Namespace          string        // Namespace to expose (empty = auto-select)
-	EagerStart         bool          // Pre-start all servers
-	ExposeManagerTools bool          // Include mcpmu.* tools in tools/list
-	ExposeResources    bool          // Passthrough resources/* from upstream servers
-	ExposePrompts      bool          // Passthrough prompts/* from upstream servers
-	DebounceDelay      time.Duration // Delay before applying config changes (default: 150ms)
-	LogLevel           string
-	Stdin              io.Reader
-	Stdout             io.Writer
-	Stderr             io.Writer
-	ServerName         string
-	ServerVersion      string
+	ConfigPath         string // Expanded path for hot-reload watching (empty = no watching)
+	PIDTrackerDir      string // Directory for per-owner PID registries (empty = derive from ConfigPath or default)
+	Namespace          string // Namespace to expose (empty = auto-select)
+	EagerStart         bool   // Pre-start all servers
+	ExposeManagerTools bool   // Include mcpmu.* tools in tools/list
+	ExposeResources    bool   // Passthrough resources/* from upstream servers
+	ExposePrompts      bool   // Passthrough prompts/* from upstream servers
+	// Compression replaces tools/list with the list_tools/get_tool_schema/
+	// invoke_tool wrapper surface. Per-Session, not per-Core: two sessions
+	// against one daemon can run different levels. Zero value = off.
+	Compression   CompressionLevel
+	DebounceDelay time.Duration // Delay before applying config changes (default: 150ms)
+	LogLevel      string
+	Stdin         io.Reader
+	Stdout        io.Writer
+	Stderr        io.Writer
+	ServerName    string
+	ServerVersion string
 }
 
 // SelectionMethod indicates how the active namespace was selected.
@@ -708,6 +712,39 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 		s.mu.RUnlock()
 		return nil, ErrInvalidRequest("not initialized")
 	}
+	s.mu.RUnlock()
+
+	// The listing runs under the session lifetime, not the request: tools/list
+	// is handled synchronously on the main loop, and shutdown must cut the
+	// discovery grace period short while a client cancelling its own tools/list
+	// must not abort a server start other requests are waiting on.
+	tools := s.visibleTools(s.lifetime)
+
+	// Compressed surface: the client sees only the wrapper tools; the full
+	// listing rides inside invoke_tool's description (and list_tools). Manager
+	// tools stay real — they are already opt-in and tiny.
+	if s.opts.Compression.enabled() {
+		wrappers := wrapperTools(formatListing(s.opts.Compression, tools))
+		if s.opts.ExposeManagerTools {
+			wrappers = append(wrappers, s.currentAggregator().ManagerTools()...)
+		}
+		return toolsListResult{Tools: wrappers}, nil
+	}
+
+	if s.opts.ExposeManagerTools {
+		tools = append(tools, s.currentAggregator().ManagerTools()...)
+	}
+	return toolsListResult{Tools: tools}, nil
+}
+
+// visibleTools returns this session's permission-filtered upstream tools in
+// stable order (namespace server order, then upstream order), waiting up to
+// the grace period for discovery and continuing stragglers in the background.
+// Manager tools are not included — exposure is the caller's choice. ctx bounds
+// the grace period: handleToolsList passes the session lifetime, the async
+// list_tools wrapper the request context (like any other tools/call).
+func (s *Session) visibleTools(ctx context.Context) []AggregatedTool {
+	s.mu.RLock()
 	activeNamespaceName := s.activeNamespaceName
 	activeServerNames := s.activeServerNames
 	cfg := s.currentConfig()
@@ -720,15 +757,9 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	if gracePeriod == 0 {
 		gracePeriod = ListToolsGracePeriod
 	}
-	// The grace period runs under the session lifetime, not the request:
-	// shutdown must cut it short, but a client cancelling its own tools/list
-	// must not abort a server start other requests are waiting on.
-	graceCtx, cancel := context.WithTimeout(s.lifetime, gracePeriod)
+	graceCtx, cancel := context.WithTimeout(ctx, gracePeriod)
 	defer cancel()
 	tools := s.listTools(graceCtx, activeServerNames)
-	if s.opts.ExposeManagerTools {
-		tools = append(tools, s.currentAggregator().ManagerTools()...)
-	}
 
 	// If any servers didn't finish in time, continue in the background.
 	// Pass the caller's snapshot of activeServerNames so the goroutine
@@ -758,9 +789,7 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 			filtered = append(filtered, tool)
 		}
 	}
-	tools = filtered
-
-	return toolsListResult{Tools: tools}, nil
+	return filtered
 }
 
 func (s *Session) splitServersBySharing(serverNames []string) (shared, private []string) {
@@ -962,6 +991,40 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 		return nil, ErrInvalidParams(err.Error())
 	}
 
+	// Compressed surface: intercept the wrapper tools before ParseToolName.
+	// With compression off these names fall through and get the same error any
+	// unknown dotless name does.
+	if s.opts.Compression.enabled() {
+		switch req.Name {
+		case wrapperListTools:
+			return s.handleListToolsWrapper(ctx, router)
+		case wrapperGetToolSchema:
+			return s.handleGetToolSchemaWrapper(ctx, router, req.Arguments)
+		case wrapperInvokeTool:
+			var args invokeToolArgs
+			if len(req.Arguments) > 0 {
+				if err := json.Unmarshal(req.Arguments, &args); err != nil {
+					return nil, ErrInvalidParams(wrapperInvokeTool + ": " + err.Error())
+				}
+			}
+			if args.Tool == "" {
+				return nil, ErrInvalidParams(wrapperInvokeTool + `: "tool" is required (qualified name like "server.tool_name")`)
+			}
+			// The client can no longer schema-validate before sending, so
+			// catch a non-object input here with an error the model can act
+			// on, instead of forwarding it into an opaque upstream failure.
+			if input := bytes.TrimSpace(args.Input); len(input) > 0 &&
+				input[0] != '{' && !bytes.Equal(input, []byte("null")) {
+				return nil, ErrInvalidParams(wrapperInvokeTool + `: "input" must be a JSON object holding the tool's arguments`)
+			}
+			// Rewrite to the target and fall through: namespace enforcement,
+			// permission checks, the retry path, and metrics recording all run
+			// on the target tool with zero changes.
+			req.Name = args.Tool
+			req.Arguments = args.Input
+		}
+	}
+
 	// Parse tool name to check namespace enforcement
 	serverName, _, isManager := ParseToolName(req.Name)
 
@@ -997,6 +1060,133 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 	}
 
 	return result, nil
+}
+
+// handleListToolsWrapper serves the list_tools wrapper: the compact listing as
+// a text result, rebuilt per call from the current config and catalog. router
+// is the caller's snapshot — a reload can swap s.router concurrently, so it
+// must not be re-read here.
+func (s *Session) handleListToolsWrapper(ctx context.Context, router *Router) (any, *RPCError) {
+	start := time.Now()
+	listing := formatListing(s.opts.Compression, s.visibleTools(ctx))
+	router.recordMeta(wrapperListTools, start, nil)
+	return textResult(listing), nil
+}
+
+// handleGetToolSchemaWrapper serves the get_tool_schema wrapper. A single
+// "tool" returns the full AggregatedTool, or the same RPC error the direct
+// tools/call path would produce. A "tools" array returns one entry per name,
+// reporting unknown or denied names per entry without failing the call.
+// router is the caller's snapshot (see handleListToolsWrapper).
+func (s *Session) handleGetToolSchemaWrapper(ctx context.Context, router *Router, arguments json.RawMessage) (any, *RPCError) {
+	start := time.Now()
+	fail := func(rpcErr *RPCError) (any, *RPCError) {
+		router.recordMeta(wrapperGetToolSchema, start, rpcErr)
+		return nil, rpcErr
+	}
+	var args getToolSchemaArgs
+	if len(arguments) > 0 {
+		if err := json.Unmarshal(arguments, &args); err != nil {
+			return fail(ErrInvalidParams(wrapperGetToolSchema + ": " + err.Error()))
+		}
+	}
+	if (args.Tool != "") == (len(args.Tools) > 0) {
+		return fail(ErrInvalidParams(wrapperGetToolSchema + `: pass exactly one of "tool" or "tools"`))
+	}
+	if args.Tool != "" {
+		tool, rpcErr := s.resolveToolSchema(ctx, args.Tool)
+		if rpcErr != nil {
+			return fail(rpcErr)
+		}
+		result, rpcErr := schemaResult(tool)
+		if rpcErr != nil {
+			return fail(rpcErr)
+		}
+		router.recordMeta(wrapperGetToolSchema, start, nil)
+		return result, nil
+	}
+	type schemaError struct {
+		Tool  string    `json:"tool"`
+		Error *RPCError `json:"error"`
+	}
+	entries := make([]any, 0, len(args.Tools))
+	for _, name := range args.Tools {
+		tool, rpcErr := s.resolveToolSchema(ctx, name)
+		if rpcErr != nil {
+			entries = append(entries, schemaError{Tool: name, Error: rpcErr})
+			continue
+		}
+		entries = append(entries, tool)
+	}
+	result, rpcErr := schemaResult(struct {
+		Tools []any `json:"tools"`
+	}{Tools: entries})
+	if rpcErr != nil {
+		return fail(rpcErr)
+	}
+	router.recordMeta(wrapperGetToolSchema, start, nil)
+	return result, nil
+}
+
+// schemaResult renders v as an indented JSON text block plus structuredContent.
+func schemaResult(v any) (any, *RPCError) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return nil, ErrInternalError("marshal tool schema: " + err.Error())
+	}
+	result := textResult(string(data))
+	result.StructuredContent = data
+	return result, nil
+}
+
+// resolveToolSchema looks up one qualified tool for get_tool_schema, applying
+// the same namespace, enabled, and permission checks the direct tools/call
+// path performs — denied tools are refused so the model never learns about
+// tools it cannot call. A server not discovered yet (lazy start, straggler)
+// is discovered under a timeout instead of returning not-found — the
+// compressed analogue of lazy startup.
+func (s *Session) resolveToolSchema(ctx context.Context, qualifiedName string) (AggregatedTool, *RPCError) {
+	serverName, toolName, isManager := ParseToolName(qualifiedName)
+	if isManager || serverName == "" {
+		// Deliberate divergence from the direct path, which answers a dotless
+		// name with ErrServerNotFound("") — tool-not-found names the actual
+		// problem for a model reading the error. Manager tools are excluded by
+		// design: they stay real tools with full schemas in tools/list.
+		return AggregatedTool{}, ErrToolNotFound(qualifiedName)
+	}
+	s.mu.RLock()
+	activeNamespaceName := s.activeNamespaceName
+	activeServerNames := s.activeServerNames
+	s.mu.RUnlock()
+	if !slices.Contains(activeServerNames, serverName) {
+		return AggregatedTool{}, ErrServerNotFound(serverName)
+	}
+	cfg := s.currentConfig()
+	srv, ok := cfg.GetServer(serverName)
+	if !ok {
+		return AggregatedTool{}, ErrServerNotFound(serverName)
+	}
+	if !srv.IsEnabled() {
+		return AggregatedTool{}, NewRPCError(ErrCodeServerNotRunning, "server is disabled: "+serverName, nil)
+	}
+	if allowed, reason := IsToolAllowed(cfg, activeNamespaceName, serverName, toolName); !allowed {
+		return AggregatedTool{}, ErrToolDenied(qualifiedName, reason)
+	}
+	agg := s.aggregatorForServer(serverName)
+	if tool, ok := agg.GetTool(qualifiedName); ok {
+		return tool, nil
+	}
+	// Discovery runs under the request context, exactly like the direct
+	// tools/call lazy-start path — the client can cancel its own call.
+	discoverCtx, cancel := context.WithTimeout(ctx, DefaultToolDiscoveryTimeout)
+	defer cancel()
+	if _, err := agg.DiscoverServer(discoverCtx, serverName); err != nil {
+		return AggregatedTool{}, ErrServerFailedToStart(serverName, err.Error())
+	}
+	if tool, ok := agg.GetTool(qualifiedName); ok {
+		return tool, nil
+	}
+	return AggregatedTool{}, ErrToolNotFound(qualifiedName)
 }
 
 // handleResourcesList handles the resources/list request.

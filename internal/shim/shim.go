@@ -32,6 +32,9 @@ type Options struct {
 	Resources          bool
 	Prompts            bool
 	Eager              bool
+	// Compression is the serve-side CompressionLevel as a string; the shim
+	// forwards it opaquely in the handshake and the daemon parses it.
+	Compression string
 
 	startupTimeout   time.Duration
 	handshakeTimeout time.Duration
@@ -158,7 +161,8 @@ func dialSession(ctx context.Context, socket, build string, opts Options) (*Conn
 		Type: "session", Protocol: daemon.SessionProtocol, Build: build,
 		ConfigPath: opts.ConfigPath, Namespace: opts.Namespace,
 		ExposeManagerTools: opts.ExposeManagerTools, Resources: opts.Resources,
-		Prompts: opts.Prompts, Eager: opts.Eager, PID: os.Getpid(),
+		Prompts: opts.Prompts, Eager: opts.Eager, Compression: opts.Compression,
+		PID: os.Getpid(),
 	}})
 	if err != nil {
 		return fail(fmt.Errorf("marshal daemon handshake: %w", err))

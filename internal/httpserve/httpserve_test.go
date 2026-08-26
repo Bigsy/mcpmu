@@ -106,6 +106,84 @@ func TestInitializeIssuesSessionAndRoutesCalls(t *testing.T) {
 	}
 }
 
+// TestCompressedSessionOverHTTP covers the compressed tool surface on the
+// HTTP session-construction path (handlers.go), which builds Sessions
+// separately from embedded serve: tools/list returns only the wrappers, and
+// get_tool_schema/invoke_tool resolve the real tools behind them.
+func TestCompressedSessionOverHTTP(t *testing.T) {
+	fake := mcptest.DefaultConfig()
+	fake.EchoToolCalls = true
+	_, base := startServer(t, singleServerConfig(t, fake), func(o *Options) {
+		o.Compression = server.CompressionMedium
+	})
+	probe := &mcptest.HTTPProbe{BaseURL: base + "/mcp"}
+	probe.Initialize(t)
+
+	list := probe.Call(t, 2, "tools/list", nil)
+	if list.Error != nil {
+		t.Fatalf("tools/list: %d %s", list.Error.Code, list.Error.Message)
+	}
+	var tools struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(list.Result, &tools); err != nil {
+		t.Fatalf("decode tools/list: %v", err)
+	}
+	if len(tools.Tools) != 3 {
+		t.Fatalf("expected the 3 wrapper tools, got %d: %+v", len(tools.Tools), tools.Tools)
+	}
+	var invokeDescription string
+	for _, tool := range tools.Tools {
+		if tool.Name == "invoke_tool" {
+			invokeDescription = tool.Description
+		}
+	}
+	if !strings.Contains(invokeDescription, "fake.read_file") {
+		t.Fatalf("invoke_tool description missing the listing: %q", invokeDescription)
+	}
+
+	schema := probe.Call(t, 3, "tools/call", map[string]any{
+		"name": "get_tool_schema", "arguments": map[string]any{"tool": "fake.read_file"},
+	})
+	if schema.Error != nil {
+		t.Fatalf("get_tool_schema: %d %s", schema.Error.Code, schema.Error.Message)
+	}
+	var schemaResult struct {
+		StructuredContent struct {
+			Name string `json:"name"`
+		} `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(schema.Result, &schemaResult); err != nil {
+		t.Fatalf("decode get_tool_schema: %v", err)
+	}
+	if schemaResult.StructuredContent.Name != "fake.read_file" {
+		t.Fatalf("get_tool_schema resolved %q, want fake.read_file", schemaResult.StructuredContent.Name)
+	}
+
+	call := probe.Call(t, 4, "tools/call", map[string]any{
+		"name": "invoke_tool", "arguments": map[string]any{
+			"tool": "fake.read_file", "input": map[string]any{"path": "x"},
+		},
+	})
+	if call.Error != nil {
+		t.Fatalf("invoke_tool: %d %s", call.Error.Code, call.Error.Message)
+	}
+	var callResult struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(call.Result, &callResult); err != nil {
+		t.Fatalf("decode invoke_tool result: %v", err)
+	}
+	if len(callResult.Content) == 0 || !strings.Contains(callResult.Content[0].Text, "read_file") {
+		t.Fatalf("invoke_tool did not reach the target tool: %+v", callResult)
+	}
+}
+
 func TestSecondInitializeOnSessionIs400(t *testing.T) {
 	_, base := startServer(t, singleServerConfig(t, mcptest.DefaultConfig()), nil)
 	probe := &mcptest.HTTPProbe{BaseURL: base + "/mcp"}
@@ -745,7 +823,7 @@ func TestShutdownEndsStreamsAndKeepsSessionsThroughTheDrain(t *testing.T) {
 		if err != nil {
 			return 0 // connection gone
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return resp.StatusCode
 	}

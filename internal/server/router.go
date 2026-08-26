@@ -189,6 +189,26 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	}, nil
 }
 
+// recordMeta records a compressed-surface meta-call (list_tools,
+// get_tool_schema) under server="mcpmu", the way manager tools are recorded —
+// visible on the Metrics page without polluting per-server error rates.
+// invoke_tool is deliberately absent: it dispatches through CallTool, which
+// records the sample against the target tool.
+func (r *Router) recordMeta(tool string, start time.Time, rpcErr *RPCError) {
+	outcome := metrics.OutcomeOK
+	if rpcErr != nil {
+		outcome = metrics.OutcomeError
+	}
+	r.session.currentRecorder().Record(metrics.CallSample{
+		Time:      start,
+		Namespace: r.activeNamespaceName,
+		Server:    "mcpmu",
+		Tool:      tool,
+		Duration:  time.Since(start),
+		Outcome:   outcome,
+	})
+}
+
 // handleManagerTool handles mcpmu.* meta-tools.
 func (r *Router) handleManagerTool(ctx context.Context, toolName string, arguments json.RawMessage) (*ToolCallResult, *RPCError) {
 	switch toolName {

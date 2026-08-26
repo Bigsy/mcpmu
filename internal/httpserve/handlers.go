@@ -176,6 +176,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, routeN
 		ExposeManagerTools: s.opts.ExposeManagerTools,
 		ExposeResources:    s.opts.ExposeResources,
 		ExposePrompts:      s.opts.ExposePrompts,
+		Compression:        s.opts.Compression,
 		Stdin:              strings.NewReader(""),
 		Stdout:             hub,
 		Stderr:             io.Discard,

@@ -80,6 +80,7 @@ type Options struct {
 	ExposeManagerTools bool
 	ExposeResources    bool
 	ExposePrompts      bool
+	Compression        server.CompressionLevel
 	ServerVersion      string
 }
 

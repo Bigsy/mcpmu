@@ -1252,12 +1252,96 @@ EOF
   return "$rc"
 }
 
+# Verifies the compressed tool surface (`serve --compress`): tools/list
+# returns only the three wrapper tools, the embedded listing names the real
+# tool, get_tool_schema resolves the full definition, and invoke_tool
+# round-trips to the upstream. Real binary, real flag parsing — catches
+# CLI-to-Session plumbing regressions unit tests can't.
+smoke_serve_compress() {
+  local tmp cfg fake response rc=0
+  tmp=$(mktemp -d -t mcpmu-smoke-compress.XXXXXX)
+  cfg="$tmp/config.json"
+  fake="$tmp/fake-mcp.sh"
+
+  cat > "$fake" <<'EOF'
+#!/usr/bin/env bash
+while IFS= read -r line; do
+  method=$(printf '%s' "$line" | jq -r '.method // empty')
+  id=$(printf '%s' "$line" | jq -r '.id // empty')
+  case "$method" in
+    initialize)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"smoke-compress","version":"1"}}}\n' "$id"
+      ;;
+    tools/list)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","description":"Ping the smoke server. Returns pong.","inputSchema":{"type":"object","properties":{"target":{"type":"string"}},"required":["target"]}}]}}\n' "$id"
+      ;;
+    tools/call)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong"}]}}\n' "$id"
+      ;;
+  esac
+done
+EOF
+  chmod 0700 "$fake"
+
+  jq -n --arg command "$fake" '{
+    schemaVersion: 1,
+    servers: {
+      pinger: {
+        command: $command,
+        startup_timeout_sec: 5
+      }
+    },
+    namespaces: {}
+  }' > "$cfg"
+
+  response=$({
+    printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpmu-smoke","version":"0"}}}\n'
+    printf '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
+    printf '{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n'
+    printf '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_tool_schema","arguments":{"tool":"pinger.ping"}}}\n'
+    printf '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"invoke_tool","arguments":{"tool":"pinger.ping","input":{"target":"x"}}}}\n'
+    sleep 3
+  } | ./mcpmu serve --stdio --isolated --config "$cfg" --compress medium 2>/dev/null)
+
+  # tools/list must return exactly the three wrappers, with the listing
+  # embedded in invoke_tool's description.
+  if ! printf '%s\n' "$response" \
+    | jq -e 'select(.id == 2) | .result.tools | map(.name) | sort == ["get_tool_schema","invoke_tool","list_tools"]' >/dev/null; then
+    echo "FAIL: tools/list did not return exactly the three wrapper tools"
+    printf '%s\n' "$response" | head -5
+    rc=1
+  fi
+  if ! printf '%s\n' "$response" \
+    | jq -e 'select(.id == 2) | .result.tools[] | select(.name == "invoke_tool") | .description | contains("<tool>pinger.ping(target)")' >/dev/null; then
+    echo "FAIL: invoke_tool description does not embed the compact listing"
+    rc=1
+  fi
+
+  # get_tool_schema resolves the full definition.
+  if ! printf '%s\n' "$response" \
+    | jq -e 'select(.id == 3) | .result.structuredContent | .name == "pinger.ping" and (.inputSchema.properties | has("target"))' >/dev/null; then
+    echo "FAIL: get_tool_schema did not return the full tool definition"
+    rc=1
+  fi
+
+  # invoke_tool round-trips to the upstream.
+  if ! printf '%s\n' "$response" \
+    | jq -e 'select(.id == 4) | select(.result.content[0].text == "pong")' >/dev/null; then
+    echo "FAIL: invoke_tool did not reach the upstream tool"
+    rc=1
+  fi
+
+  rm -rf "$tmp"
+  return "$rc"
+}
+
 # Register new smoke checks here.
 SMOKE_CHECKS=(
   smoke_cf_access_headers
   smoke_process_group_cleanup
   smoke_stdio_trailing_frame
   smoke_usage_metrics
+  smoke_serve_compress
   smoke_http_sse_notification
   smoke_tool_metadata_fidelity
   smoke_protocol_negotiation

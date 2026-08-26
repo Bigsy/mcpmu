@@ -229,6 +229,7 @@ A common pattern: keep a lean namespace with only your most-used tools for every
 - **Interactive TUI** — Real-time logs, server status, start/stop controls, and namespace switching
 - **Web UI** — Browser-based management via `mcpmu web` with live log streaming, CRUD operations, and registry browser
 - **Usage metrics** — Per-tool call counts, error rates, and latency collected in serve mode, with an unused-tools view answering "am I actually using all the tools I've assigned?" (web UI **Metrics** page, or `GET /api/metrics` for scripting)
+- **Compressed tool surface** — Opt-in `--compress` replaces the full `tools/list` with three lazy wrapper tools, so agents only spend context on the tool schemas they actually use
 
 ## Serve Mode
 
@@ -317,6 +318,31 @@ Each namespace gets its own URL — one running process, many toolsets:
 `--session-idle-timeout` (default 30m) are reaped, which is what keeps
 `shared: false` servers safe here too — each HTTP session gets its own private
 instance, so session count is process count.
+
+### Compressed tool surface
+
+A namespace with several large servers (Atlassian + GitHub + Grafana) can ship
+tens of thousands of tokens of tool schemas on every session start. Opt-in
+`--compress` replaces that with three wrapper tools, so the client only pays
+for the schemas it actually fetches:
+
+```bash
+mcpmu serve --stdio --compress medium      # works with --http too
+```
+
+`tools/list` then returns just `list_tools`, `get_tool_schema`, and
+`invoke_tool`, with a compact one-line-per-tool listing embedded in
+`invoke_tool`'s description — the agent sees every available tool up front,
+fetches full schemas on demand with `get_tool_schema`, and calls tools through
+`invoke_tool`. The level sets how much each listing line carries: `low` (full
+description), `medium` (first sentence — recommended), `high` (argument names
+only), `max` (tool names only), modelled on
+[mcp-compressor](https://github.com/atlassian-labs/mcp-compressor).
+
+Namespace permissions and usage metrics are enforced and recorded against the
+real target tool, and denied tools never appear in the listing. One caveat:
+client-side per-tool allow/deny rules only ever see `invoke_tool`, so use
+mcpmu's tool permissions to restrict tools in this mode.
 
 Security: pass a bearer token via `--token` or `MCPMU_SERVE_TOKEN`; loopback
 binds may run tokenless (the unauthenticated endpoint is then loopback-only,

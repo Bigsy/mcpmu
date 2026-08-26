@@ -67,6 +67,7 @@ mcpmu serve --stdio -n work --log-level debug --eager
 mcpmu serve --stdio --expose-manager-tools
 mcpmu serve --stdio --resources --prompts
 mcpmu serve --stdio --isolated
+mcpmu serve --stdio --compress medium
 ```
 
 ### Serve flags
@@ -80,6 +81,16 @@ mcpmu serve --stdio --isolated
 - `--resources` — passthrough resources/* from upstream servers (default: on)
 - `--prompts` — passthrough prompts/* from upstream servers (default: on)
 - `--isolated` — bypass shared-daemon mode for this process and run embedded (stdio only)
+- `--compress` — compressed tool surface: `tools/list` returns only three wrapper
+  tools (`list_tools`, `get_tool_schema`, `invoke_tool`) with a compact
+  one-line-per-tool listing embedded in `invoke_tool`'s description, so the
+  client only pays context for the schemas it actually fetches. Levels control
+  how much each listing line carries: `low` (full description), `medium` (first
+  sentence — recommended), `high` (argument names only), `max` (tool names only).
+  Off by default. Applies to `--stdio` and `--http` identically. mcpmu-side
+  permissions and usage metrics are enforced/recorded against the real target
+  tool; note that client-side per-tool allow/deny rules only ever see
+  `invoke_tool`, so use mcpmu permissions to restrict tools in this mode.
 
 Resource URIs are passed through unmodified from upstream servers. Prompt names are qualified as `serverName.promptName`.
 
