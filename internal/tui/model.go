@@ -272,39 +272,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	// Handle modal forms first - they need ALL messages
-	// Server form
-	if m.serverForm.IsVisible() {
-		return m.updateWithServerForm(msg)
-	}
-
-	// Namespace form
-	if m.namespaceForm.IsVisible() {
-		return m.updateWithNamespaceForm(msg)
-	}
-
-	// Server picker modal
-	if m.serverPicker.IsVisible() {
-		return m.updateWithServerPicker(msg)
-	}
-
-	// Tool permissions modal
-	if m.toolPerms.IsVisible() {
-		return m.updateWithToolPerms(msg)
-	}
-
-	// Tool deny editor modal
-	if m.toolDenyEditor.IsVisible() {
-		return m.updateWithToolDenyEditor(msg)
-	}
-
-	// Add method selector modal
-	if m.addMethod.IsVisible() {
-		return m.updateWithAddMethod(msg)
-	}
-
-	// Registry browser modal
-	if m.registryBrowser.IsVisible() {
-		return m.updateWithRegistryBrowser(msg)
+	if m.modalVisible() {
+		return m.updateModal(msg)
 	}
 
 	// Handle pending registry install (deferred form opening after browser closes)
@@ -384,23 +353,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleToolDenyResult(msg)
 
 	case views.AddMethodResult:
-		m.addMethod.Hide()
-		if msg.Submitted {
-			switch msg.Method {
-			case "manual":
-				return m, m.serverForm.ShowAdd()
-			case "registry":
-				m.registryBrowser.Show()
-			}
-		}
-		return m, nil
+		return m.handleAddMethodResult(msg)
 
 	case views.RegistryBrowserResult:
-		if msg.Submitted {
-			m.pendingRegistryInstall = &msg.Spec
-		}
-		m.registryBrowser.Hide()
-		return m, nil
+		return m.handleRegistryBrowserResult(msg)
 
 	case views.ConfirmResult:
 		return m.handleConfirmResult(msg)
@@ -1277,17 +1233,107 @@ func (m Model) renderConfirmOverlay(base string) string {
 // Modal form update handlers
 // ============================================================================
 
-// modalUpdateConfig holds the callbacks for modal-specific behavior.
+// modalUpdateConfig describes one modal to updateModal: how to resize it, how
+// to feed it messages, and how to recognise and handle its result message.
+// Every modal goes through updateModal — there is deliberately no per-modal
+// update loop, because the event-pump re-arm in updateModal is what keeps
+// status/log/toast delivery alive while a modal is open
+// (TestEventPump_ReArmedWithEveryModalOpen).
 type modalUpdateConfig struct {
-	setSize      func(width, height int)         // Called on WindowSizeMsg to resize the modal
-	handleResult func(msg tea.Msg) (bool, Model) // Returns (handled, updatedModel) if msg is the result type
-	updateForm   func(msg tea.Msg) tea.Cmd       // Updates the modal form component
+	setSize      func(width, height int)                      // Called on WindowSizeMsg to resize the modal
+	handleResult func(msg tea.Msg) (bool, tea.Model, tea.Cmd) // Returns (handled, model, cmd) if msg is the result type
+	updateForm   func(msg tea.Msg) tea.Cmd                    // Updates the modal form component
+}
+
+// resultHandler adapts a typed handle*Result method to modalUpdateConfig.handleResult.
+func resultHandler[T any](handle func(T) (tea.Model, tea.Cmd)) func(tea.Msg) (bool, tea.Model, tea.Cmd) {
+	return func(msg tea.Msg) (bool, tea.Model, tea.Cmd) {
+		if result, ok := msg.(T); ok {
+			model, cmd := handle(result)
+			return true, model, cmd
+		}
+		return false, nil, nil
+	}
+}
+
+// modalVisible reports whether any modal is open.
+func (m Model) modalVisible() bool {
+	_, ok := m.activeModal()
+	return ok
+}
+
+// activeModal returns the update config for the visible modal, if any. Order
+// matters only when two are visible at once (e.g. the server form opened from
+// the add-method selector), and mirrors the historical precedence.
+//
+// The closures are bound to *this* m, so the caller must build the config on
+// the same copy of the model it mutates and returns — several views are held
+// by value, and a config built on another copy would update the wrong one.
+func (m *Model) activeModal() (modalUpdateConfig, bool) {
+	switch {
+	case m.serverForm.IsVisible():
+		return modalUpdateConfig{
+			setSize: func(w, h int) {
+				m.helpOverlay.SetSize(w, h)
+				m.serverForm.SetSize(w, h)
+				m.confirmDlg.SetSize(w, h)
+				m.toast.SetSize(w, h)
+			},
+			handleResult: resultHandler(m.handleServerFormResult),
+			updateForm:   m.serverForm.Update,
+		}, true
+	case m.namespaceForm.IsVisible():
+		return modalUpdateConfig{
+			setSize:      m.namespaceForm.SetSize,
+			handleResult: resultHandler(m.handleNamespaceFormResult),
+			updateForm:   m.namespaceForm.Update,
+		}, true
+	case m.serverPicker.IsVisible():
+		return modalUpdateConfig{
+			setSize:      m.serverPicker.SetSize,
+			handleResult: resultHandler(m.handleServerPickerResult),
+			updateForm:   m.serverPicker.Update,
+		}, true
+	case m.toolPerms.IsVisible():
+		return modalUpdateConfig{
+			setSize:      m.toolPerms.SetSize,
+			handleResult: resultHandler(m.handleToolPermissionsResult),
+			updateForm:   m.toolPerms.Update,
+		}, true
+	case m.toolDenyEditor.IsVisible():
+		return modalUpdateConfig{
+			setSize:      m.toolDenyEditor.SetSize,
+			handleResult: resultHandler(m.handleToolDenyResult),
+			updateForm:   m.toolDenyEditor.Update,
+		}, true
+	case m.addMethod.IsVisible():
+		return modalUpdateConfig{
+			setSize:      m.addMethod.SetSize,
+			handleResult: resultHandler(m.handleAddMethodResult),
+			updateForm: func(msg tea.Msg) tea.Cmd {
+				var cmd tea.Cmd
+				m.addMethod, cmd = m.addMethod.Update(msg)
+				return cmd
+			},
+		}, true
+	case m.registryBrowser.IsVisible():
+		return modalUpdateConfig{
+			setSize:      m.registryBrowser.SetSize,
+			handleResult: resultHandler(m.handleRegistryBrowserResult),
+			updateForm:   m.registryBrowser.Update,
+		}, true
+	}
+	return modalUpdateConfig{}, false
 }
 
 // updateModal is the common update handler for all modal forms.
 // It handles: Ctrl+C quit, window resize, result messages, form updates,
-// event handling, and toast updates.
-func (m Model) updateModal(msg tea.Msg, cfg modalUpdateConfig) (tea.Model, tea.Cmd) {
+// event handling (with event-pump re-arm), and toast updates.
+func (m Model) updateModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+	cfg, ok := m.activeModal()
+	if !ok {
+		return m, nil
+	}
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -1301,8 +1347,8 @@ func (m Model) updateModal(msg tea.Msg, cfg modalUpdateConfig) (tea.Model, tea.C
 		m.updateLayout()
 		cfg.setSize(msg.Width, msg.Height)
 	default:
-		if handled, updatedModel := cfg.handleResult(msg); handled {
-			return updatedModel, nil
+		if handled, model, cmd := cfg.handleResult(msg); handled {
+			return model, cmd
 		}
 	}
 
@@ -1326,215 +1372,25 @@ func (m Model) updateModal(msg tea.Msg, cfg modalUpdateConfig) (tea.Model, tea.C
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) updateWithAddMethod(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.CtrlC) {
-			return m, tea.Quit
+func (m Model) handleAddMethodResult(result views.AddMethodResult) (tea.Model, tea.Cmd) {
+	m.addMethod.Hide()
+	if result.Submitted {
+		switch result.Method {
+		case "manual":
+			return m, m.serverForm.ShowAdd()
+		case "registry":
+			m.registryBrowser.Show()
 		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.updateLayout()
-	case views.AddMethodResult:
-		m.addMethod.Hide()
-		if msg.Submitted {
-			switch msg.Method {
-			case "manual":
-				return m, m.serverForm.ShowAdd()
-			case "registry":
-				m.registryBrowser.Show()
-			}
-		}
-		return m, nil
 	}
-
-	var cmd tea.Cmd
-	m.addMethod, cmd = m.addMethod.Update(msg)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
-	// Handle events while modal is open
-	if evt, ok := msg.(events.Event); ok {
-		if eCmd := m.handleEvent(evt); eCmd != nil {
-			cmds = append(cmds, eCmd)
-		}
-		cmds = append(cmds, m.waitForEvent())
-	}
-
-	var toastCmd tea.Cmd
-	m.toast, toastCmd = m.toast.Update(msg)
-	if toastCmd != nil {
-		cmds = append(cmds, toastCmd)
-	}
-
-	return m, tea.Batch(cmds...)
+	return m, nil
 }
 
-func (m Model) updateWithServerForm(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m.updateModal(msg, modalUpdateConfig{
-		setSize: func(w, h int) {
-			m.helpOverlay.SetSize(w, h)
-			m.serverForm.SetSize(w, h)
-			m.confirmDlg.SetSize(w, h)
-			m.toast.SetSize(w, h)
-		},
-		handleResult: func(msg tea.Msg) (bool, Model) {
-			if result, ok := msg.(views.ServerFormResult); ok {
-				newModel, _ := m.handleServerFormResult(result)
-				return true, newModel.(Model)
-			}
-			return false, m
-		},
-		updateForm: func(msg tea.Msg) tea.Cmd {
-			return m.serverForm.Update(msg)
-		},
-	})
-}
-
-func (m Model) updateWithNamespaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m.updateModal(msg, modalUpdateConfig{
-		setSize: func(w, h int) {
-			m.namespaceForm.SetSize(w, h)
-		},
-		handleResult: func(msg tea.Msg) (bool, Model) {
-			if result, ok := msg.(views.NamespaceFormResult); ok {
-				newModel, _ := m.handleNamespaceFormResult(result)
-				return true, newModel.(Model)
-			}
-			return false, m
-		},
-		updateForm: func(msg tea.Msg) tea.Cmd {
-			return m.namespaceForm.Update(msg)
-		},
-	})
-}
-
-func (m Model) updateWithServerPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.CtrlC) {
-			return m, tea.Quit
-		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.updateLayout()
-		m.serverPicker.SetSize(msg.Width, msg.Height)
-	case views.ServerPickerResult:
-		return m.handleServerPickerResult(msg)
+func (m Model) handleRegistryBrowserResult(result views.RegistryBrowserResult) (tea.Model, tea.Cmd) {
+	if result.Submitted {
+		m.pendingRegistryInstall = &result.Spec
 	}
-
-	// Update the picker directly on m (not via closure) so visibility changes persist
-	if cmd := m.serverPicker.Update(msg); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
-	// Handle events
-	if evt, ok := msg.(events.Event); ok {
-		if cmd := m.handleEvent(evt); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		cmds = append(cmds, m.waitForEvent())
-	}
-
-	// Toast updates
-	var toastCmd tea.Cmd
-	m.toast, toastCmd = m.toast.Update(msg)
-	if toastCmd != nil {
-		cmds = append(cmds, toastCmd)
-	}
-
-	return m, tea.Batch(cmds...)
-}
-
-func (m Model) updateWithToolPerms(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.CtrlC) {
-			return m, tea.Quit
-		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.updateLayout()
-		m.toolPerms.SetSize(msg.Width, msg.Height)
-	case views.ToolPermissionsResult:
-		return m.handleToolPermissionsResult(msg)
-	}
-
-	// Update the tool perms directly on m (not via closure) so visibility changes persist
-	if cmd := m.toolPerms.Update(msg); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
-	// Handle events
-	if evt, ok := msg.(events.Event); ok {
-		if cmd := m.handleEvent(evt); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		cmds = append(cmds, m.waitForEvent())
-	}
-
-	// Toast updates
-	var toastCmd tea.Cmd
-	m.toast, toastCmd = m.toast.Update(msg)
-	if toastCmd != nil {
-		cmds = append(cmds, toastCmd)
-	}
-
-	return m, tea.Batch(cmds...)
-}
-
-func (m Model) updateWithRegistryBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.CtrlC) {
-			return m, tea.Quit
-		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.updateLayout()
-		m.registryBrowser.SetSize(msg.Width, msg.Height)
-	case views.RegistryBrowserResult:
-		if msg.Submitted {
-			m.pendingRegistryInstall = &msg.Spec
-		}
-		m.registryBrowser.Hide()
-		return m, nil
-	}
-
-	// Update the browser directly on m so visibility changes persist
-	if cmd := m.registryBrowser.Update(msg); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
-	// Handle events
-	if evt, ok := msg.(events.Event); ok {
-		if cmd := m.handleEvent(evt); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		cmds = append(cmds, m.waitForEvent())
-	}
-
-	// Toast updates
-	var toastCmd tea.Cmd
-	m.toast, toastCmd = m.toast.Update(msg)
-	if toastCmd != nil {
-		cmds = append(cmds, toastCmd)
-	}
-
-	return m, tea.Batch(cmds...)
+	m.registryBrowser.Hide()
+	return m, nil
 }
 
 // formatEnvMap converts a map of env vars to the "KEY=value\nKEY2=value2" format.
@@ -1966,30 +1822,6 @@ func (m Model) handleToolPermissionsResult(result views.ToolPermissionsResult) (
 	m.refreshNamespaceList()
 
 	return m, m.toast.ShowSuccess("Tool permissions updated")
-}
-
-func (m Model) updateWithToolDenyEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.CtrlC) {
-			return m, tea.Quit
-		}
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.updateLayout()
-		m.toolDenyEditor.SetSize(msg.Width, msg.Height)
-	case views.ToolDenyResult:
-		return m.handleToolDenyResult(msg)
-	}
-
-	if cmd := m.toolDenyEditor.Update(msg); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
-	return m, tea.Batch(cmds...)
 }
 
 func (m Model) handleToolDenyResult(result views.ToolDenyResult) (tea.Model, tea.Cmd) {
