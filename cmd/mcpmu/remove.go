@@ -7,10 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	removeYes        bool
-	removeConfigPath string
-)
+var removeYes bool
 
 var removeCmd = &cobra.Command{
 	Use:   "remove <name>",
@@ -28,7 +25,6 @@ Examples:
 
 func init() {
 	removeCmd.Flags().BoolVarP(&removeYes, "yes", "y", false, "Skip confirmation prompt")
-	removeCmd.Flags().StringVarP(&removeConfigPath, "config", "c", "", "Path to config file (default: ~/.config/mcpmu/config.json)")
 
 	rootCmd.AddCommand(removeCmd)
 }
@@ -37,7 +33,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
 	// Load config
-	cfg, err := loadConfig(removeConfigPath)
+	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}
@@ -61,7 +57,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 
 	// Remove server (re-checks existence under the lock; the ToolCache entry
 	// goes with it)
-	if err := mutateConfig(removeConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		return cfg.DeleteServer(name)
 	}); err != nil {
 		return err

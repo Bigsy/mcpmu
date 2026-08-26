@@ -9,10 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	mcpConfigPath string
-	mcpScopes     []string
-)
+var mcpScopes []string
 
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
@@ -49,7 +46,6 @@ Examples:
 }
 
 func init() {
-	mcpCmd.PersistentFlags().StringVarP(&mcpConfigPath, "config", "c", "", "Path to config file")
 
 	mcpLoginCmd.Flags().StringSliceVar(&mcpScopes, "scopes", nil, "OAuth scopes to request (comma-separated)")
 
@@ -63,7 +59,7 @@ func runMCPLogin(cmd *cobra.Command, args []string) error {
 	serverName := args[0]
 
 	// Load config
-	cfg, err := loadConfig(mcpConfigPath)
+	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}
@@ -134,7 +130,7 @@ func runMCPLogout(cmd *cobra.Command, args []string) error {
 	serverName := args[0]
 
 	// Load config
-	cfg, err := loadConfig(mcpConfigPath)
+	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}

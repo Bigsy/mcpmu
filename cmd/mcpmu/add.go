@@ -14,7 +14,6 @@ var (
 	addEnvHeaders        []string
 	addCwd               string
 	addAutostart         bool
-	addConfigPath        string
 	addURL               string
 	addBearerEnv         string
 	addScopes            []string
@@ -63,7 +62,6 @@ func init() {
 	addCmd.Flags().StringArrayVarP(&addEnvFlags, "env", "e", nil, "Environment variable (KEY=VALUE), can be repeated")
 	addCmd.Flags().StringVar(&addCwd, "cwd", "", "Working directory for the server")
 	addCmd.Flags().BoolVar(&addAutostart, "autostart", false, "Start server automatically on app launch")
-	addCmd.Flags().StringVarP(&addConfigPath, "config", "c", "", "Path to config file (default: ~/.config/mcpmu/config.json)")
 	addCmd.Flags().StringVar(&addURL, "url", "", "Server URL for HTTP transport (streamable HTTP)")
 	addCmd.Flags().StringVar(&addBearerEnv, "bearer-env", "", "Environment variable containing bearer token")
 	addCmd.Flags().StringSliceVar(&addScopes, "scopes", nil, "OAuth scopes to request (comma-separated)")
@@ -152,7 +150,7 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load config
-	if err := mutateConfig(addConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		// Build server config
 		srv := config.ServerConfig{
 			Command:           cmdArgs[0],
@@ -213,7 +211,7 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load config
-	if err := mutateConfig(addConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		// Build server config
 		srv := config.ServerConfig{
 			URL:               addURL,

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -27,8 +26,9 @@ func (s *Server) resolveRoute(r *http.Request) (routeNamespace string, ok bool) 
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	// Unauthenticated, so it says nothing about the build: a bare "ok".
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = fmt.Fprintf(w, "ok mcpmu %s\n", s.opts.ServerVersion)
+	_, _ = io.WriteString(w, "ok\n")
 }
 
 // handlePost implements the client→server half of the Streamable HTTP

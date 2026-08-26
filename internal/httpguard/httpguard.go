@@ -96,13 +96,10 @@ func checkHost(opts Options, next http.Handler) http.Handler {
 }
 
 // hostAllowed reports whether a Host header value names this listener. An
-// empty value cannot occur through a real listener (HTTP/1.1 requires Host;
-// HTTP/2 requires :authority) — it appears only in direct handler invocation,
-// and is accepted for exactly that case.
+// empty value is refused: HTTP/1.1 requires Host and HTTP/2 :authority, so
+// the only way to arrive without one is an HTTP/1.0 request — which would
+// otherwise walk straight past the rebinding defence.
 func hostAllowed(opts Options, host string) bool {
-	if host == "" {
-		return true
-	}
 	name := host
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		name = h
@@ -117,7 +114,7 @@ func hostAllowed(opts Options, host string) bool {
 	}
 	bindHost := ""
 	if h, _, err := net.SplitHostPort(opts.Addr); err == nil {
-		bindHost = strings.ToLower(h)
+		bindHost = strings.ToLower(strings.Trim(h, "[]"))
 	} else {
 		bindHost = strings.ToLower(opts.Addr)
 	}
@@ -212,7 +209,7 @@ func originMatchesBind(addr, hostname, originPort, scheme string) bool {
 	if !portMatches(originPort, scheme, bindPort) {
 		return false
 	}
-	if bindHost == "" {
+	if isWildcardHost(bindHost) {
 		return net.ParseIP(hostname) != nil
 	}
 	return bindHost == strings.ToLower(hostname)
@@ -269,10 +266,23 @@ func isLoopbackAddr(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// isWildcardAddr reports whether a listen address binds every interface:
+// ":PORT", "0.0.0.0:PORT" and "[::]:PORT" are all the same request to the
+// kernel and must be treated alike, or a LAN client of a documented
+// non-loopback deployment gets 421 for presenting the IP it connected to.
 func isWildcardAddr(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return false
 	}
-	return host == ""
+	return isWildcardHost(host)
+}
+
+// isWildcardHost is isWildcardAddr for an already-split host part.
+func isWildcardHost(host string) bool {
+	if host == "" {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsUnspecified()
 }

@@ -44,7 +44,6 @@ func init() {
 
 var (
 	namespaceAddDescription string
-	namespaceAddConfigPath  string
 )
 
 var namespaceAddCmd = &cobra.Command{
@@ -63,13 +62,12 @@ Examples:
 
 func init() {
 	namespaceAddCmd.Flags().StringVarP(&namespaceAddDescription, "description", "d", "", "Description for the namespace")
-	namespaceAddCmd.Flags().StringVarP(&namespaceAddConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runNamespaceAdd(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
-	if err := mutateConfig(namespaceAddConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		ns := config.NamespaceConfig{
 			Description: namespaceAddDescription,
 		}
@@ -92,8 +90,7 @@ func runNamespaceAdd(cmd *cobra.Command, args []string) error {
 // ============================================================================
 
 var (
-	namespaceListJSON       bool
-	namespaceListConfigPath string
+	namespaceListJSON bool
 )
 
 var namespaceListCmd = &cobra.Command{
@@ -111,11 +108,10 @@ Examples:
 
 func init() {
 	namespaceListCmd.Flags().BoolVar(&namespaceListJSON, "json", false, "Output as JSON")
-	namespaceListCmd.Flags().StringVarP(&namespaceListConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runNamespaceList(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig(namespaceListConfigPath)
+	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}
@@ -216,8 +212,7 @@ func outputNamespacesTable(cfg *config.Config, namespaces []config.NamespaceEntr
 // ============================================================================
 
 var (
-	namespaceRemoveYes        bool
-	namespaceRemoveConfigPath string
+	namespaceRemoveYes bool
 )
 
 var namespaceRemoveCmd = &cobra.Command{
@@ -236,13 +231,12 @@ Examples:
 
 func init() {
 	namespaceRemoveCmd.Flags().BoolVarP(&namespaceRemoveYes, "yes", "y", false, "Skip confirmation prompt")
-	namespaceRemoveCmd.Flags().StringVarP(&namespaceRemoveConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runNamespaceRemove(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
-	cfg, err := loadConfig(namespaceRemoveConfigPath)
+	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}
@@ -264,7 +258,7 @@ func runNamespaceRemove(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := mutateConfig(namespaceRemoveConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		return cfg.DeleteNamespace(name)
 	}); err != nil {
 		return err
@@ -277,8 +271,6 @@ func runNamespaceRemove(cmd *cobra.Command, args []string) error {
 // ============================================================================
 // namespace assign
 // ============================================================================
-
-var namespaceAssignConfigPath string
 
 var namespaceAssignCmd = &cobra.Command{
 	Use:   "assign <namespace> <server>",
@@ -295,14 +287,13 @@ Examples:
 }
 
 func init() {
-	namespaceAssignCmd.Flags().StringVarP(&namespaceAssignConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runNamespaceAssign(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
 	serverName := args[1]
 
-	if err := mutateConfig(namespaceAssignConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		// Lookup namespace by name
 		if err := requireNamespace(cfg, namespaceName); err != nil {
 			return err
@@ -330,8 +321,6 @@ func runNamespaceAssign(cmd *cobra.Command, args []string) error {
 // namespace unassign
 // ============================================================================
 
-var namespaceUnassignConfigPath string
-
 var namespaceUnassignCmd = &cobra.Command{
 	Use:   "unassign <namespace> <server>",
 	Short: "Unassign a server from a namespace",
@@ -346,14 +335,13 @@ Examples:
 }
 
 func init() {
-	namespaceUnassignCmd.Flags().StringVarP(&namespaceUnassignConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runNamespaceUnassign(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
 	serverName := args[1]
 
-	if err := mutateConfig(namespaceUnassignConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		// Lookup namespace by name
 		if err := requireNamespace(cfg, namespaceName); err != nil {
 			return err
@@ -381,8 +369,6 @@ func runNamespaceUnassign(cmd *cobra.Command, args []string) error {
 // namespace default
 // ============================================================================
 
-var namespaceDefaultConfigPath string
-
 var namespaceDefaultCmd = &cobra.Command{
 	Use:   "default <name>",
 	Short: "Set the default namespace",
@@ -397,13 +383,12 @@ Examples:
 }
 
 func init() {
-	namespaceDefaultCmd.Flags().StringVarP(&namespaceDefaultConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runNamespaceDefault(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
-	if err := mutateConfig(namespaceDefaultConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		// Lookup namespace by name
 		if err := requireNamespace(cfg, name); err != nil {
 			return err
@@ -424,8 +409,6 @@ func runNamespaceDefault(cmd *cobra.Command, args []string) error {
 // namespace set-deny-default
 // ============================================================================
 
-var namespaceSetDenyDefaultConfigPath string
-
 var namespaceSetDenyDefaultCmd = &cobra.Command{
 	Use:   "set-deny-default <namespace> <true|false>",
 	Short: "Set whether unconfigured tools are denied",
@@ -442,7 +425,6 @@ Examples:
 }
 
 func init() {
-	namespaceSetDenyDefaultCmd.Flags().StringVarP(&namespaceSetDenyDefaultConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runNamespaceSetDenyDefault(cmd *cobra.Command, args []string) error {
@@ -453,7 +435,7 @@ func runNamespaceSetDenyDefault(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := mutateConfig(namespaceSetDenyDefaultConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		// Lookup namespace by name
 		ns, ok := cfg.GetNamespace(namespaceName)
 		if !ok {

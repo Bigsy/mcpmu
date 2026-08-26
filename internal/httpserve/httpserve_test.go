@@ -457,6 +457,10 @@ func TestTokenAuth(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("healthz status %d, want 200", resp.StatusCode)
 		}
+		body, _ := io.ReadAll(resp.Body)
+		if string(body) != "ok\n" {
+			t.Fatalf("healthz body %q, want bare ok (it is unauthenticated; no version leak)", body)
+		}
 	})
 }
 

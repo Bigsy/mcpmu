@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -13,16 +12,13 @@ import (
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
-	"github.com/Bigsy/mcpmu/internal/daemon"
 	"github.com/Bigsy/mcpmu/internal/httpserve"
-	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/server"
 	"github.com/Bigsy/mcpmu/internal/shim"
 	"github.com/spf13/cobra"
 )
 
 var (
-	serveConfigPath         string
 	serveNamespace          string
 	serveLogLevel           string
 	serveEager              bool
@@ -64,7 +60,6 @@ func init() {
 	serveCmd.Flags().Bool("stdio", false, "Use stdio transport (default, always enabled)")
 	_ = serveCmd.Flags().MarkHidden("stdio")
 
-	serveCmd.Flags().StringVarP(&serveConfigPath, "config", "c", "", "Path to config file (default: ~/.config/mcpmu/config.json)")
 	serveCmd.Flags().StringVarP(&serveNamespace, "namespace", "n", "", "Namespace to expose (default: auto-select)")
 	serveCmd.Flags().StringVarP(&serveLogLevel, "log-level", "l", "info", "Log level (debug, info, warn, error)")
 	serveCmd.Flags().BoolVar(&serveEager, "eager", false, "Pre-start all servers on init (default: lazy start)")
@@ -84,49 +79,22 @@ func init() {
 
 func runServe(cmd *cobra.Command, args []string) error {
 	serveLogLevel = strings.ToLower(serveLogLevel)
-	if !validDaemonLogLevel(serveLogLevel) {
-		return fmt.Errorf("invalid log level %q: expected debug, info, warn, or error", serveLogLevel)
+	// In stdio mode everything but the MCP protocol goes to stderr, filtered
+	// to the requested level.
+	if err := configureLogging(serveLogLevel, os.Stderr); err != nil {
+		return err
 	}
 	if err := validateHTTPServeFlags(cmd); err != nil {
 		return err
-	}
-	// In stdio mode, all output must go to stderr except MCP protocol
-	// Configure logging based on log level
-	switch serveLogLevel {
-	case "debug":
-		log.SetOutput(os.Stderr)
-		log.SetFlags(log.LstdFlags | log.Lshortfile)
-		server.DebugLogging = true
-		mcp.DebugLogging = true
-	case "info", "warn":
-		log.SetOutput(os.Stderr)
-		log.SetFlags(log.LstdFlags)
-	case "error":
-		log.SetOutput(io.Discard)
-	default:
-		log.SetOutput(io.Discard)
 	}
 
 	log.Printf("mcpmu serve starting (version=%s)", version)
 
 	// Resolve and canonicalize the config path once for embedded watching and
 	// daemon rendezvous identity.
-	var resolvedConfigPath string
-	if serveConfigPath != "" {
-		resolvedConfigPath = serveConfigPath
-	} else if configPath != "" {
-		resolvedConfigPath = configPath
-	} else {
-		// Use default config path
-		var err error
-		resolvedConfigPath, err = config.ConfigPath()
-		if err != nil {
-			return fmt.Errorf("failed to get config path: %w", err)
-		}
-	}
-	resolvedConfigPath, err := daemon.CanonicalConfigPath(resolvedConfigPath)
+	resolvedConfigPath, err := daemonConfigPath(false)
 	if err != nil {
-		return fmt.Errorf("resolve config path: %w", err)
+		return err
 	}
 
 	// Load configuration

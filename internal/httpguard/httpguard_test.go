@@ -44,7 +44,8 @@ func TestHostAllowlist(t *testing.T) {
 		host string
 		want bool
 	}{
-		{"empty host passes (direct handler invocation)", loopback, "", true},
+		{"empty host refused (HTTP/1.0)", loopback, "", false},
+		{"empty host refused on wildcard bind too", Options{Addr: ":8081"}, "", false},
 		{"loopback ipv4 with port", loopback, "127.0.0.1:8081", true},
 		{"localhost with port", loopback, "localhost:8081", true},
 		{"ipv6 loopback", loopback, "[::1]:8081", true},
@@ -59,6 +60,12 @@ func TestHostAllowlist(t *testing.T) {
 		{"wildcard bind accepts ip literal", Options{Addr: ":8081"}, "192.168.1.5:8081", true},
 		{"wildcard bind refuses name", Options{Addr: ":8081"}, "myserver.lan", false},
 		{"wildcard bind refuses attacker domain", Options{Addr: ":8081"}, "evil.com", false},
+		{"0.0.0.0 bind accepts ip literal", Options{Addr: "0.0.0.0:8081"}, "192.168.1.5:8081", true},
+		{"0.0.0.0 bind accepts ipv6 literal", Options{Addr: "0.0.0.0:8081"}, "[fd00::7]:8081", true},
+		{"0.0.0.0 bind refuses name", Options{Addr: "0.0.0.0:8081"}, "myserver.lan:8081", false},
+		{"[::] bind accepts ip literal", Options{Addr: "[::]:8081"}, "10.0.0.7:8081", true},
+		{"[::] bind refuses attacker domain", Options{Addr: "[::]:8081"}, "evil.com", false},
+		{"specific ipv6 bind allows itself", Options{Addr: "[fd00::7]:8081"}, "[fd00::7]:8081", true},
 
 		{"proxied host matching allowlisted origin", Options{Addr: "127.0.0.1:8081", AllowedOrigins: []string{"https://mcpmu.corp.example"}}, "mcpmu.corp.example", true},
 		{"proxied host with forwarded port", Options{Addr: "127.0.0.1:8081", AllowedOrigins: []string{"https://mcpmu.corp.example"}}, "mcpmu.corp.example:8443", true},
@@ -80,6 +87,26 @@ func TestMiddlewareHostRejection(t *testing.T) {
 	rec := serve(Options{Addr: "127.0.0.1:8081"}, req)
 	if rec.Code != http.StatusMisdirectedRequest {
 		t.Fatalf("rebound Host: status %d, want 421", rec.Code)
+	}
+
+	// HTTP/1.0 carries no Host; it must not slip past the allowlist.
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = ""
+	if got := serve(Options{Addr: "127.0.0.1:8081"}, req).Code; got != http.StatusMisdirectedRequest {
+		t.Fatalf("missing Host: status %d, want 421", got)
+	}
+}
+
+func TestIsWildcardAddr(t *testing.T) {
+	for _, addr := range []string{":8081", "0.0.0.0:8081", "[::]:8081"} {
+		if !isWildcardAddr(addr) {
+			t.Errorf("isWildcardAddr(%q) = false, want true", addr)
+		}
+	}
+	for _, addr := range []string{"127.0.0.1:8081", "[::1]:8081", "192.168.1.10:8081", "localhost:8081", "bogus"} {
+		if isWildcardAddr(addr) {
+			t.Errorf("isWildcardAddr(%q) = true, want false", addr)
+		}
 	}
 }
 
@@ -131,6 +158,9 @@ func TestOriginMatchesBind(t *testing.T) {
 		{"wildcard accepts ip literal origin", Options{Addr: ":8081"}, "http://10.0.0.7:8081", true},
 		{"wildcard refuses name origin", Options{Addr: ":8081"}, "http://myhost.internal:8081", false},
 		{"wildcard port mismatch", Options{Addr: ":8081"}, "http://10.0.0.7:9999", false},
+		{"0.0.0.0 accepts ip literal origin", Options{Addr: "0.0.0.0:8081"}, "http://10.0.0.7:8081", true},
+		{"0.0.0.0 refuses name origin", Options{Addr: "0.0.0.0:8081"}, "http://myhost.internal:8081", false},
+		{"[::] accepts ip literal origin", Options{Addr: "[::]:8081"}, "http://10.0.0.7:8081", true},
 	}
 	for _, tc := range cases {
 		if got := originAllowed(tc.opts, tc.origin); got != tc.want {

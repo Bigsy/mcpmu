@@ -72,7 +72,9 @@ mcpmu serve --stdio --isolated
 ### Serve flags
 
 - `--namespace` / `-n` — namespace to expose (default: auto-select)
-- `--log-level` / `-l` — log level: debug, info, warn, error (default: info)
+- `--log-level` / `-l` — log level: debug, info, warn, error (default: info). Each
+  level drops the lines below it: `error` keeps only failures and panics, `debug`
+  adds `file:line` prefixes and MCP payload dumps.
 - `--eager` — pre-start all servers on init (default: lazy start)
 - `--expose-manager-tools` — include mcpmu.* tools in tools/list (default: hidden)
 - `--resources` — passthrough resources/* from upstream servers (default: on)

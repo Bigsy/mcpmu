@@ -10,10 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	listJSON       bool
-	listConfigPath string
-)
+var listJSON bool
 
 var listCmd = &cobra.Command{
 	Use:   "list",
@@ -30,14 +27,13 @@ Examples:
 
 func init() {
 	listCmd.Flags().BoolVar(&listJSON, "json", false, "Output as JSON")
-	listCmd.Flags().StringVarP(&listConfigPath, "config", "c", "", "Path to config file (default: ~/.config/mcpmu/config.json)")
 
 	rootCmd.AddCommand(listCmd)
 }
 
 func runList(cmd *cobra.Command, args []string) error {
 	// Load config
-	cfg, err := loadConfig(listConfigPath)
+	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}

@@ -7,8 +7,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var renameConfigPath string
-
 var renameCmd = &cobra.Command{
 	Use:   "rename <old-name> <new-name>",
 	Short: "Rename an MCP server",
@@ -26,7 +24,6 @@ Examples:
 }
 
 func init() {
-	renameCmd.Flags().StringVarP(&renameConfigPath, "config", "c", "", "Path to config file")
 	rootCmd.AddCommand(renameCmd)
 }
 
@@ -34,7 +31,7 @@ func runRename(cmd *cobra.Command, args []string) error {
 	oldName := args[0]
 	newName := args[1]
 
-	if err := mutateConfig(renameConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		if err := cfg.RenameServer(oldName, newName); err != nil {
 			return err
 		}
@@ -49,7 +46,6 @@ func runRename(cmd *cobra.Command, args []string) error {
 }
 
 // Namespace rename subcommand
-var namespaceRenameConfigPath string
 
 var namespaceRenameCmd = &cobra.Command{
 	Use:   "rename <old-name> <new-name>",
@@ -68,7 +64,6 @@ Examples:
 }
 
 func init() {
-	namespaceRenameCmd.Flags().StringVarP(&namespaceRenameConfigPath, "config", "c", "", "Path to config file")
 	namespaceCmd.AddCommand(namespaceRenameCmd)
 }
 
@@ -76,7 +71,7 @@ func runNamespaceRename(cmd *cobra.Command, args []string) error {
 	oldName := args[0]
 	newName := args[1]
 
-	if err := mutateConfig(namespaceRenameConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		if err := cfg.RenameNamespace(oldName, newName); err != nil {
 			return err
 		}

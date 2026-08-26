@@ -140,7 +140,10 @@ func TestDaemonCLI_InvalidLogLevel(t *testing.T) {
 	}
 }
 
-func TestDaemonErrorLogLevelRetainsDiagnostics(t *testing.T) {
+// TestDaemonErrorLogLevelRetainsFailures pins what --log-level error means
+// for the per-config daemon log, the primary recovery artifact: failures and
+// panics still land there; routine lifecycle chatter does not.
+func TestDaemonErrorLogLevelRetainsFailures(t *testing.T) {
 	previousOutput := log.Writer()
 	previousFlags := log.Flags()
 	defer func() {
@@ -148,11 +151,19 @@ func TestDaemonErrorLogLevelRetainsDiagnostics(t *testing.T) {
 		log.SetFlags(previousFlags)
 	}()
 	var output strings.Builder
-	if err := configureDaemonLogging("error", &output); err != nil {
+	if err := configureLogging("error", &output); err != nil {
 		t.Fatal(err)
 	}
-	log.Print("daemon diagnostic sentinel")
-	if !strings.Contains(output.String(), "daemon diagnostic sentinel") {
-		t.Fatalf("error-level daemon logging discarded diagnostics: %q", output.String())
+	log.Print("mcpmu daemon starting (version=test)")
+	log.Print("Failed to start server foo: sentinel")
+	log.Print("PANIC in session handler: sentinel")
+	got := output.String()
+	for _, want := range []string{"Failed to start server foo", "PANIC in session handler"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("error-level daemon logging discarded %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "daemon starting") {
+		t.Errorf("error-level daemon logging kept lifecycle chatter: %q", got)
 	}
 }

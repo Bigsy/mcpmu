@@ -8,14 +8,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/daemon"
-	"github.com/Bigsy/mcpmu/internal/mcp"
-	"github.com/Bigsy/mcpmu/internal/server"
 	"github.com/spf13/cobra"
 )
 
@@ -81,8 +78,8 @@ func daemonConfigPath(requireExplicit bool) (string, error) {
 }
 
 func runDaemon(_ *cobra.Command, _ []string) error {
-	if !validDaemonLogLevel(daemonLogLevel) {
-		return fmt.Errorf("invalid log level %q: expected debug, info, warn, or error", daemonLogLevel)
+	if _, err := parseLogLevel(daemonLogLevel); err != nil {
+		return err
 	}
 	canonical, err := daemonConfigPath(true)
 	if err != nil {
@@ -103,7 +100,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		defer func() { _ = logFile.Close() }()
 		output = logFile
 	}
-	if err := configureDaemonLogging(daemonLogLevel, output); err != nil {
+	if err := configureLogging(daemonLogLevel, output); err != nil {
 		return err
 	}
 
@@ -115,39 +112,6 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		Version:    version,
 		Revision:   commit,
 	})
-}
-
-func configureDaemonLogging(level string, output io.Writer) error {
-	server.DebugLogging = false
-	mcp.DebugLogging = false
-	switch strings.ToLower(level) {
-	case "debug":
-		log.SetOutput(output)
-		log.SetFlags(log.LstdFlags | log.Lshortfile)
-		server.DebugLogging = true
-		mcp.DebugLogging = true
-	case "info", "warn":
-		log.SetOutput(output)
-		log.SetFlags(log.LstdFlags)
-	case "error":
-		// The standard logger has no severity filtering. Preserve daemon errors,
-		// panics, and lifecycle diagnostics in the per-config log rather than
-		// making the primary recovery artifact empty.
-		log.SetOutput(output)
-		log.SetFlags(log.LstdFlags)
-	default:
-		return fmt.Errorf("invalid log level %q: expected debug, info, warn, or error", level)
-	}
-	return nil
-}
-
-func validDaemonLogLevel(level string) bool {
-	switch strings.ToLower(level) {
-	case "debug", "info", "warn", "error":
-		return true
-	default:
-		return false
-	}
 }
 
 func runDaemonStatus(_ *cobra.Command, _ []string) error {

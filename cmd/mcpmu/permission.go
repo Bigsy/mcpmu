@@ -39,8 +39,6 @@ func init() {
 // permission set
 // ============================================================================
 
-var permissionSetConfigPath string
-
 var permissionSetCmd = &cobra.Command{
 	Use:   "set <namespace> <server> <tool> <allow|deny>",
 	Short: "Set a tool permission",
@@ -59,7 +57,6 @@ Examples:
 }
 
 func init() {
-	permissionSetCmd.Flags().StringVarP(&permissionSetConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runPermissionSet(cmd *cobra.Command, args []string) error {
@@ -74,7 +71,7 @@ func runPermissionSet(cmd *cobra.Command, args []string) error {
 
 	toolName := normalizeToolName(toolNameRaw, serverName)
 
-	if err := mutateConfig(permissionSetConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		// Lookup namespace by name
 		if err := requireNamespace(cfg, namespaceName); err != nil {
 			return err
@@ -106,8 +103,6 @@ func runPermissionSet(cmd *cobra.Command, args []string) error {
 // permission unset
 // ============================================================================
 
-var permissionUnsetConfigPath string
-
 var permissionUnsetCmd = &cobra.Command{
 	Use:   "unset <namespace> <server> <tool>",
 	Short: "Remove a tool permission",
@@ -125,7 +120,6 @@ Examples:
 }
 
 func init() {
-	permissionUnsetCmd.Flags().StringVarP(&permissionUnsetConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runPermissionUnset(cmd *cobra.Command, args []string) error {
@@ -135,7 +129,7 @@ func runPermissionUnset(cmd *cobra.Command, args []string) error {
 
 	toolName := normalizeToolName(toolNameRaw, serverName)
 
-	if err := mutateConfig(permissionUnsetConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		// Lookup namespace by name
 		if err := requireNamespace(cfg, namespaceName); err != nil {
 			return err
@@ -164,8 +158,7 @@ func runPermissionUnset(cmd *cobra.Command, args []string) error {
 // ============================================================================
 
 var (
-	permissionListJSON       bool
-	permissionListConfigPath string
+	permissionListJSON bool
 )
 
 var permissionListCmd = &cobra.Command{
@@ -184,13 +177,12 @@ Examples:
 
 func init() {
 	permissionListCmd.Flags().BoolVar(&permissionListJSON, "json", false, "Output as JSON")
-	permissionListCmd.Flags().StringVarP(&permissionListConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runPermissionList(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
 
-	cfg, err := loadConfig(permissionListConfigPath)
+	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}
@@ -337,8 +329,6 @@ func outputPermissionsTable(namespaceName string, ns *config.NamespaceConfig, pe
 // permission set-server-default
 // ============================================================================
 
-var permissionSetServerDefaultConfigPath string
-
 var permissionSetServerDefaultCmd = &cobra.Command{
 	Use:   "set-server-default <namespace> <server> <deny|allow>",
 	Short: "Set per-server default policy in a namespace",
@@ -357,7 +347,6 @@ Examples:
 }
 
 func init() {
-	permissionSetServerDefaultCmd.Flags().StringVarP(&permissionSetServerDefaultConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runPermissionSetServerDefault(cmd *cobra.Command, args []string) error {
@@ -371,7 +360,7 @@ func runPermissionSetServerDefault(cmd *cobra.Command, args []string) error {
 	}
 	denyByDefault := !allow
 
-	if err := mutateConfig(permissionSetServerDefaultConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		if err := cfg.SetServerDefault(namespaceName, serverName, denyByDefault); err != nil {
 			return err
 		}
@@ -393,8 +382,6 @@ func runPermissionSetServerDefault(cmd *cobra.Command, args []string) error {
 // permission unset-server-default
 // ============================================================================
 
-var permissionUnsetServerDefaultConfigPath string
-
 var permissionUnsetServerDefaultCmd = &cobra.Command{
 	Use:   "unset-server-default <namespace> <server>",
 	Short: "Remove per-server default policy",
@@ -407,14 +394,13 @@ Examples:
 }
 
 func init() {
-	permissionUnsetServerDefaultCmd.Flags().StringVarP(&permissionUnsetServerDefaultConfigPath, "config", "c", "", "Path to config file")
 }
 
 func runPermissionUnsetServerDefault(cmd *cobra.Command, args []string) error {
 	namespaceName := args[0]
 	serverName := args[1]
 
-	if err := mutateConfig(permissionUnsetServerDefaultConfigPath, func(cfg *config.Config) error {
+	if err := mutateConfig(configPath, func(cfg *config.Config) error {
 		if err := requireNamespace(cfg, namespaceName); err != nil {
 			return err
 		}
