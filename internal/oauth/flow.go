@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -63,6 +64,42 @@ type TokenResponse struct {
 	Scope        string `json:"scope,omitempty"`
 }
 
+// DefaultTokenLifetime is assumed when the token endpoint omits expires_in
+// (it is optional per RFC 6749 §5.1). Without a default the token would be
+// treated as already expired and every request would trigger a refresh.
+const DefaultTokenLifetime = time.Hour
+
+// RefreshTimeout bounds one shared refresh: discovery (possibly via challenge)
+// plus the token request. The refresh runs detached from the caller that
+// happened to start it, so this is the only thing that ends a hung refresh.
+const RefreshTimeout = 2*DiscoveryTimeout + TokenTimeout
+
+// expiresAfter returns the expiry time for a token response, applying
+// DefaultTokenLifetime when expires_in is absent or non-positive.
+func expiresAfter(tokens *TokenResponse) time.Time {
+	if tokens.ExpiresIn <= 0 {
+		return time.Now().Add(DefaultTokenLifetime)
+	}
+	return time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second)
+}
+
+// TokenError is a non-2xx response from the token endpoint. Code and
+// Description are filled from an RFC 6749 §5.2 JSON error body when present.
+type TokenError struct {
+	StatusCode  int
+	Code        string
+	Description string
+	Body        string
+}
+
+func (e *TokenError) Error() string {
+	return fmt.Sprintf("token endpoint returned HTTP %d: %s", e.StatusCode, e.Body)
+}
+
+// IsInvalidGrant reports whether the server rejected the grant itself
+// (revoked, expired or replayed refresh token) — retrying cannot help.
+func (e *TokenError) IsInvalidGrant() bool { return e.Code == "invalid_grant" }
+
 // NewFlow creates a new OAuth flow.
 func NewFlow(config FlowConfig) *Flow {
 	return &Flow{config: config}
@@ -84,7 +121,7 @@ func (f *Flow) Run(ctx context.Context) error {
 		// Standard discovery failed - try RFC 9728 Protected Resource Metadata flow
 		// This involves triggering a 401 to get WWW-Authenticate header
 		log.Printf("Standard OAuth discovery failed, trying challenge-based discovery: %v", err)
-		result, err = f.discoverViaChallenge(ctx)
+		result, err = discoverViaChallenge(ctx, f.config.ServerURL)
 		if err != nil {
 			return fmt.Errorf("oauth discovery failed (tried standard and challenge-based): %w", err)
 		}
@@ -183,7 +220,6 @@ func (f *Flow) Run(ctx context.Context) error {
 		scopes = strings.Split(tokens.Scope, " ")
 	}
 
-	expiresAt := time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second)
 	cred, err := NewCredential(
 		f.config.ServerName,
 		f.config.ServerURL,
@@ -191,12 +227,13 @@ func (f *Flow) Run(ctx context.Context) error {
 		f.clientSecret,
 		tokens.AccessToken,
 		tokens.RefreshToken,
-		expiresAt,
+		expiresAfter(tokens),
 		scopes,
 	)
 	if err != nil {
 		return fmt.Errorf("create credential: %w", err)
 	}
+	cred.TokenEndpoint = f.metadata.TokenEndpoint
 
 	if err := f.config.Store.Put(cred); err != nil {
 		return fmt.Errorf("store credentials: %w", err)
@@ -208,13 +245,13 @@ func (f *Flow) Run(ctx context.Context) error {
 // discoverViaChallenge triggers a 401 response from the MCP server to get
 // the WWW-Authenticate header, then uses RFC 9728 Protected Resource Metadata
 // to discover the OAuth server.
-func (f *Flow) discoverViaChallenge(ctx context.Context) (*DiscoverResult, error) {
+func discoverViaChallenge(ctx context.Context, serverURL string) (*DiscoverResult, error) {
 	// Send a request to trigger a 401
 	ctx, cancel := context.WithTimeout(ctx, DiscoveryTimeout)
 	defer cancel()
 
 	// Send a proper MCP initialize request shape to ensure servers return the expected 401
-	req, err := http.NewRequestWithContext(ctx, "POST", f.config.ServerURL, strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"`+MCPProtocolVersion+`","clientInfo":{"name":"mcpmu","version":"1.0.0"},"capabilities":{}}}`))
+	req, err := http.NewRequestWithContext(ctx, "POST", serverURL, strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"`+MCPProtocolVersion+`","clientInfo":{"name":"mcpmu","version":"1.0.0"},"capabilities":{}}}`))
 	if err != nil {
 		return nil, fmt.Errorf("create challenge request: %w", err)
 	}
@@ -352,7 +389,15 @@ func doTokenRequest(ctx context.Context, cfg TokenRequestConfig) (*TokenResponse
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token endpoint returned HTTP %d: %s", resp.StatusCode, string(body))
+		tokenErr := &TokenError{StatusCode: resp.StatusCode, Body: string(body)}
+		var parsed struct {
+			Error       string `json:"error"`
+			Description string `json:"error_description"`
+		}
+		if json.Unmarshal(body, &parsed) == nil {
+			tokenErr.Code, tokenErr.Description = parsed.Error, parsed.Description
+		}
+		return nil, tokenErr
 	}
 
 	var tokens TokenResponse
@@ -417,11 +462,16 @@ func (f *Flow) exchangeCode(ctx context.Context, code, redirectURI string) (*Tok
 }
 
 // RefreshToken refreshes an access token using a refresh token.
-// Pass empty clientSecret for public clients.
-func RefreshToken(ctx context.Context, tokenEndpoint, clientID, clientSecret, refreshToken string, metadata *AuthorizationServerMetadata) (*TokenResponse, error) {
+// Pass empty clientSecret for public clients. resource is the MCP server URL,
+// sent as the RFC 8707 resource indicator (the MCP spec requires it on every
+// token request); pass "" to omit it.
+func RefreshToken(ctx context.Context, tokenEndpoint, clientID, clientSecret, refreshToken, resource string, metadata *AuthorizationServerMetadata) (*TokenResponse, error) {
 	params := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
+	}
+	if resource != "" {
+		params.Set("resource", resource)
 	}
 
 	authMethod := TokenAuthNone
@@ -485,7 +535,7 @@ type refreshCall struct {
 	err   error
 }
 
-// wait blocks until the leader publishes a result, or until the caller's own
+// wait blocks until the refresh publishes a result, or until the caller's own
 // context expires — a hung refresh must not pin unrelated request goroutines
 // past their deadlines.
 func (c *refreshCall) wait(ctx context.Context) (string, error) {
@@ -521,6 +571,8 @@ func (m *TokenManager) warningHandler() WarningHandler {
 }
 
 // GetAccessToken returns a valid access token for a server, refreshing if needed.
+// It returns an error wrapping ErrNeedsLogin when the credential cannot be
+// refreshed and the user has to log in again.
 func (m *TokenManager) GetAccessToken(ctx context.Context, serverURL string) (string, error) {
 	cred, err := m.store.Get(serverURL)
 	if err != nil {
@@ -528,6 +580,9 @@ func (m *TokenManager) GetAccessToken(ctx context.Context, serverURL string) (st
 	}
 	if cred == nil {
 		return "", fmt.Errorf("no credentials for %s", serverURL)
+	}
+	if cred.NeedsLogin {
+		return "", fmt.Errorf("%w for %s: refresh token was rejected", ErrNeedsLogin, serverURL)
 	}
 
 	// Check if token needs refresh
@@ -537,25 +592,42 @@ func (m *TokenManager) GetAccessToken(ctx context.Context, serverURL string) (st
 
 	// No refresh token - can't refresh
 	if cred.RefreshToken == "" {
-		return "", fmt.Errorf("token expired and no refresh token available")
+		return "", fmt.Errorf("%w for %s: token expired and no refresh token available", ErrNeedsLogin, serverURL)
 	}
 
 	return m.refreshOnce(ctx, serverURL)
 }
 
-// refreshOnce elects a single leader per server URL and lets every other caller
-// wait on that leader's result. Concurrent refreshes must not overlap: a server
-// that rotates refresh tokens (the common case) treats a replayed refresh token
-// as a breach signal and can revoke the entire grant.
+// refreshOnce elects a single refresh per server URL and lets every caller —
+// including the one that started it — wait on that result. Concurrent
+// refreshes must not overlap: a server that rotates refresh tokens (the common
+// case) treats a replayed refresh token as a breach signal and can revoke the
+// entire grant.
+//
+// The refresh itself runs on its own goroutine under a context detached from
+// the caller's cancellation (with RefreshTimeout as its only deadline). The
+// starting caller is just one waiter: if its request is cancelled mid-refresh,
+// the refresh still completes and every other waiter still gets the token,
+// instead of all of them failing with the leader's context error.
 func (m *TokenManager) refreshOnce(ctx context.Context, serverURL string) (string, error) {
 	m.mu.Lock()
-	if inFlight := m.refreshing[serverURL]; inFlight != nil {
+	call := m.refreshing[serverURL]
+	if call == nil {
+		call = &refreshCall{done: make(chan struct{})}
+		m.refreshing[serverURL] = call
 		m.mu.Unlock()
-		return inFlight.wait(ctx)
+
+		go m.runRefresh(context.WithoutCancel(ctx), serverURL, call)
+	} else {
+		m.mu.Unlock()
 	}
-	call := &refreshCall{done: make(chan struct{})}
-	m.refreshing[serverURL] = call
-	m.mu.Unlock()
+	return call.wait(ctx)
+}
+
+// runRefresh performs the refresh and publishes its result to the waiters.
+func (m *TokenManager) runRefresh(ctx context.Context, serverURL string, call *refreshCall) {
+	ctx, cancel := context.WithTimeout(ctx, RefreshTimeout)
+	defer cancel()
 
 	token, err := m.refreshHoldingSlot(ctx, serverURL)
 
@@ -566,14 +638,13 @@ func (m *TokenManager) refreshOnce(ctx context.Context, serverURL string) (strin
 	delete(m.refreshing, serverURL)
 	close(call.done)
 	m.mu.Unlock()
-
-	return token, err
 }
 
-// refreshHoldingSlot performs the refresh for the elected leader. It re-reads
-// the credential rather than trusting the caller's copy: a refresh that landed
-// while this goroutine was waiting for the slot has already rotated the stored
-// refresh token, and replaying the stale one is exactly what we must avoid.
+// refreshHoldingSlot performs the refresh for the elected slot holder. It
+// re-reads the credential rather than trusting the caller's copy: a refresh
+// that landed while this goroutine was waiting for the slot has already
+// rotated the stored refresh token, and replaying the stale one is exactly
+// what we must avoid.
 func (m *TokenManager) refreshHoldingSlot(ctx context.Context, serverURL string) (string, error) {
 	cred, err := m.store.Get(serverURL)
 	if err != nil {
@@ -582,21 +653,37 @@ func (m *TokenManager) refreshHoldingSlot(ctx context.Context, serverURL string)
 	if cred == nil {
 		return "", fmt.Errorf("no credentials for %s", serverURL)
 	}
+	if cred.NeedsLogin {
+		return "", fmt.Errorf("%w for %s: refresh token was rejected", ErrNeedsLogin, serverURL)
+	}
 	if !cred.NeedsRefresh() {
 		// Another refresh renewed it while we waited for the slot.
 		return cred.AccessToken, nil
 	}
 	if cred.RefreshToken == "" {
-		return "", fmt.Errorf("token expired and no refresh token available")
+		return "", fmt.Errorf("%w for %s: token expired and no refresh token available", ErrNeedsLogin, serverURL)
 	}
 
-	metadata, err := m.serverMetadata(ctx, serverURL)
+	metadata, err := m.serverMetadata(ctx, serverURL, cred)
 	if err != nil {
 		return "", err
 	}
 
-	tokens, err := RefreshToken(ctx, metadata.TokenEndpoint, cred.ClientID, cred.ClientSecret, cred.RefreshToken, metadata)
+	tokens, err := RefreshToken(ctx, metadata.TokenEndpoint, cred.ClientID, cred.ClientSecret, cred.RefreshToken, serverURL, metadata)
 	if err != nil {
+		var tokenErr *TokenError
+		if errors.As(err, &tokenErr) && tokenErr.IsInvalidGrant() {
+			// The grant is gone (revoked, expired, or the refresh token was
+			// rotated away under us). Record that so callers stop hammering
+			// the token endpoint with a dead refresh token; only a new login
+			// clears it.
+			cred.NeedsLogin = true
+			cred.RefreshToken = ""
+			if putErr := m.store.Put(cred); putErr != nil {
+				log.Printf("Warning: failed to mark credential needs-login: %v", putErr)
+			}
+			return "", fmt.Errorf("%w for %s: refresh token rejected (%s)", ErrNeedsLogin, serverURL, tokenErr.Code)
+		}
 		return "", fmt.Errorf("refresh token: %w", err)
 	}
 
@@ -605,10 +692,13 @@ func (m *TokenManager) refreshHoldingSlot(ctx context.Context, serverURL string)
 	if tokens.RefreshToken != "" {
 		cred.RefreshToken = tokens.RefreshToken
 	}
-	cred.ExpiresAt = time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second).UnixMilli()
+	cred.ExpiresAt = expiresAfter(tokens).UnixMilli()
 	if tokens.Scope != "" {
 		cred.Scopes = strings.Split(tokens.Scope, " ")
 	}
+	// Backfill the endpoint for credentials stored before it was recorded, so
+	// the next process can refresh without discovery.
+	cred.TokenEndpoint = metadata.TokenEndpoint
 
 	if err := m.store.Put(cred); err != nil {
 		// Log but don't fail - we have the token in memory
@@ -622,10 +712,13 @@ func (m *TokenManager) refreshHoldingSlot(ctx context.Context, serverURL string)
 	return cred.AccessToken, nil
 }
 
-// serverMetadata returns cached authorization-server metadata for serverURL,
-// discovering it on first use. Discovery runs outside mu so a slow endpoint
-// cannot block refreshes for other servers.
-func (m *TokenManager) serverMetadata(ctx context.Context, serverURL string) (*AuthorizationServerMetadata, error) {
+// serverMetadata returns authorization-server metadata for serverURL, in this
+// order: the per-process cache; the token endpoint recorded on the credential
+// at login (no network, and the only route for servers that advertise OAuth
+// solely through a WWW-Authenticate challenge); RFC 8414 discovery on the
+// server URL; RFC 9728 challenge-based discovery. Network discovery runs
+// outside mu so a slow endpoint cannot block refreshes for other servers.
+func (m *TokenManager) serverMetadata(ctx context.Context, serverURL string, cred *Credential) (*AuthorizationServerMetadata, error) {
 	m.mu.Lock()
 	cached, ok := m.metadata[serverURL]
 	m.mu.Unlock()
@@ -633,9 +726,23 @@ func (m *TokenManager) serverMetadata(ctx context.Context, serverURL string) (*A
 		return cached, nil
 	}
 
-	result, err := Discover(ctx, serverURL)
-	if err != nil {
-		return nil, fmt.Errorf("discover metadata: %w", err)
+	var metadata *AuthorizationServerMetadata
+	if cred.TokenEndpoint != "" {
+		// Auth methods are unknown without full metadata; determineAuthMethod
+		// then applies the RFC 6749 default (client_secret_basic) for
+		// confidential clients, which is what a server with no
+		// token_endpoint_auth_methods_supported advertisement gets anyway.
+		metadata = &AuthorizationServerMetadata{TokenEndpoint: cred.TokenEndpoint}
+	} else {
+		result, err := Discover(ctx, serverURL)
+		if err != nil {
+			challengeResult, challengeErr := discoverViaChallenge(ctx, serverURL)
+			if challengeErr != nil {
+				return nil, fmt.Errorf("discover metadata: %w (challenge-based discovery: %v)", err, challengeErr)
+			}
+			result = challengeResult
+		}
+		metadata = result.Metadata
 	}
 
 	m.mu.Lock()
@@ -644,8 +751,8 @@ func (m *TokenManager) serverMetadata(ctx context.Context, serverURL string) (*A
 	if existing, ok := m.metadata[serverURL]; ok {
 		return existing, nil
 	}
-	m.metadata[serverURL] = result.Metadata
-	return result.Metadata, nil
+	m.metadata[serverURL] = metadata
+	return metadata, nil
 }
 
 // Logout removes credentials for a server.

@@ -31,7 +31,22 @@ type Credential struct {
 
 	// Scopes are the granted OAuth scopes.
 	Scopes []string `json:"scopes,omitempty"`
+
+	// TokenEndpoint is the authorization server's token endpoint learned at
+	// login. Refresh uses it directly, so servers that only advertise OAuth via
+	// a WWW-Authenticate challenge (RFC 9728) can refresh without re-running
+	// the challenge dance. Empty for credentials stored before this field.
+	TokenEndpoint string `json:"token_endpoint,omitempty"`
+
+	// NeedsLogin is set when the authorization server rejected the refresh
+	// token (invalid_grant). No further refresh is attempted until the user
+	// logs in again.
+	NeedsLogin bool `json:"needs_login,omitempty"`
 }
+
+// ErrNeedsLogin is returned by TokenManager when the stored credential cannot
+// be refreshed and the user must run the login flow again.
+var ErrNeedsLogin = errors.New("oauth login required")
 
 // Validate checks that all required fields are set and valid.
 func (c *Credential) Validate() error {
