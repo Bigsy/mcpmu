@@ -50,6 +50,13 @@ type Core struct {
 	reloadOnce    sync.Once
 	sharedReload  atomic.Bool
 	closeOnce     sync.Once
+
+	// lifetime is cancelled by Close; every Core.spawn goroutine and every
+	// Core-scoped upstream call runs under it. bgWG tracks those goroutines
+	// so Close returns only once they have stopped.
+	lifetime       context.Context
+	cancelLifetime context.CancelFunc
+	bgWG           sync.WaitGroup
 }
 
 // NewCore constructs the shared server core without binding it to a client
@@ -77,7 +84,10 @@ func NewCore(opts Options) (*Core, error) {
 		}
 	}
 
+	lifetime, cancelLifetime := context.WithCancel(context.Background())
 	c := &Core{
+		lifetime:         lifetime,
+		cancelLifetime:   cancelLifetime,
 		cfg:              opts.Config,
 		configGeneration: 1,
 		recorder:         newRecorderForConfig(opts.Config, opts.ConfigPath),
@@ -314,7 +324,12 @@ func (c *Core) startWatching(ctx context.Context) {
 		return
 	}
 	c.watchOnce.Do(func() {
-		go c.watchConfig(ctx, c.configPath)
+		c.spawn("config watcher", func(lifetime context.Context) error {
+			watchCtx, cancel := joinContext(ctx, lifetime)
+			defer cancel()
+			c.watchConfig(watchCtx, c.configPath)
+			return nil
+		})
 	})
 }
 
@@ -325,16 +340,18 @@ func (c *Core) StartWatching(ctx context.Context) {
 	c.sharedReload.Store(true)
 	c.startWatching(ctx)
 	c.reloadOnce.Do(func() {
-		go func() {
+		c.spawn("reload consumer", func(lifetime context.Context) error {
+			reloadCtx, cancel := joinContext(ctx, lifetime)
+			defer cancel()
 			for {
 				select {
-				case <-ctx.Done():
-					return
+				case <-reloadCtx.Done():
+					return nil
 				case cfg := <-c.reloadCh:
-					c.applyReload(ctx, cfg, nil)
+					c.applyReload(reloadCtx, cfg, nil)
 				}
 			}
-		}()
+		})
 	})
 }
 
@@ -402,6 +419,9 @@ func (c *Core) sessionSnapshot() []*Session {
 // call more than once.
 func (c *Core) Close() {
 	c.closeOnce.Do(func() {
+		// Cancel first so Core-scoped goroutines and upstream calls stop
+		// promptly; they are waited for at the end.
+		c.cancelLifetime()
 		// Short critical section, writer-vs-writer only: in-flight resource
 		// handlers and session teardowns are not excluded (they hold no read
 		// lock) — subscriptions.clear()'s epoch bump discards their results.
@@ -417,6 +437,7 @@ func (c *Core) Close() {
 			log.Printf("Warning: final metrics flush failed: %v", err)
 		}
 		c.bus.Close()
+		c.bgWG.Wait()
 	})
 }
 
@@ -434,7 +455,10 @@ func (c *Core) OnDiscoveryResult(result process.DiscoveryResult) {
 		})
 	}
 	if result.Initialized {
-		go c.replaySubscriptions(result.Instance, result.Generation)
+		c.spawn("replay subscriptions", func(ctx context.Context) error {
+			c.replaySubscriptions(ctx, result.Instance, result.Generation)
+			return nil
+		})
 	}
 }
 
@@ -458,7 +482,7 @@ func (c *Core) processNotification(notification process.UpstreamNotification) bo
 		return false
 	}
 	if notification.Upstream && notification.Method == "notifications/tools/list_changed" {
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultToolDiscoveryTimeout)
+		ctx, cancel := context.WithTimeout(c.lifetime, DefaultToolDiscoveryTimeout)
 		aggregator := c.aggregatorForInstance(notification.Instance)
 		if aggregator == nil {
 			cancel()
@@ -530,7 +554,7 @@ func (c *Core) cleanupSessionSubscriptions(session *Session) {
 	}
 }
 
-func (c *Core) replaySubscriptions(id process.InstanceID, generation uint64) {
+func (c *Core) replaySubscriptions(ctx context.Context, id process.InstanceID, generation uint64) {
 	for _, key := range c.subscriptions.keysForInstance(id) {
 		handle := c.supervisor.GetInstance(id)
 		if handle == nil || !handle.IsRunning() || handle.Generation() != generation || handle.Client() == nil {
@@ -545,9 +569,9 @@ func (c *Core) replaySubscriptions(id process.InstanceID, generation uint64) {
 			if !ok {
 				return fmt.Errorf("server no longer exists: %s", id.Server)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(srv.ToolTimeout())*time.Second)
+			callCtx, cancel := context.WithTimeout(ctx, time.Duration(srv.ToolTimeout())*time.Second)
 			defer cancel()
-			return handle.Client().SubscribeResource(ctx, key.URI)
+			return handle.Client().SubscribeResource(callCtx, key.URI)
 		})
 		if err != nil {
 			log.Printf("Failed to replay resources/subscribe on %s for %q: %v", id, key.URI, err)

@@ -125,12 +125,12 @@ func (a *Aggregator) ListTools(ctx context.Context, serverNames []string) ([]Agg
 
 	for i, name := range serverNames {
 		wg.Add(1)
-		go func(idx int, serverName string) {
+		goSafe("ListTools "+name, func() {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			errs[idx] = a.ensureCatalog(ctx, serverName)
-		}(i, name)
+			errs[i] = a.ensureCatalog(ctx, name)
+		})
 	}
 
 	wg.Wait()

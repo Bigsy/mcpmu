@@ -70,6 +70,13 @@ type Session struct {
 	instanceMu               sync.RWMutex
 	closed                   atomic.Bool
 
+	// lifetime is a child of Core.lifetime; Run's ctx ending and Close both
+	// cancel it. Every Session.spawn goroutine and every session-scoped
+	// background upstream call runs under it, so SIGTERM stops in-flight
+	// work instead of letting it linger on context.Background().
+	lifetime       context.Context
+	cancelLifetime context.CancelFunc
+
 	// Active namespace (resolved at init)
 	activeNamespaceName string          // Name of the active namespace
 	activeServerNames   []string        // Server names in the active namespace (or all if no namespace)
@@ -136,16 +143,19 @@ func New(opts Options) (*Server, error) {
 
 // NewSession binds one downstream connection to an existing Core.
 func NewSession(core *Core, opts Options) (*Session, error) {
+	lifetime, cancelLifetime := context.WithCancel(core.lifetime)
 	s := &Session{
-		Core:        core,
-		id:          core.newSessionID(),
-		opts:        opts,
-		reader:      bufio.NewReader(opts.Stdin),
-		writer:      opts.Stdout,
-		subs:        make(map[string]process.InstanceID),
-		resourceMap: make(map[string]process.InstanceID),
-		inflight:    newInflightCalls(),
-		progress:    newProgressRoutes(),
+		Core:           core,
+		lifetime:       lifetime,
+		cancelLifetime: cancelLifetime,
+		id:             core.newSessionID(),
+		opts:           opts,
+		reader:         bufio.NewReader(opts.Stdin),
+		writer:         opts.Stdout,
+		subs:           make(map[string]process.InstanceID),
+		resourceMap:    make(map[string]process.InstanceID),
+		inflight:       newInflightCalls(),
+		progress:       newProgressRoutes(),
 	}
 	s.privateAggregator = s.newPrivateAggregator()
 	s.router = NewRouter(s)
@@ -163,6 +173,7 @@ func NewSession(core *Core, opts Options) (*Session, error) {
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
 		s.closed.Store(true)
+		s.cancelLifetime()
 		// Abandoning in-flight calls at disconnect would leave the upstream
 		// working on results nobody will read. Only this session's calls are
 		// cancelled; another session against the same shared instance keeps
@@ -175,14 +186,20 @@ func (s *Session) Close() {
 		// per-URI upstream round trips stalled reload and Core.Close for the
 		// length of every HTTP DELETE, idle reap, and shutdown teardown.
 		s.cleanupSessionSubscriptions(s)
-		if s.unsubscribeNotifications != nil {
-			s.unsubscribeNotifications()
-		}
+		s.detachNotifications()
 		s.unregisterSession(s)
 		s.instanceMu.Lock()
 		s.supervisor.StopSessionInstances(s.id)
 		s.instanceMu.Unlock()
 	})
+}
+
+// detachNotifications stops upstream notification delivery to this session.
+// Idempotent; returns only once no delivery is in progress.
+func (s *Session) detachNotifications() {
+	if s.unsubscribeNotifications != nil {
+		s.unsubscribeNotifications()
+	}
 }
 
 func (s *Session) privateAggregatorSnapshot() *Aggregator {
@@ -313,11 +330,22 @@ type readResult struct {
 
 // Run starts the server and processes requests until context is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	defer s.shutdown()
-	// Wait for in-flight handler goroutines to finish before returning.
-	// Callers (and tests) typically read the stdout buffer after Run exits;
-	// if handlers were still writing, that would be a data race.
-	defer s.handlersWG.Wait()
+	// Run's ctx ending (SIGTERM, client hang-up) cancels the session
+	// lifetime so in-flight handlers and background discovery stop promptly.
+	stopLifetime := context.AfterFunc(ctx, s.cancelLifetime)
+	defer func() {
+		stopLifetime()
+		s.cancelLifetime()
+		// Detach from upstream notifications *before* waiting: a notification
+		// arriving mid-drain would otherwise Add to handlersWG while Wait is
+		// running. Unsubscribe returns only once no delivery is in progress.
+		s.detachNotifications()
+		// Wait for in-flight handler goroutines to finish before returning.
+		// Callers (and tests) typically read the stdout buffer after Run
+		// exits; if handlers were still writing, that would be a data race.
+		s.handlersWG.Wait()
+		s.shutdown()
+	}()
 
 	// Start config file watcher if ConfigPath is set
 	s.startWatching(ctx)
@@ -330,7 +358,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Start a goroutine to read lines from stdin
 	lines := make(chan readResult)
-	go func() {
+	goSafe("stdin reader", func() {
 		defer close(lines)
 		for {
 			line, err := s.reader.ReadBytes('\n')
@@ -347,7 +375,7 @@ func (s *Server) Run(ctx context.Context) error {
 				return // Stop reading when context is cancelled
 			}
 		}
-	}()
+	})
 
 	for {
 		select {
@@ -477,18 +505,22 @@ func (s *Server) handleMessage(ctx context.Context, data []byte) error {
 		// Register the call before the goroutine starts so a cancellation that
 		// arrives immediately after the request cannot miss it.
 		callCtx, release := s.TrackRequest(ctx, msg.ID)
-		s.handlersWG.Go(func() {
+		s.spawnRequest(msg.ID, "handler "+msg.Method, func(context.Context) error {
 			defer release()
 			if resp, ok := s.Dispatch(callCtx, msg); ok {
 				s.send(resp)
 			}
+			return nil
 		})
 		return nil
 	}
 
-	if resp, ok := s.Dispatch(ctx, msg); ok {
-		s.send(resp)
-	}
+	s.protect("handler "+msg.Method, msg.ID, func(context.Context) error {
+		if resp, ok := s.Dispatch(ctx, msg); ok {
+			s.send(resp)
+		}
+		return nil
+	})
 	return nil
 }
 
@@ -552,7 +584,12 @@ func (s *Server) handleNotification(ctx context.Context, method string, params j
 		log.Println("Client sent initialized notification")
 		// Start eager servers if configured
 		if s.opts.EagerStart {
-			go s.startEagerServers(ctx)
+			s.spawn("eager start", func(lifetime context.Context) error {
+				startCtx, cancel := joinContext(ctx, lifetime)
+				defer cancel()
+				s.startEagerServers(startCtx)
+				return nil
+			})
 		}
 	case "notifications/cancelled":
 		s.handleCancelled(params)
@@ -683,7 +720,10 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	if gracePeriod == 0 {
 		gracePeriod = ListToolsGracePeriod
 	}
-	graceCtx, cancel := context.WithTimeout(context.Background(), gracePeriod)
+	// The grace period runs under the session lifetime, not the request:
+	// shutdown must cut it short, but a client cancelling its own tools/list
+	// must not abort a server start other requests are waiting on.
+	graceCtx, cancel := context.WithTimeout(s.lifetime, gracePeriod)
 	defer cancel()
 	tools := s.listTools(graceCtx, activeServerNames)
 	if s.opts.ExposeManagerTools {
@@ -695,7 +735,10 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	// doesn't re-read state that a concurrent reload could change.
 	stillPending := s.pendingServers(activeServerNames)
 	if len(stillPending) > 0 && s.bgDiscovering.CompareAndSwap(false, true) {
-		go s.discoverAndNotify(stillPending)
+		s.spawn("background discovery", func(ctx context.Context) error {
+			s.discoverAndNotify(ctx, stillPending)
+			return nil
+		})
 	}
 
 	// Filter tools based on permissions (always runs — IsToolAllowed handles
@@ -810,12 +853,13 @@ func (s *Server) OnUpstreamNotification(notification process.UpstreamNotificatio
 			return
 		}
 		// Dispatch off the reader goroutine — writing to stdout blocks on
-		// writeMu and the reader must stay responsive. Tracked via
+		// writeMu and the reader must stay responsive. spawn tracks it via
 		// handlersWG so Run() doesn't return with a notification write
 		// still in flight (otherwise callers reading the stdout buffer
 		// after Run exits would race with the write).
-		s.handlersWG.Go(func() {
+		s.spawn("relay resources/updated", func(context.Context) error {
 			s.sendNotificationWithParams("notifications/resources/updated", map[string]string{"uri": p.URI})
+			return nil
 		})
 	case "notifications/progress":
 		// Filtered at the sink rather than routed by the broadcaster: only the
@@ -826,14 +870,18 @@ func (s *Server) OnUpstreamNotification(notification process.UpstreamNotificatio
 		if !ok {
 			return
 		}
-		s.handlersWG.Go(func() {
+		s.spawn("relay progress", func(context.Context) error {
 			s.sendNotificationWithParams("notifications/progress", params)
+			return nil
 		})
 	default:
 		if notification.Method == "notifications/tools/list_changed" ||
 			(notification.Method == "notifications/resources/list_changed" && s.opts.ExposeResources) ||
 			(notification.Method == "notifications/prompts/list_changed" && s.opts.ExposePrompts) {
-			s.handlersWG.Go(func() { s.sendNotification(notification.Method) })
+			s.spawn("relay "+notification.Method, func(context.Context) error {
+				s.sendNotification(notification.Method)
+				return nil
+			})
 			return
 		}
 		if DebugLogging {
@@ -847,11 +895,13 @@ func (s *Server) OnUpstreamNotification(notification process.UpstreamNotificatio
 // each time a straggler succeeds, so the client can refresh promptly without missing
 // later successes or waiting for broken servers to time out.
 //
-// pendingNames is the set of servers that were still pending when the grace period expired.
-func (s *Server) discoverAndNotify(pendingNames []string) {
+// pendingNames is the set of servers that were still pending when the grace
+// period expired. ctx is the session lifetime: shutdown ends discovery
+// promptly instead of letting it run out the full discovery timeout.
+func (s *Server) discoverAndNotify(ctx context.Context, pendingNames []string) {
 	defer s.bgDiscovering.Store(false)
 
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultToolDiscoveryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, DefaultToolDiscoveryTimeout)
 	defer cancel()
 
 	// Buffer one completion per pending server. A non-blocking, single-slot
@@ -863,25 +913,25 @@ func (s *Server) discoverAndNotify(pendingNames []string) {
 	var wg sync.WaitGroup
 	for _, name := range pendingNames {
 		wg.Add(1)
-		go func(serverName string) {
+		goSafe("background discovery "+name, func() {
 			defer wg.Done()
 
-			tools, err := s.aggregatorForServer(serverName).DiscoverServer(ctx, serverName)
+			tools, err := s.aggregatorForServer(name).DiscoverServer(ctx, name)
 			if err != nil {
-				log.Printf("Background discovery failed for %s: %v", serverName, err)
+				log.Printf("Background discovery failed for %s: %v", name, err)
 				return
 			}
-			log.Printf("Background discovery succeeded for %s (%d tools)", serverName, len(tools))
+			log.Printf("Background discovery succeeded for %s (%d tools)", name, len(tools))
 
-			completed <- serverName
-		}(name)
+			completed <- name
+		})
 	}
 
 	// Close the completion stream after every discovery attempt has finished.
-	go func() {
+	goSafe("background discovery join", func() {
 		wg.Wait()
 		close(completed)
-	}()
+	})
 
 	notified := 0
 	for serverName := range completed {
@@ -995,7 +1045,8 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 			continue
 		}
 		wg.Add(1)
-		go func(resultIndex int, serverName string) {
+		resultIndex, serverName := index, name
+		goSafe("resources/list "+name, func() {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -1016,7 +1067,7 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 			}
 
 			results[resultIndex].resources = resources
-		}(index, name)
+		})
 	}
 
 	wg.Wait()
@@ -1231,7 +1282,8 @@ func (s *Server) handlePromptsList(ctx context.Context) (any, *RPCError) {
 			continue
 		}
 		wg.Add(1)
-		go func(resultIndex int, serverName string) {
+		resultIndex, serverName := index, name
+		goSafe("prompts/list "+name, func() {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -1252,7 +1304,7 @@ func (s *Server) handlePromptsList(ctx context.Context) (any, *RPCError) {
 			}
 
 			results[resultIndex] = prompts
-		}(index, name)
+		})
 	}
 
 	wg.Wait()
@@ -1558,7 +1610,12 @@ func (c *Core) applyReload(ctx context.Context, newCfg *config.Config, initiator
 	}
 
 	for _, session := range eagerSessions {
-		go session.startEagerServers(ctx)
+		session.spawn("eager start after reload", func(lifetime context.Context) error {
+			startCtx, cancel := joinContext(ctx, lifetime)
+			defer cancel()
+			session.startEagerServers(startCtx)
+			return nil
+		})
 	}
 
 	for _, session := range sessions {
