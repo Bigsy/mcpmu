@@ -2,6 +2,9 @@
 
 All commands support `--config` / `-c` to specify a custom config file path.
 
+For task-focused guidance, see [Tool permissions](permissions.md) and
+[Tool-surface compression](compression.md).
+
 ## Server management
 
 ```bash
