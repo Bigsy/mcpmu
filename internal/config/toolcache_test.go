@@ -400,3 +400,61 @@ func TestToolCache_ConcurrentUpdates(t *testing.T) {
 		t.Errorf("expected 1 tool, got %d", len(tools))
 	}
 }
+
+// Two processes (e.g. a serve namespace and the web UI) each hold their own
+// ToolCache over the same file. A write from one must not discard servers
+// the other discovered — which is exactly what dumping a stale in-memory
+// snapshot used to do, leaving toolcache.json with only the most recently
+// re-discovered server.
+func TestToolCache_CrossProcessWritesMerge(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	procA, err := NewToolCache(configPath)
+	if err != nil {
+		t.Fatalf("NewToolCache A: %v", err)
+	}
+	procB, err := NewToolCache(configPath)
+	if err != nil {
+		t.Fatalf("NewToolCache B: %v", err)
+	}
+
+	if err := procA.Update("grafana", sampleTools()); err != nil {
+		t.Fatalf("A Update: %v", err)
+	}
+	// B's snapshot predates A's write; its own update must merge, not clobber.
+	if err := procB.Update("Atlassian", sampleTools()); err != nil {
+		t.Fatalf("B Update: %v", err)
+	}
+
+	fresh, err := NewToolCache(configPath)
+	if err != nil {
+		t.Fatalf("NewToolCache fresh: %v", err)
+	}
+	for _, name := range []string{"grafana", "Atlassian"} {
+		if _, ok := fresh.Get(name); !ok {
+			t.Errorf("%s missing from disk after cross-process writes", name)
+		}
+	}
+
+	// A long-lived reader sees the other process's discovery without restart.
+	if _, ok := procA.Get("Atlassian"); !ok {
+		t.Error("A.Get did not pick up B's write")
+	}
+
+	// Delete/Rename are merges too: B deleting its own entry keeps A's.
+	if err := procB.Delete("Atlassian"); err != nil {
+		t.Fatalf("B Delete: %v", err)
+	}
+	if err := procB.Rename("grafana", "graf"); err != nil {
+		t.Fatalf("B Rename: %v", err)
+	}
+	fresh, _ = NewToolCache(configPath)
+	if _, ok := fresh.Get("Atlassian"); ok {
+		t.Error("Atlassian should be deleted")
+	}
+	if _, ok := fresh.Get("graf"); !ok {
+		t.Error("grafana should have been renamed to graf on disk")
+	}
+	if _, ok := fresh.Get("grafana"); ok {
+		t.Error("old grafana entry should be gone")
+	}
+}

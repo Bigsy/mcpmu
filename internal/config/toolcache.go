@@ -25,10 +25,19 @@ const ToolCacheVersion = 2
 
 // ToolCache stores tool definitions and token counts for servers.
 // It is persisted alongside the active config file.
+//
+// Several processes share one file (each `serve` namespace, the web UI, the
+// TUI), so every mutation is a read-merge-write under the cross-process lock:
+// the on-disk file is authoritative and the in-memory copy is a snapshot of
+// it. Writing the whole in-memory map would let one process's stale snapshot
+// clobber tools another process had just discovered.
 type ToolCache struct {
 	path  string
 	cache toolCacheFile
-	mu    sync.RWMutex
+	// modTime is the mtime of the file the snapshot came from; Get reloads
+	// when the file on disk has moved past it.
+	modTime time.Time
+	mu      sync.RWMutex
 }
 
 type toolCacheFile struct {
@@ -129,15 +138,17 @@ func (tc *ToolCache) Update(serverID string, tools []CachedToolInput) error {
 			TokenCount:   CountAggregatedToolTokens(serverID, t),
 		}
 	}
-	tc.cache.Servers[serverID] = ServerToolCache{
-		Tools:     cached,
-		UpdatedAt: time.Now(),
-	}
-	return tc.save()
+	return tc.mutate(func(file *toolCacheFile) {
+		file.Servers[serverID] = ServerToolCache{
+			Tools:     cached,
+			UpdatedAt: time.Now(),
+		}
+	})
 }
 
 // Get retrieves cached tools for a server.
 func (tc *ToolCache) Get(serverID string) ([]CachedTool, bool) {
+	tc.refresh()
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 
@@ -153,11 +164,9 @@ func (tc *ToolCache) Delete(serverID string) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	if _, ok := tc.cache.Servers[serverID]; !ok {
-		return nil
-	}
-	delete(tc.cache.Servers, serverID)
-	return tc.save()
+	return tc.mutate(func(file *toolCacheFile) {
+		delete(file.Servers, serverID)
+	})
 }
 
 // Rename migrates a cache entry to a new key and recomputes token counts
@@ -166,62 +175,103 @@ func (tc *ToolCache) Rename(oldID, newID string) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	entry, ok := tc.cache.Servers[oldID]
-	if !ok {
-		return nil
-	}
-
-	// Recompute token counts with new server name
-	for i, t := range entry.Tools {
-		entry.Tools[i].TokenCount = CountAggregatedToolTokens(newID, t.input())
-	}
-	entry.UpdatedAt = time.Now()
-
-	delete(tc.cache.Servers, oldID)
-	tc.cache.Servers[newID] = entry
-	return tc.save()
+	return tc.mutate(func(file *toolCacheFile) {
+		entry, ok := file.Servers[oldID]
+		if !ok {
+			return
+		}
+		// Recompute token counts with new server name
+		for i, t := range entry.Tools {
+			entry.Tools[i].TokenCount = CountAggregatedToolTokens(newID, t.input())
+		}
+		entry.UpdatedAt = time.Now()
+		delete(file.Servers, oldID)
+		file.Servers[newID] = entry
+	})
 }
 
 func (tc *ToolCache) load() {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if file, modTime, ok := tc.readFile(); ok {
+		tc.cache, tc.modTime = file, modTime
+	}
+}
+
+// readFile parses the on-disk cache. ok is false when the file is missing,
+// unreadable, corrupt, or at a different version — all cases where the disk
+// contents should be treated as empty and rewritten from scratch.
+func (tc *ToolCache) readFile() (file toolCacheFile, modTime time.Time, ok bool) {
+	info, err := os.Stat(tc.path)
+	if err != nil {
+		return file, modTime, false
+	}
 	data, err := os.ReadFile(tc.path)
 	if err != nil {
-		return
+		return file, modTime, false
 	}
-
-	var file toolCacheFile
 	if err := json.Unmarshal(data, &file); err != nil {
-		return
+		return file, modTime, false
 	}
-
 	// Version mismatch — discard stale cache
 	if file.Version != ToolCacheVersion {
-		return
+		return file, modTime, false
 	}
-
 	if file.Servers == nil {
 		file.Servers = make(map[string]ServerToolCache)
 	}
-	tc.cache = file
+	return file, info.ModTime(), true
 }
 
-func (tc *ToolCache) save() error {
-	// Cross-process writers (TUI, web, daemon share this file) serialise on a
-	// dedicated lock file. The in-process tc.mu only orders goroutines; the
-	// fixed .tmp path + rename this once used could interleave across
-	// processes and tear the file.
+// refresh reloads the snapshot when another process has rewritten the file
+// since it was last read, so long-lived readers (web UI, TUI) see discovery
+// done by serve processes without restarting.
+func (tc *ToolCache) refresh() {
+	info, err := os.Stat(tc.path)
+	if err != nil {
+		return
+	}
+	tc.mu.RLock()
+	stale := info.ModTime().After(tc.modTime)
+	tc.mu.RUnlock()
+	if !stale {
+		return
+	}
+	tc.load()
+}
+
+// mutate applies fn to the latest on-disk contents and writes the result
+// back, all under the cross-process lock, then adopts the result as the
+// in-memory snapshot. Cross-process writers (TUI, web, daemon share this
+// file) serialise on a dedicated lock file; the in-process tc.mu only orders
+// goroutines. Callers must hold tc.mu for writing.
+func (tc *ToolCache) mutate(fn func(file *toolCacheFile)) error {
 	return flock.WithLock(tc.path, func() error {
+		file, _, ok := tc.readFile()
+		if !ok {
+			file = toolCacheFile{
+				Version: ToolCacheVersion,
+				Servers: make(map[string]ServerToolCache),
+			}
+		}
+		fn(&file)
+
 		// Resolve symlinks so the atomic rename targets the real file
 		path := tc.path
 		if resolved, err := filepath.EvalSymlinks(path); err == nil {
 			path = resolved
 		}
 
-		data, err := json.MarshalIndent(tc.cache, "", "  ")
+		data, err := json.MarshalIndent(file, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshal tool cache: %w", err)
 		}
 		if err := flock.WriteAtomic(path, data); err != nil {
 			return fmt.Errorf("write cache: %w", err)
+		}
+		tc.cache = file
+		if info, err := os.Stat(tc.path); err == nil {
+			tc.modTime = info.ModTime()
 		}
 		return nil
 	})
