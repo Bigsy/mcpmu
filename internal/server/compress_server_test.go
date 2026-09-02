@@ -911,7 +911,7 @@ func TestCompress_ListingChangesAfterDiscovery(t *testing.T) {
 }
 
 // TestDisabledServerIsNotCallable pins the disabled-server branch of
-// Session.callableServer on both entry points that use it: the direct
+// callableServer on both entry points that use it: the direct
 // tools/call path and the compressed surface's get_tool_schema. The error code
 // and message are the contract a model reads, and nothing else covered this
 // branch (PLAN.md step 4 assumed a test did).

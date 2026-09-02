@@ -1021,7 +1021,10 @@ func (s *Session) discoverAndNotify(ctx context.Context, pendingNames []string) 
 // they run after permission checks or on a different entry path (manager
 // tools, lazy start from resources/prompts), and getOrStartServer re-checks
 // because config can reload between this check and the start.
-func (s *Session) callableServer(cfg *config.Config, activeServerNames []string, serverName string) *RPCError {
+//
+// A plain function, not a Session method: everything it needs is passed in,
+// which is what makes the snapshot guarantee above hold.
+func callableServer(cfg *config.Config, activeServerNames []string, serverName string) *RPCError {
 	if !slices.Contains(activeServerNames, serverName) {
 		return ErrServerNotFound(serverName)
 	}
@@ -1107,7 +1110,7 @@ func (s *Session) handleToolsCall(ctx context.Context, params json.RawMessage) (
 
 	// Manager tools are always allowed
 	if !isManager {
-		if rpcErr := s.callableServer(s.currentConfig(), activeServerNames, serverName); rpcErr != nil {
+		if rpcErr := callableServer(s.currentConfig(), activeServerNames, serverName); rpcErr != nil {
 			return nil, rpcErr
 		}
 	}
@@ -1225,7 +1228,7 @@ func (s *Session) resolveToolSchema(ctx context.Context, qualifiedName string) (
 	activeServerNames := s.activeServerNames
 	s.mu.RUnlock()
 	cfg := s.currentConfig()
-	if rpcErr := s.callableServer(cfg, activeServerNames, serverName); rpcErr != nil {
+	if rpcErr := callableServer(cfg, activeServerNames, serverName); rpcErr != nil {
 		return AggregatedTool{}, rpcErr
 	}
 	if allowed, reason := IsToolAllowed(cfg, activeNamespaceName, serverName, toolName); !allowed {

@@ -36,9 +36,18 @@ func TestParseCompressionLevel(t *testing.T) {
 	if CompressionOff.Enabled() {
 		t.Error("off should not be enabled")
 	}
+	// Coverage follows the slice, not the hand-maintained map above: a level
+	// added to CompressionLevels without a parser case fails here.
 	for _, level := range CompressionLevels {
 		if !level.Enabled() {
 			t.Errorf("%q should be enabled", level)
+		}
+		got, err := ParseCompressionLevel(string(level))
+		if err != nil {
+			t.Errorf("ParseCompressionLevel(%q) error: %v", level, err)
+		}
+		if got != level {
+			t.Errorf("ParseCompressionLevel(%q) = %q, want round trip", level, got)
 		}
 	}
 	if len(CompressionLevels) != 4 {

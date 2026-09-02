@@ -96,9 +96,6 @@ func CompressionForce(level CompressionLevel) CompressionOverride {
 // Set reports whether the flag was given at all.
 func (o CompressionOverride) Set() bool { return o.set }
 
-// Level is the forced level. It is meaningful only when Set.
-func (o CompressionOverride) Level() CompressionLevel { return o.level }
-
 // Resolve applies the override to a namespace-configured value. An explicit
 // flag wins in both directions; otherwise the stored level applies. A stored
 // value that does not parse degrades to off: mutation paths and load-time
