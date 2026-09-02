@@ -909,3 +909,60 @@ func TestCompress_ListingChangesAfterDiscovery(t *testing.T) {
 		t.Fatal("server did not stop")
 	}
 }
+
+// TestDisabledServerIsNotCallable pins the disabled-server branch of
+// Session.callableServer on both entry points that use it: the direct
+// tools/call path and the compressed surface's get_tool_schema. The error code
+// and message are the contract a model reads, and nothing else covered this
+// branch (PLAN.md step 4 assumed a test did).
+//
+// Only the get_tool_schema case actually depends on callableServer's check:
+// deleting it still fails the direct call with the identical error, because
+// getOrStartServer re-checks IsEnabled after the config may have reloaded.
+// Both are asserted anyway — the compressed surface must not become the
+// laxer of the two.
+func TestDisabledServerIsNotCallable(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping subprocess test in short mode")
+	}
+
+	disabled := false
+	off := fakeUpstream(`{"tools":[{"name":"read_file","description":"Read a file.","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]}`)
+	off.Enabled = &disabled
+	cfg := &config.Config{
+		SchemaVersion: 1,
+		Servers:       map[string]config.ServerConfig{"srv1": off},
+		Namespaces: map[string]config.NamespaceConfig{
+			"work": {ServerIDs: []string{"srv1"}},
+		},
+	}
+
+	script := initLine + "\n" +
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"srv1.read_file","arguments":{"path":"/x"}}}` + "\n" +
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_tool_schema","arguments":{"tool":"srv1.read_file"}}}` + "\n"
+	responses := runCompressSession(t, Options{
+		SessionOptions: SessionOptions{
+			Namespace:   "work",
+			Compression: config.CompressionForce(config.CompressionMedium),
+		},
+		Config: cfg,
+	}, script)
+
+	for _, tc := range []struct {
+		id   int
+		what string
+	}{{2, "direct tools/call"}, {3, "get_tool_schema"}} {
+		rpcErr := rpcErrorFromResponse(t, responses[tc.id])
+		if rpcErr == nil {
+			t.Errorf("%s against a disabled server succeeded: %s", tc.what, responses[tc.id])
+			continue
+		}
+		if rpcErr.Code != ErrCodeServerNotRunning {
+			t.Errorf("%s: code = %d, want %d (%s)", tc.what, rpcErr.Code, ErrCodeServerNotRunning, rpcErr.Message)
+		}
+		if rpcErr.Message != "server is disabled: srv1" {
+			t.Errorf("%s: message = %q, want %q", tc.what, rpcErr.Message, "server is disabled: srv1")
+		}
+	}
+}

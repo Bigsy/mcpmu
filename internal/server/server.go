@@ -1013,6 +1013,31 @@ func (s *Server) discoverAndNotify(ctx context.Context, pendingNames []string) {
 	}
 }
 
+// callableServer applies the checks every tool-addressed request performs
+// before touching an upstream: the server is in the active namespace, exists
+// in the current config, and is enabled. cfg and activeServerNames are the
+// caller's snapshots, so a caller that goes on to use the same cfg (see
+// resolveToolSchema, which feeds it to IsToolAllowed) cannot have a
+// concurrent reload disagree with the check it already passed.
+//
+// Router.CallTool and getOrStartServer deliberately keep their own lookups:
+// they run after permission checks or on a different entry path (manager
+// tools, lazy start from resources/prompts), and getOrStartServer re-checks
+// because config can reload between this check and the start.
+func (s *Session) callableServer(cfg *config.Config, activeServerNames []string, serverName string) *RPCError {
+	if !slices.Contains(activeServerNames, serverName) {
+		return ErrServerNotFound(serverName)
+	}
+	srv, ok := cfg.GetServer(serverName)
+	if !ok {
+		return ErrServerNotFound(serverName)
+	}
+	if !srv.IsEnabled() {
+		return NewRPCError(ErrCodeServerNotRunning, "server is disabled: "+serverName, nil)
+	}
+	return nil
+}
+
 // handleToolsCall handles the tools/call request.
 func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (any, *RPCError) {
 	s.mu.RLock()
@@ -1085,19 +1110,8 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 
 	// Manager tools are always allowed
 	if !isManager {
-		// Check if the server is in the active namespace
-		allowed := slices.Contains(activeServerNames, serverName)
-		if !allowed {
-			return nil, ErrServerNotFound(serverName)
-		}
-
-		// Check if server is enabled
-		srv, ok := s.currentConfig().GetServer(serverName)
-		if !ok {
-			return nil, ErrServerNotFound(serverName)
-		}
-		if !srv.IsEnabled() {
-			return nil, NewRPCError(ErrCodeServerNotRunning, "server is disabled: "+serverName, nil)
+		if rpcErr := s.callableServer(s.currentConfig(), activeServerNames, serverName); rpcErr != nil {
+			return nil, rpcErr
 		}
 	}
 
@@ -1213,16 +1227,9 @@ func (s *Session) resolveToolSchema(ctx context.Context, qualifiedName string) (
 	activeNamespaceName := s.activeNamespaceName
 	activeServerNames := s.activeServerNames
 	s.mu.RUnlock()
-	if !slices.Contains(activeServerNames, serverName) {
-		return AggregatedTool{}, ErrServerNotFound(serverName)
-	}
 	cfg := s.currentConfig()
-	srv, ok := cfg.GetServer(serverName)
-	if !ok {
-		return AggregatedTool{}, ErrServerNotFound(serverName)
-	}
-	if !srv.IsEnabled() {
-		return AggregatedTool{}, NewRPCError(ErrCodeServerNotRunning, "server is disabled: "+serverName, nil)
+	if rpcErr := s.callableServer(cfg, activeServerNames, serverName); rpcErr != nil {
+		return AggregatedTool{}, rpcErr
 	}
 	if allowed, reason := IsToolAllowed(cfg, activeNamespaceName, serverName, toolName); !allowed {
 		return AggregatedTool{}, ErrToolDenied(qualifiedName, reason)
