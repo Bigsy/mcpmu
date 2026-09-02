@@ -12,6 +12,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/daemon"
 )
 
@@ -32,10 +33,9 @@ type Options struct {
 	Resources          bool
 	Prompts            bool
 	Eager              bool
-	// Compression is the tri-state --compress flag as a string ("" = flag
-	// absent, "off" = explicit off, otherwise the level); the shim forwards it
-	// opaquely in the handshake and the daemon parses it.
-	Compression string
+	// Compression is the tri-state --compress override; the shim forwards it
+	// in the handshake and the daemon passes it straight to the session.
+	Compression config.CompressionOverride
 
 	startupTimeout   time.Duration
 	handshakeTimeout time.Duration

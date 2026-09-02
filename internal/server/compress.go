@@ -3,47 +3,10 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"strings"
+
+	"github.com/Bigsy/mcpmu/internal/config"
 )
-
-// CompressionLevel selects how much of each tool's metadata survives into the
-// compact listing the wrapper tools carry. The zero value disables
-// compression. Levels follow atlassian-labs/mcp-compressor so their docs
-// describe ours: low = full description, medium = first sentence, high = args
-// only, max = name only.
-type CompressionLevel string
-
-const (
-	CompressionOff    CompressionLevel = ""
-	CompressionLow    CompressionLevel = "low"
-	CompressionMedium CompressionLevel = "medium"
-	CompressionHigh   CompressionLevel = "high"
-	CompressionMax    CompressionLevel = "max"
-)
-
-// ParseCompressionLevel validates a --compress flag value. Empty and "off"
-// both mean disabled.
-func ParseCompressionLevel(s string) (CompressionLevel, error) {
-	switch strings.ToLower(s) {
-	case "", "off":
-		return CompressionOff, nil
-	case "low":
-		return CompressionLow, nil
-	case "medium":
-		return CompressionMedium, nil
-	case "high":
-		return CompressionHigh, nil
-	case "max":
-		return CompressionMax, nil
-	default:
-		return CompressionOff, fmt.Errorf("invalid compression level %q (valid: off, low, medium, high, max)", s)
-	}
-}
-
-func (l CompressionLevel) enabled() bool {
-	return l != CompressionOff
-}
 
 // Wrapper tool names. None contains a dot, so they can never collide with a
 // qualified `{server}.{tool}` name — an upstream tool literally named
@@ -103,7 +66,7 @@ func wrapperTools(listing string) []AggregatedTool {
 // formatListing renders the compact one-line-per-tool listing. Tools arrive in
 // exposed form (qualified name, "[server]" description prefix) and in the same
 // order handleToolsList produces, so the output is stable across calls.
-func formatListing(level CompressionLevel, tools []AggregatedTool) string {
+func formatListing(level config.CompressionLevel, tools []AggregatedTool) string {
 	if len(tools) == 0 {
 		// A deny-by-default namespace with no allows, or one with no servers,
 		// has nothing to list — but a bare "Available tools:" header with
@@ -117,16 +80,16 @@ func formatListing(level CompressionLevel, tools []AggregatedTool) string {
 		}
 		b.WriteString("<tool>")
 		b.WriteString(t.Name)
-		if level != CompressionMax {
+		if level != config.CompressionMax {
 			b.WriteByte('(')
 			b.WriteString(strings.Join(schemaArgNames(t.InputSchema), ", "))
 			b.WriteByte(')')
 		}
 		var desc string
 		switch level {
-		case CompressionLow:
+		case config.CompressionLow:
 			desc = listingDescription(t)
-		case CompressionMedium:
+		case config.CompressionMedium:
 			desc = firstSentence(listingDescription(t))
 		}
 		if desc != "" {

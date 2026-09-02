@@ -114,7 +114,7 @@ func TestCompressedSessionOverHTTP(t *testing.T) {
 	fake := mcptest.DefaultConfig()
 	fake.EchoToolCalls = true
 	_, base := startServer(t, singleServerConfig(t, fake), func(o *Options) {
-		o.Compression = server.CompressionMedium
+		o.Compression = config.CompressionForce(config.CompressionMedium)
 	})
 	probe := &mcptest.HTTPProbe{BaseURL: base + "/mcp"}
 	probe.Initialize(t)
@@ -186,7 +186,7 @@ func TestCompressedSessionOverHTTP(t *testing.T) {
 
 // TestNamespaceCompressionOverHTTP covers the per-namespace level on the HTTP
 // session-construction path: a namespace-configured level compresses with no
-// flag at all, and an explicit --compress off (CompressionForceOff) overrides
+// flag at all, and an explicit --compress off (an explicit off override) overrides
 // it back to the full listing.
 func TestNamespaceCompressionOverHTTP(t *testing.T) {
 	listNames := func(t *testing.T, base string) map[string]bool {
@@ -225,10 +225,10 @@ func TestNamespaceCompressionOverHTTP(t *testing.T) {
 	}
 
 	_, forcedOffBase := startServer(t, namespacedConfig(), func(o *Options) {
-		o.CompressionForceOff = true
+		o.Compression = config.CompressionForce(config.CompressionOff)
 	})
 	if names := listNames(t, forcedOffBase); names["invoke_tool"] || !names["fake.read_file"] {
-		t.Errorf("CompressionForceOff should override the namespace level, got %v", names)
+		t.Errorf("forced-off override should override the namespace level, got %v", names)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/httpguard"
 	"github.com/Bigsy/mcpmu/internal/server"
 )
@@ -75,14 +76,13 @@ type Options struct {
 	SessionIdleTimeout time.Duration
 
 	// Per-Session defaults, mirroring the serve flags.
-	Namespace           string // default when the URL has no namespace segment
-	EagerStart          bool
-	ExposeManagerTools  bool
-	ExposeResources     bool
-	ExposePrompts       bool
-	Compression         server.CompressionLevel
-	CompressionForceOff bool // explicit `--compress off` (see server.Options)
-	ServerVersion       string
+	Namespace          string // default when the URL has no namespace segment
+	EagerStart         bool
+	ExposeManagerTools bool
+	ExposeResources    bool
+	ExposePrompts      bool
+	Compression        config.CompressionOverride
+	ServerVersion      string
 }
 
 // Server is the Streamable HTTP listener plus its session table.

@@ -130,7 +130,9 @@ Linux/macOS connections additionally require a matching peer UID.
 
 Session connections use a versioned pre-MCP handshake carrying the executable
 content hash, canonical config path, namespace, eager setting, manager-tool
-visibility, and resource/prompt passthrough flags. Once accepted, the socket is
+visibility, resource/prompt passthrough flags, and the `--compress` override
+(one `config.CompressionOverride`, text-encoded as `""`/`"off"`/level; an
+absent key and an empty string both decode to unset). Once accepted, the socket is
 ordinary NDJSON MCP. Each Session has one bounded outbound queue; a client that
 cannot drain is disconnected instead of blocking the shared Core. Control
 connections have a separately frozen protocol and tolerate executable-build
@@ -328,8 +330,11 @@ non-object schemas render as `name()`.
 
 Where it plugs in (`internal/server`):
 
-- `compress.go` holds the pure pieces: `CompressionLevel`, the listing
-  formatter, and the wrapper tool definitions.
+- `compress.go` holds the pure pieces: the listing formatter and the wrapper
+  tool definitions. The level type itself (`config.CompressionLevel`, its
+  `ParseCompressionLevel`, and `CompressionLevels`) lives in `internal/config`,
+  shared by `--compress` flag parsing, namespace config validation, and the
+  session's per-request resolution.
 - `handleToolsList` branches after the shared `visibleTools` helper (grace
   period, background discovery, and permission filter — identical to the
   uncompressed path), so denied tools never appear in the listing.
@@ -366,16 +371,18 @@ is opt-in rather than the default.
 and web namespace forms) stores a level on the namespace, so a large "work"
 namespace compresses while a three-tool "dev" one doesn't. Resolution happens
 per request in `Session.compressionLevel()`, not at session construction: an
-explicit `--compress` flag wins in both directions (`Options.Compression`
-carries a level, `Options.CompressionForceOff` carries an explicit
+explicit `--compress` flag wins in both directions (`Options.Compression` is a
+`config.CompressionOverride`: unset, an explicit level, or an explicit
 `--compress off`), otherwise the *active* namespace's configured level from the
 *current* config applies — a hot reload that changes the namespace or its level
 takes effect on the next `tools/list`. The handlers resolve the level once per
 request (the intercept in `handleToolsCall` and the listing a wrapper renders
 must agree) and snapshot the namespace name under `s.mu`, mirroring the
-`router` snapshot pattern. The flag's tri-state travels in the daemon
-handshake as a string: `""` = flag absent (namespace config decides), `"off"` =
-explicit off, otherwise the level.
+`router` snapshot pattern. `CompressionOverride.Resolve` is the single place
+that combines the two, and the same type travels in the daemon handshake: its
+text encoding is unchanged (`""` = flag absent so the namespace config decides,
+`"off"` = explicit off, otherwise the level), so the daemon passes
+`handshake.Compression` straight to the session with no re-derivation.
 
 Stored values are canonical — `config.NormalizeCompressionLevel` (lowercase,
 `"off"` → `""`) runs in `AddNamespace`/`UpdateNamespace` and again at load, so

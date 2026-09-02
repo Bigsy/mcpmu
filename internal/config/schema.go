@@ -107,35 +107,7 @@ type NamespaceConfig struct {
 	ServerIDs      []string        `json:"serverIds"`
 	DenyByDefault  bool            `json:"denyByDefault,omitempty"`  // If true, unconfigured tools are denied
 	ServerDefaults map[string]bool `json:"serverDefaults,omitempty"` // Per-server deny-default override (true = deny)
-	Compression    string          `json:"compression,omitempty"`    // Serve-mode compressed tool surface level ("" = off; see CompressionLevels)
-}
-
-// CompressionLevels are the valid non-off values for NamespaceConfig.Compression.
-// They mirror server.ParseCompressionLevel's levels (a cross-package test keeps
-// the two in sync — the server package imports this one, not the other way).
-var CompressionLevels = []string{"low", "medium", "high", "max"}
-
-// NormalizeCompressionLevel canonicalizes a compression value for storage:
-// whitespace trimmed, lowercased, and "off" mapped to "" — so a stored level
-// is always either absent or an exact CompressionLevels member, and every
-// display/edit surface can compare it literally. Unknown values are returned
-// (trimmed/lowercased) rather than dropped, so validation still sees them.
-func NormalizeCompressionLevel(level string) string {
-	level = strings.ToLower(strings.TrimSpace(level))
-	if level == "off" {
-		return ""
-	}
-	return level
-}
-
-// ValidateCompression checks a namespace compression value. Empty and "off"
-// both mean disabled; mutation paths normalize before storing so only "" and
-// CompressionLevels members reach the config.
-func ValidateCompression(level string) error {
-	if level = NormalizeCompressionLevel(level); level == "" || slices.Contains(CompressionLevels, level) {
-		return nil
-	}
-	return fmt.Errorf("invalid compression level %q (valid: off, low, medium, high, max)", level)
+	Compression    string          `json:"compression,omitempty"`    // Serve-mode compressed tool surface level ("" = off; see CompressionLevel)
 }
 
 // Validate checks that the NamespaceConfig is in a valid state.

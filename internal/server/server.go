@@ -37,21 +37,18 @@ type Options struct {
 	ExposePrompts      bool   // Passthrough prompts/* from upstream servers
 	// Compression replaces tools/list with the list_tools/get_tool_schema/
 	// invoke_tool wrapper surface. Per-Session, not per-Core: two sessions
-	// against one daemon can run different levels. A non-zero value is an
-	// explicit --compress override; the zero value defers to the active
-	// namespace's configured level (see Session.compressionLevel).
-	Compression CompressionLevel
-	// CompressionForceOff is an explicit `--compress off`: compression stays
-	// off even when the active namespace's config enables it. Distinct from
-	// leaving Compression zero, which lets the namespace config decide.
-	CompressionForceOff bool
-	DebounceDelay       time.Duration // Delay before applying config changes (default: 150ms)
-	LogLevel            string
-	Stdin               io.Reader
-	Stdout              io.Writer
-	Stderr              io.Writer
-	ServerName          string
-	ServerVersion       string
+	// against one daemon can run different levels. It is the tri-state
+	// --compress flag: unset defers to the active namespace's configured level,
+	// an explicit level or an explicit off wins over it (see
+	// Session.compressionLevel).
+	Compression   config.CompressionOverride
+	DebounceDelay time.Duration // Delay before applying config changes (default: 150ms)
+	LogLevel      string
+	Stdin         io.Reader
+	Stdout        io.Writer
+	Stderr        io.Writer
+	ServerName    string
+	ServerVersion string
 }
 
 // SelectionMethod indicates how the active namespace was selected.
@@ -717,26 +714,16 @@ func (s *Server) handlePing(ctx context.Context) (any, *RPCError) {
 // namespace's configured "compression" applies. Resolved per request, not at
 // session construction, because a hot reload can change both the active
 // namespace and its configured level.
-func (s *Session) compressionLevel() CompressionLevel {
-	if s.opts.Compression.enabled() || s.opts.CompressionForceOff {
-		return s.opts.Compression
-	}
+func (s *Session) compressionLevel() config.CompressionLevel {
 	s.mu.RLock()
 	activeNamespaceName := s.activeNamespaceName
 	cfg := s.currentConfig()
 	s.mu.RUnlock()
 	ns, ok := cfg.GetNamespace(activeNamespaceName)
 	if !ok {
-		return CompressionOff
+		return s.opts.Compression.Resolve("")
 	}
-	level, err := ParseCompressionLevel(ns.Compression)
-	if err != nil {
-		// Mutation paths and load-time validation reject bad levels; treat
-		// anything that slips through as off rather than failing every
-		// tools/list.
-		return CompressionOff
-	}
-	return level
+	return s.opts.Compression.Resolve(ns.Compression)
 }
 
 // handleToolsList handles the tools/list request.
@@ -761,7 +748,7 @@ func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
 	// Compressed surface: the client sees only the wrapper tools; the full
 	// listing rides inside invoke_tool's description (and list_tools). Manager
 	// tools stay real — they are already opt-in and tiny.
-	if compression.enabled() {
+	if compression.Enabled() {
 		wrappers := wrapperTools(formatListing(compression, tools))
 		if s.opts.ExposeManagerTools {
 			wrappers = append(wrappers, s.currentAggregator().ManagerTools()...)
@@ -1033,7 +1020,7 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 	// Resolved once per request so the intercept and the listing a wrapper
 	// renders agree.
 	compression := s.compressionLevel()
-	if compression.enabled() {
+	if compression.Enabled() {
 		switch req.Name {
 		case wrapperListTools:
 			return s.handleListToolsWrapper(ctx, router, compression)
@@ -1121,7 +1108,7 @@ func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (a
 // a text result, rebuilt per call from the current config and catalog. router
 // and level are the caller's snapshots — a reload can swap s.router and change
 // the effective compression concurrently, so neither is re-read here.
-func (s *Session) handleListToolsWrapper(ctx context.Context, router *Router, level CompressionLevel) (any, *RPCError) {
+func (s *Session) handleListToolsWrapper(ctx context.Context, router *Router, level config.CompressionLevel) (any, *RPCError) {
 	start := time.Now()
 	listing := formatListing(level, s.visibleTools(ctx))
 	router.recordMeta(wrapperListTools, start, nil)

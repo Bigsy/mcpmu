@@ -110,7 +110,7 @@ func TestCompress_ToolsListReturnsWrappers(t *testing.T) {
 	}
 
 	script := initLine + "\n" + `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
-	responses := runCompressSession(t, Options{Config: cfg, Compression: CompressionMedium}, script)
+	responses := runCompressSession(t, Options{Config: cfg, Compression: config.CompressionForce(config.CompressionMedium)}, script)
 
 	tools := wrapperListFromResponse(t, responses[2])
 	if len(tools) != 3 {
@@ -142,7 +142,7 @@ func TestCompress_ManagerToolsStayReal(t *testing.T) {
 
 	script := initLine + "\n" + `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
 	responses := runCompressSession(t, Options{
-		Config: cfg, Compression: CompressionMedium, ExposeManagerTools: true,
+		Config: cfg, Compression: config.CompressionForce(config.CompressionMedium), ExposeManagerTools: true,
 	}, script)
 
 	tools := wrapperListFromResponse(t, responses[2])
@@ -194,7 +194,7 @@ func TestCompress_DeniedToolsHidden(t *testing.T) {
 		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_tool_schema","arguments":{"tools":["srv1.read_file","srv1.delete_file","srv1.no_such_tool"]}}}` + "\n"
 
 	responses := runCompressSession(t, Options{
-		Config: cfg, Namespace: "restricted", Compression: CompressionMedium,
+		Config: cfg, Namespace: "restricted", Compression: config.CompressionForce(config.CompressionMedium),
 	}, script)
 
 	// Denied tools never appear in the embedded listing or list_tools output.
@@ -274,7 +274,7 @@ func TestCompress_InvokeToolMatchesDirectCall(t *testing.T) {
 	}
 
 	// Lazy start: invoke_tool is the session's first upstream interaction.
-	compressed := runCompressSession(t, Options{Config: newConfig(), Compression: CompressionMedium},
+	compressed := runCompressSession(t, Options{Config: newConfig(), Compression: config.CompressionForce(config.CompressionMedium)},
 		initLine+"\n"+
 			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"invoke_tool","arguments":{"tool":"srv1.read_file","input":{"path":"/x"}}}}`+"\n")
 	direct := runCompressSession(t, Options{Config: newConfig()},
@@ -317,7 +317,7 @@ func TestCompress_GetToolSchema_LazyDiscovery(t *testing.T) {
 	// primed the catalog, so this exercises the DiscoverServer fallback.
 	script := initLine + "\n" +
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_tool_schema","arguments":{"tool":"srv1.read_file"}}}` + "\n"
-	responses := runCompressSession(t, Options{Config: cfg, Compression: CompressionMedium}, script)
+	responses := runCompressSession(t, Options{Config: cfg, Compression: config.CompressionForce(config.CompressionMedium)}, script)
 
 	var resp struct {
 		Result struct {
@@ -353,7 +353,7 @@ func TestCompress_GetToolSchema_InvalidArgs(t *testing.T) {
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"invoke_tool","arguments":{}}}` + "\n" +
 		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"invoke_tool","arguments":{"tool":"a.b","input":"not an object"}}}` + "\n" +
 		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"invoke_tool","arguments":{"tool":"a.b","input":[1,2]}}}` + "\n"
-	responses := runCompressSession(t, Options{Config: cfg, Compression: CompressionMedium}, script)
+	responses := runCompressSession(t, Options{Config: cfg, Compression: config.CompressionForce(config.CompressionMedium)}, script)
 
 	for id := 2; id <= 6; id++ {
 		if rpcErr := rpcErrorFromResponse(t, responses[id]); rpcErr == nil || rpcErr.Code != ErrCodeInvalidParams {
@@ -415,7 +415,7 @@ func TestCompress_UpstreamToolNamedInvokeTool(t *testing.T) {
 	wrapped := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"invoke_tool","arguments":{"tool":"srv1.invoke_tool","input":{"x":1}}}}`
 
 	// Compression on: qualified name resolves directly and through the wrapper.
-	on := runCompressSession(t, Options{Config: newConfig(), Compression: CompressionMedium},
+	on := runCompressSession(t, Options{Config: newConfig(), Compression: config.CompressionForce(config.CompressionMedium)},
 		initLine+"\n"+directCall+"\n"+wrapped+"\n")
 	for id := 2; id <= 3; id++ {
 		if text := toolCallText(t, on[id]); !strings.Contains(text, "invoke_tool") {
@@ -459,7 +459,7 @@ func TestCompress_MetricsRecording(t *testing.T) {
 
 	_ = runCompressSession(t, Options{
 		Config: cfg, ConfigPath: configPath, PIDTrackerDir: dir,
-		Namespace: "work", Compression: CompressionMedium,
+		Namespace: "work", Compression: config.CompressionForce(config.CompressionMedium),
 	}, script)
 
 	store, err := metrics.Load(filepath.Join(dir, "metrics.json"))
@@ -504,7 +504,7 @@ func TestCompress_SharedAndPrivateAggregatorsMerge(t *testing.T) {
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_tool_schema","arguments":{"tool":"private-srv.private_tool"}}}` + "\n" +
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"invoke_tool","arguments":{"tool":"private-srv.private_tool","input":{}}}}` + "\n"
 
-	responses := runCompressSession(t, Options{Config: cfg, Compression: CompressionMedium}, script)
+	responses := runCompressSession(t, Options{Config: cfg, Compression: config.CompressionForce(config.CompressionMedium)}, script)
 
 	listing := toolCallText(t, responses[2])
 	for _, want := range []string{"shared-srv.shared_tool", "private-srv.private_tool"} {
@@ -553,7 +553,7 @@ func TestCompress_WrapperMetaRecording_RaceWithReload(t *testing.T) {
 		Config:        newConfig(),
 		PIDTrackerDir: t.TempDir(),
 		Namespace:     "ns1",
-		Compression:   CompressionMedium,
+		Compression:   config.CompressionForce(config.CompressionMedium),
 		Stdin:         stdinReader,
 		Stdout:        stdoutWriter,
 		ServerName:    "mcpmu-test",
@@ -672,7 +672,7 @@ func TestCompress_ReloadDropsRemovedServer(t *testing.T) {
 	srv, err := New(Options{
 		Config:        oldCfg,
 		PIDTrackerDir: t.TempDir(),
-		Compression:   CompressionMedium,
+		Compression:   config.CompressionForce(config.CompressionMedium),
 		Stdin:         stdinReader,
 		Stdout:        stdoutWriter,
 		ServerName:    "mcpmu-test",
@@ -801,7 +801,7 @@ func TestCompress_ListingChangesAfterDiscovery(t *testing.T) {
 	srv, err := New(Options{
 		Config:        cfg,
 		PIDTrackerDir: t.TempDir(),
-		Compression:   CompressionMedium,
+		Compression:   config.CompressionForce(config.CompressionMedium),
 		Stdin:         stdinReader,
 		Stdout:        stdoutWriter,
 		ServerName:    "mcpmu-test",

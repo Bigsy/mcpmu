@@ -1,6 +1,10 @@
 package daemon
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/Bigsy/mcpmu/internal/config"
+)
 
 const (
 	SessionProtocol = 1
@@ -23,10 +27,14 @@ type Handshake struct {
 	Resources          bool   `json:"resources,omitempty"`
 	Prompts            bool   `json:"prompts,omitempty"`
 	Eager              bool   `json:"eager,omitempty"`
-	// Compression is tri-state: "" = --compress absent (the active namespace's
-	// configured level decides), "off" = explicit off, otherwise the level.
-	Compression string `json:"compression,omitempty"`
-	PID         int    `json:"pid,omitempty"`
+	// Compression is the tri-state --compress override. Its text form on the
+	// wire is unchanged: "" = flag absent (the active namespace's configured
+	// level decides), "off" = explicit off, otherwise the level. The tag has no
+	// omitempty because omitempty never applied to a struct anyway: an unset
+	// override is sent as "", and an absent key decodes to unset too, so a shim
+	// that never sent the field reads correctly either way.
+	Compression config.CompressionOverride `json:"compression"`
+	PID         int                        `json:"pid,omitempty"`
 }
 
 type HandshakeResponse struct {

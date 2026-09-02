@@ -77,7 +77,7 @@ func TestCompress_UnknownNamespaceLevelDegradesToOff(t *testing.T) {
 
 // TestCompress_FlagOverridesNamespaceConfig verifies the --compress flag wins
 // over namespace config in both directions: an explicit level replaces the
-// configured one, and an explicit off (CompressionForceOff) disables the
+// configured one, and an explicit off (an explicit off override) disables the
 // wrappers entirely.
 func TestCompress_FlagOverridesNamespaceConfig(t *testing.T) {
 	t.Parallel()
@@ -88,7 +88,7 @@ func TestCompress_FlagOverridesNamespaceConfig(t *testing.T) {
 	script := initLine + "\n" + `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
 
 	// --compress off: full tools/list despite the namespace's medium.
-	off := runCompressSession(t, Options{Config: nsCompressConfig("medium"), CompressionForceOff: true}, script)
+	off := runCompressSession(t, Options{Config: nsCompressConfig("medium"), Compression: config.CompressionForce(config.CompressionOff)}, script)
 	offTools := wrapperListFromResponse(t, off[2])
 	if _, ok := offTools["srv1.read_file"]; !ok {
 		t.Error("forced-off session should list the real tool")
@@ -98,7 +98,7 @@ func TestCompress_FlagOverridesNamespaceConfig(t *testing.T) {
 	}
 
 	// --compress high: wrappers render at high (args only), not medium.
-	high := runCompressSession(t, Options{Config: nsCompressConfig("medium"), Compression: CompressionHigh}, script)
+	high := runCompressSession(t, Options{Config: nsCompressConfig("medium"), Compression: config.CompressionForce(config.CompressionHigh)}, script)
 	highTools := wrapperListFromResponse(t, high[2])
 	desc := highTools[wrapperInvokeTool].Description
 	if !strings.Contains(desc, "<tool>srv1.read_file(path)</tool>") {

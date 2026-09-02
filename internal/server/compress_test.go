@@ -8,63 +8,6 @@ import (
 	"github.com/Bigsy/mcpmu/internal/config"
 )
 
-func TestParseCompressionLevel(t *testing.T) {
-	t.Parallel()
-	valid := map[string]CompressionLevel{
-		"":       CompressionOff,
-		"off":    CompressionOff,
-		"low":    CompressionLow,
-		"medium": CompressionMedium,
-		"HIGH":   CompressionHigh,
-		"Max":    CompressionMax,
-	}
-	for in, want := range valid {
-		got, err := ParseCompressionLevel(in)
-		if err != nil {
-			t.Errorf("ParseCompressionLevel(%q) error: %v", in, err)
-		}
-		if got != want {
-			t.Errorf("ParseCompressionLevel(%q) = %q, want %q", in, got, want)
-		}
-	}
-	for _, in := range []string{"maximum", "on", "true", "1"} {
-		if _, err := ParseCompressionLevel(in); err == nil {
-			t.Errorf("ParseCompressionLevel(%q) should fail", in)
-		}
-	}
-	if CompressionOff.enabled() {
-		t.Error("off should not be enabled")
-	}
-	if !CompressionMedium.enabled() {
-		t.Error("medium should be enabled")
-	}
-}
-
-// TestCompressionLevelsMatchConfig keeps config.CompressionLevels (the config
-// package cannot import this one) in sync with ParseCompressionLevel: every
-// config-valid level must parse to an enabled level here, and every enabled
-// level here must be config-valid.
-func TestCompressionLevelsMatchConfig(t *testing.T) {
-	t.Parallel()
-	for _, level := range config.CompressionLevels {
-		parsed, err := ParseCompressionLevel(level)
-		if err != nil {
-			t.Errorf("config level %q rejected by ParseCompressionLevel: %v", level, err)
-		}
-		if !parsed.enabled() {
-			t.Errorf("config level %q parses to disabled", level)
-		}
-	}
-	for _, level := range []CompressionLevel{CompressionLow, CompressionMedium, CompressionHigh, CompressionMax} {
-		if err := config.ValidateCompression(string(level)); err != nil {
-			t.Errorf("server level %q rejected by config.ValidateCompression: %v", level, err)
-		}
-	}
-	if len(config.CompressionLevels) != 4 {
-		t.Errorf("config.CompressionLevels has %d entries, want 4", len(config.CompressionLevels))
-	}
-}
-
 func TestSchemaArgNames(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -186,26 +129,26 @@ func TestFormatListing(t *testing.T) {
 	tools := listingFixture()
 
 	tests := []struct {
-		level CompressionLevel
+		level config.CompressionLevel
 		want  string
 	}{
 		{
-			CompressionLow,
+			config.CompressionLow,
 			"<tool>srv1.read_file(path, limit?): Read a file from disk. Supports partial reads.</tool>\n" +
 				"<tool>srv2.get_time()</tool>",
 		},
 		{
-			CompressionMedium,
+			config.CompressionMedium,
 			"<tool>srv1.read_file(path, limit?): Read a file from disk.</tool>\n" +
 				"<tool>srv2.get_time()</tool>",
 		},
 		{
-			CompressionHigh,
+			config.CompressionHigh,
 			"<tool>srv1.read_file(path, limit?)</tool>\n" +
 				"<tool>srv2.get_time()</tool>",
 		},
 		{
-			CompressionMax,
+			config.CompressionMax,
 			"<tool>srv1.read_file</tool>\n" +
 				"<tool>srv2.get_time</tool>",
 		},
@@ -220,7 +163,7 @@ func TestFormatListing(t *testing.T) {
 
 	// An empty listing must say so explicitly — a bare "Available tools:"
 	// header with nothing under it invites the model to invent a tool name.
-	if got := formatListing(CompressionMedium, nil); got != "(none)" {
+	if got := formatListing(config.CompressionMedium, nil); got != "(none)" {
 		t.Errorf("empty listing = %q, want %q", got, "(none)")
 	}
 }
@@ -231,7 +174,7 @@ func TestFormatListing_MultilineDescriptionFlattened(t *testing.T) {
 		Name:        "srv.multi",
 		Description: "[srv] Line one\nline   two continues here",
 	}}
-	got := formatListing(CompressionLow, tools)
+	got := formatListing(config.CompressionLow, tools)
 	want := "<tool>srv.multi(): Line one line two continues here</tool>"
 	if got != want {
 		t.Errorf("formatListing = %q, want %q", got, want)

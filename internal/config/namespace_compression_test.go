@@ -8,6 +8,44 @@ import (
 	"testing"
 )
 
+func TestParseCompressionLevel(t *testing.T) {
+	valid := map[string]CompressionLevel{
+		"":         CompressionOff,
+		"off":      CompressionOff,
+		" Off ":    CompressionOff,
+		"low":      CompressionLow,
+		"medium":   CompressionMedium,
+		"HIGH":     CompressionHigh,
+		"Max":      CompressionMax,
+		" medium ": CompressionMedium,
+	}
+	for in, want := range valid {
+		got, err := ParseCompressionLevel(in)
+		if err != nil {
+			t.Errorf("ParseCompressionLevel(%q) error: %v", in, err)
+		}
+		if got != want {
+			t.Errorf("ParseCompressionLevel(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, in := range []string{"maximum", "on", "true", "1", "bogus"} {
+		if _, err := ParseCompressionLevel(in); err == nil {
+			t.Errorf("ParseCompressionLevel(%q) should fail", in)
+		}
+	}
+	if CompressionOff.Enabled() {
+		t.Error("off should not be enabled")
+	}
+	for _, level := range CompressionLevels {
+		if !level.Enabled() {
+			t.Errorf("%q should be enabled", level)
+		}
+	}
+	if len(CompressionLevels) != 4 {
+		t.Errorf("CompressionLevels has %d entries, want 4", len(CompressionLevels))
+	}
+}
+
 func TestNormalizeCompressionLevel(t *testing.T) {
 	tests := map[string]string{
 		"":         "",

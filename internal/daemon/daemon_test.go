@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -246,6 +247,35 @@ func TestDaemonRejectsMalformedHandshake(t *testing.T) {
 	}
 	if response.OK || response.Error != "malformed handshake" {
 		t.Fatalf("unexpected malformed-handshake response: %+v", response)
+	}
+}
+
+// TestDaemonRejectsBadCompressionLevel pins that a handshake carrying an
+// unknown compression level is refused with a handshake error response rather
+// than being silently accepted or dropped. The level now decodes as part of
+// the handshake JSON, so the rejection comes from the decode step.
+func TestDaemonRejectsBadCompressionLevel(t *testing.T) {
+	d := startTestDaemon(t, nil)
+	conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: d.paths.Socket, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	line := fmt.Sprintf(`{"mcpmu_handshake":{"type":"session","protocol":%d,"build":%q,"configPath":%q,"compression":"bogus"}}`+"\n",
+		SessionProtocol, d.build, d.configPath)
+	if _, err := conn.Write([]byte(line)); err != nil {
+		t.Fatal(err)
+	}
+	responseLine, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response HandshakeResponse
+	if err := json.Unmarshal(responseLine, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.OK || !strings.Contains(response.Error, "malformed handshake") {
+		t.Fatalf("bad compression level should be rejected, got: %+v", response)
 	}
 }
 
