@@ -68,8 +68,12 @@ func TestCoreReloadUpdatesEverySession(t *testing.T) {
 
 	firstOutput := &bytes.Buffer{}
 	first, err := NewSession(core, Options{
-		Config: initial, Namespace: "first", ExposeResources: true,
-		Stdin: strings.NewReader(""), Stdout: firstOutput,
+		SessionOptions: SessionOptions{
+			Namespace:       "first",
+			ExposeResources: true,
+		},
+		Config: initial,
+		Stdin:  strings.NewReader(""), Stdout: firstOutput,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,8 +81,12 @@ func TestCoreReloadUpdatesEverySession(t *testing.T) {
 	defer first.Close()
 	secondOutput := &bytes.Buffer{}
 	second, err := NewSession(core, Options{
-		Config: initial, Namespace: "second", ExposePrompts: true,
-		Stdin: strings.NewReader(""), Stdout: secondOutput,
+		SessionOptions: SessionOptions{
+			Namespace:     "second",
+			ExposePrompts: true,
+		},
+		Config: initial,
+		Stdin:  strings.NewReader(""), Stdout: secondOutput,
 	})
 	if err != nil {
 		t.Fatal(err)

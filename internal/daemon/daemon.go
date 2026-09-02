@@ -252,12 +252,9 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 	_ = conn.SetDeadline(time.Time{})
 	writer := newQueuedWriter(conn, d.opts.OutboundQueue, ctx.Done(), cancel)
 	session, err := server.NewSession(d.core, server.Options{
-		ConfigPath: d.opts.ConfigPath,
-		Namespace:  handshake.Namespace, EagerStart: handshake.Eager,
-		ExposeManagerTools: handshake.ExposeManagerTools,
-		ExposeResources:    handshake.Resources, ExposePrompts: handshake.Prompts,
-		Compression: handshake.Compression,
-		Stdin:       reader, Stdout: writer, Stderr: io.Discard,
+		SessionOptions: handshake.SessionOptions,
+		ConfigPath:     d.opts.ConfigPath,
+		Stdin:          reader, Stdout: writer, Stderr: io.Discard,
 		ServerName: "mcpmu", ServerVersion: d.opts.Version,
 	})
 	if err != nil {

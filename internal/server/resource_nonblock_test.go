@@ -58,14 +58,16 @@ func stalledListSession(t *testing.T, holdFor time.Duration) *Server {
 	var stdout bytes.Buffer
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdinR,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		LogLevel:        "error",
-		ExposeResources: true,
+		SessionOptions: SessionOptions{
+			ExposeResources: true,
+		},
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdinR,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

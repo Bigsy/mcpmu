@@ -63,10 +63,12 @@ func TestServer_ConcurrentToolCalls_SlowUpstreamDoesNotBlockOthers(t *testing.T)
 	stdoutR, stdoutW := io.Pipe()
 
 	srv, err := New(Options{
+		SessionOptions: SessionOptions{
+			Namespace:  "default",
+			EagerStart: true, // pre-start both upstreams so only tools/call timing matters
+		},
 		Config:        cfg,
 		PIDTrackerDir: t.TempDir(),
-		Namespace:     "default",
-		EagerStart:    true, // pre-start both upstreams so only tools/call timing matters
 		Stdin:         stdinR,
 		Stdout:        stdoutW,
 		ServerName:    "mcpmu-test",

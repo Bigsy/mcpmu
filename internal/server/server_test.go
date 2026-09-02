@@ -104,14 +104,16 @@ func TestServer_ToolsList_NoServers_ManagerToolsHidden(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:             cfg,
-		PIDTrackerDir:      t.TempDir(),
-		Stdin:              stdin,
-		Stdout:             &stdout,
-		ServerName:         "mcpmu-test",
-		ServerVersion:      "1.0.0",
-		LogLevel:           "error",
-		ExposeManagerTools: false, // default: hidden
+		SessionOptions: SessionOptions{
+			ExposeManagerTools: false, // default: hidden
+		},
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -166,14 +168,16 @@ func TestServer_ToolsList_NoServers_ManagerToolsExposed(t *testing.T) {
 `)
 
 	srv, err := New(Options{
-		Config:             cfg,
-		PIDTrackerDir:      t.TempDir(),
-		Stdin:              stdin,
-		Stdout:             &stdout,
-		ServerName:         "mcpmu-test",
-		ServerVersion:      "1.0.0",
-		LogLevel:           "error",
-		ExposeManagerTools: true, // explicitly exposed
+		SessionOptions: SessionOptions{
+			ExposeManagerTools: true, // explicitly exposed
+		},
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -536,9 +540,11 @@ func TestServer_NamespaceSelection_ExplicitNamespace(t *testing.T) {
 `)
 
 	srv, err := New(Options{
+		SessionOptions: SessionOptions{
+			Namespace: "ns2", // Explicit selection
+		},
 		Config:        cfg,
 		PIDTrackerDir: t.TempDir(),
-		Namespace:     "ns2", // Explicit selection
 		Stdin:         stdin,
 		Stdout:        &stdout,
 		ServerName:    "mcpmu-test",

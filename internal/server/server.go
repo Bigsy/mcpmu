@@ -25,23 +25,36 @@ import (
 // DebugLogging enables verbose payload logging (Recv/Send messages).
 var DebugLogging bool
 
-// Options configures the MCP server.
-type Options struct {
-	Config             *config.Config
-	ConfigPath         string // Expanded path for hot-reload watching (empty = no watching)
-	PIDTrackerDir      string // Directory for per-owner PID registries (empty = derive from ConfigPath or default)
-	Namespace          string // Namespace to expose (empty = auto-select)
-	EagerStart         bool   // Pre-start all servers
-	ExposeManagerTools bool   // Include mcpmu.* tools in tools/list
-	ExposeResources    bool   // Passthrough resources/* from upstream servers
-	ExposePrompts      bool   // Passthrough prompts/* from upstream servers
+// SessionOptions are the per-downstream-connection settings that every serve
+// entry point accepts — embedded stdio, a daemon session, an HTTP session —
+// and that the shim carries to the daemon verbatim. This is the single
+// definition; the JSON tags are the daemon handshake encoding, so they must
+// not be renamed without a SessionProtocol bump.
+type SessionOptions struct {
+	Namespace          string `json:"namespace,omitempty"`          // Namespace to expose (empty = auto-select)
+	EagerStart         bool   `json:"eager,omitempty"`              // Pre-start all servers
+	ExposeManagerTools bool   `json:"exposeManagerTools,omitempty"` // Include mcpmu.* tools in tools/list
+	ExposeResources    bool   `json:"resources,omitempty"`          // Passthrough resources/* from upstream servers
+	ExposePrompts      bool   `json:"prompts,omitempty"`            // Passthrough prompts/* from upstream servers
 	// Compression replaces tools/list with the list_tools/get_tool_schema/
 	// invoke_tool wrapper surface. Per-Session, not per-Core: two sessions
 	// against one daemon can run different levels. It is the tri-state
 	// --compress flag: unset defers to the active namespace's configured level,
 	// an explicit level or an explicit off wins over it (see
 	// Session.compressionLevel).
-	Compression   config.CompressionOverride
+	//
+	// The tag has no omitempty because omitempty never applied to a struct
+	// anyway: an unset override is sent as "", and an absent key decodes to
+	// unset too, so a shim that never sent the field reads correctly either way.
+	Compression config.CompressionOverride `json:"compression"`
+}
+
+// Options configures the MCP server.
+type Options struct {
+	SessionOptions
+	Config        *config.Config
+	ConfigPath    string        // Expanded path for hot-reload watching (empty = no watching)
+	PIDTrackerDir string        // Directory for per-owner PID registries (empty = derive from ConfigPath or default)
 	DebounceDelay time.Duration // Delay before applying config changes (default: 150ms)
 	LogLevel      string
 	Stdin         io.Reader

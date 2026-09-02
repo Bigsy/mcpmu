@@ -3,7 +3,7 @@ package daemon
 import (
 	"encoding/json"
 
-	"github.com/Bigsy/mcpmu/internal/config"
+	"github.com/Bigsy/mcpmu/internal/server"
 )
 
 const (
@@ -17,24 +17,18 @@ type HandshakeEnvelope struct {
 }
 
 type Handshake struct {
-	Type               string `json:"type"`
-	Protocol           int    `json:"protocol,omitempty"`
-	ControlProtocol    int    `json:"controlProtocol,omitempty"`
-	Build              string `json:"build,omitempty"`
-	ConfigPath         string `json:"configPath"`
-	Namespace          string `json:"namespace,omitempty"`
-	ExposeManagerTools bool   `json:"exposeManagerTools,omitempty"`
-	Resources          bool   `json:"resources,omitempty"`
-	Prompts            bool   `json:"prompts,omitempty"`
-	Eager              bool   `json:"eager,omitempty"`
-	// Compression is the tri-state --compress override. Its text form on the
-	// wire is unchanged: "" = flag absent (the active namespace's configured
-	// level decides), "off" = explicit off, otherwise the level. The tag has no
-	// omitempty because omitempty never applied to a struct anyway: an unset
-	// override is sent as "", and an absent key decodes to unset too, so a shim
-	// that never sent the field reads correctly either way.
-	Compression config.CompressionOverride `json:"compression"`
-	PID         int                        `json:"pid,omitempty"`
+	Type            string `json:"type"`
+	Protocol        int    `json:"protocol,omitempty"`
+	ControlProtocol int    `json:"controlProtocol,omitempty"`
+	Build           string `json:"build,omitempty"`
+	ConfigPath      string `json:"configPath"`
+	// SessionOptions is embedded, so its fields flatten into this object and
+	// the wire shape is whatever server.SessionOptions' JSON tags say —
+	// including the tri-state --compress override, whose text form is
+	// "" (flag absent), "off", or a level. The daemon hands it to
+	// server.NewSession untouched.
+	server.SessionOptions
+	PID int `json:"pid,omitempty"`
 }
 
 type HandshakeResponse struct {

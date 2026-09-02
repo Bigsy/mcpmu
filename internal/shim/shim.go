@@ -12,8 +12,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/daemon"
+	"github.com/Bigsy/mcpmu/internal/server"
 )
 
 const (
@@ -26,16 +26,11 @@ const (
 // Options are the per-serve properties sent to the daemon. Test-only timing
 // and spawn hooks are intentionally unexported.
 type Options struct {
-	ConfigPath         string
-	Namespace          string
-	LogLevel           string
-	ExposeManagerTools bool
-	Resources          bool
-	Prompts            bool
-	Eager              bool
-	// Compression is the tri-state --compress override; the shim forwards it
-	// in the handshake and the daemon passes it straight to the session.
-	Compression config.CompressionOverride
+	ConfigPath string
+	LogLevel   string
+	// Session is forwarded in the handshake verbatim; the daemon passes it
+	// straight to server.NewSession.
+	Session server.SessionOptions
 
 	startupTimeout   time.Duration
 	handshakeTimeout time.Duration
@@ -160,9 +155,7 @@ func dialSession(ctx context.Context, socket, build string, opts Options) (*Conn
 	}
 	payload, err := json.Marshal(daemon.HandshakeEnvelope{Handshake: daemon.Handshake{
 		Type: "session", Protocol: daemon.SessionProtocol, Build: build,
-		ConfigPath: opts.ConfigPath, Namespace: opts.Namespace,
-		ExposeManagerTools: opts.ExposeManagerTools, Resources: opts.Resources,
-		Prompts: opts.Prompts, Eager: opts.Eager, Compression: opts.Compression,
+		ConfigPath: opts.ConfigPath, SessionOptions: opts.Session,
 		PID: os.Getpid(),
 	}})
 	if err != nil {

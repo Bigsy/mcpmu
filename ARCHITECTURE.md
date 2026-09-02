@@ -81,6 +81,14 @@ Serve mode is split into two layers inside `internal/server`:
   loop. It also owns discovery state for servers configured with
   `shared: false`.
 
+`server.SessionOptions` is the single definition of the per-connection serve
+settings — namespace, eager start, manager-tool visibility, resource/prompt
+passthrough, and the `--compress` override. `server.Options` embeds it,
+`httpserve.Options` and `shim.Options` carry it as a `Session` field, and
+`daemon.Handshake` embeds it so its JSON tags are the handshake payload.
+Adding a per-session serve flag is one field plus one cobra binding, and then
+only the Session code that consumes it — no per-transport plumbing.
+
 The embedded stdio path uses `server.New` to construct one
 `Core` and attaches exactly one stdio `Session` in the same process. Upstream
 notifications enter through a Core-owned worker-backed broadcaster, so the
@@ -129,10 +137,14 @@ Runtime directories are mode `0700`, sockets and pidfiles are `0600`, and
 Linux/macOS connections additionally require a matching peer UID.
 
 Session connections use a versioned pre-MCP handshake carrying the executable
-content hash, canonical config path, namespace, eager setting, manager-tool
-visibility, resource/prompt passthrough flags, and the `--compress` override
-(one `config.CompressionOverride`, text-encoded as `""`/`"off"`/level; an
-absent key and an empty string both decode to unset). Once accepted, the socket is
+content hash, the canonical config path, and an embedded
+`server.SessionOptions` — namespace, eager setting, manager-tool visibility,
+resource/prompt passthrough flags, and the `--compress` override (one
+`config.CompressionOverride`, text-encoded as `""`/`"off"`/level; an absent key
+and an empty string both decode to unset). Embedding flattens those fields into
+the handshake object, so the struct's JSON tags *are* the wire contract between
+a shim and a daemon built from different revisions — `TestHandshakeWireShape`
+pins them. Once accepted, the socket is
 ordinary NDJSON MCP. Each Session has one bounded outbound queue; a client that
 cannot drain is disconnected instead of blocking the shared Core. Control
 connections have a separately frozen protocol and tolerate executable-build

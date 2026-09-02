@@ -91,9 +91,11 @@ func TestServer_ApplyReload_KeepsNamespaceIfStillValid(t *testing.T) {
 `)
 
 	srv, err := New(Options{
+		SessionOptions: SessionOptions{
+			Namespace: "ns1", // Explicit namespace selection via flag
+		},
 		Config:        oldCfg,
 		PIDTrackerDir: t.TempDir(),
-		Namespace:     "ns1", // Explicit namespace selection via flag
 		Stdin:         stdin,
 		Stdout:        &stdout,
 		ServerName:    "mcpmu-test",

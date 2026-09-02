@@ -160,9 +160,9 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 // sseHub as its writer. On RPC error the reply is still 200 (JSON-RPC error
 // object) but the session is not retained.
 func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, routeNS string, msg server.RPCMessage) {
-	namespace := routeNS
-	if namespace == "" {
-		namespace = s.opts.Namespace
+	sessOpts := s.opts.Session
+	if routeNS != "" {
+		sessOpts.Namespace = routeNS
 	}
 
 	hub := newSSEHub()
@@ -171,17 +171,12 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, routeN
 	// is never read because HTTP sessions never call Run (hot reload and the
 	// notification fan-out run at Core scope).
 	sess, err := server.NewSession(s.core, server.Options{
-		Namespace:          namespace,
-		EagerStart:         s.opts.EagerStart,
-		ExposeManagerTools: s.opts.ExposeManagerTools,
-		ExposeResources:    s.opts.ExposeResources,
-		ExposePrompts:      s.opts.ExposePrompts,
-		Compression:        s.opts.Compression,
-		Stdin:              strings.NewReader(""),
-		Stdout:             hub,
-		Stderr:             io.Discard,
-		ServerName:         "mcpmu",
-		ServerVersion:      s.opts.ServerVersion,
+		SessionOptions: sessOpts,
+		Stdin:          strings.NewReader(""),
+		Stdout:         hub,
+		Stderr:         io.Discard,
+		ServerName:     "mcpmu",
+		ServerVersion:  s.opts.ServerVersion,
 	})
 	if err != nil {
 		cancel()

@@ -159,13 +159,15 @@ func newDirectResourceSession(t *testing.T, core *Core, cfg *config.Config, name
 	t.Helper()
 	out := &synchronizedBuffer{}
 	session, err := NewSession(core, Options{
-		Config:          cfg,
-		Namespace:       namespace,
-		ExposeResources: true,
-		Stdin:           strings.NewReader(""),
-		Stdout:          out,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
+		SessionOptions: SessionOptions{
+			Namespace:       namespace,
+			ExposeResources: true,
+		},
+		Config:        cfg,
+		Stdin:         strings.NewReader(""),
+		Stdout:        out,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
 	})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)

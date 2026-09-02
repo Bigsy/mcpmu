@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/process"
+	"github.com/Bigsy/mcpmu/internal/server"
 )
 
 type runningTestDaemon struct {
@@ -142,7 +143,7 @@ func TestDaemonSessionHandshakeAndMCP(t *testing.T) {
 	}
 	conn, reader, response := dialHandshake(t, d, Handshake{
 		Type: "session", Protocol: SessionProtocol, Build: d.build,
-		Prompts: true,
+		SessionOptions: server.SessionOptions{ExposePrompts: true},
 	})
 	defer func() { _ = conn.Close() }()
 	if !response.OK {

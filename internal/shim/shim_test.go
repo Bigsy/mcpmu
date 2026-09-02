@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/daemon"
+	"github.com/Bigsy/mcpmu/internal/server"
 )
 
 func shortRuntimeDir(t *testing.T) string {
@@ -98,7 +99,8 @@ func TestConnectOrSpawnJoinsExistingCanonicalDaemon(t *testing.T) {
 
 	var spawnCalls atomic.Int32
 	connection, err := ConnectOrSpawn(context.Background(), Options{
-		ConfigPath: linkPath, Resources: true, Prompts: true,
+		ConfigPath: linkPath,
+		Session:    server.SessionOptions{ExposeResources: true, ExposePrompts: true},
 		spawn: func(string, []string, string) error {
 			spawnCalls.Add(1)
 			return nil
@@ -132,7 +134,8 @@ func TestConnectOrSpawnConcurrentColdStartCallsSpawnerOnce(t *testing.T) {
 	for range clients {
 		go func() {
 			connection, err := ConnectOrSpawn(context.Background(), Options{
-				ConfigPath: configPath, Resources: true, Prompts: true,
+				ConfigPath:     configPath,
+				Session:        server.SessionOptions{ExposeResources: true, ExposePrompts: true},
 				startupTimeout: 3 * time.Second, spawn: spawn,
 			})
 			if err != nil {

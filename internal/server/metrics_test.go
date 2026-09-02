@@ -51,10 +51,12 @@ func runServeWithMetrics(t *testing.T, cfg *config.Config, namespace, script str
 
 	var stdout bytes.Buffer
 	srv, err := New(Options{
+		SessionOptions: SessionOptions{
+			Namespace: namespace,
+		},
 		Config:        cfg,
 		ConfigPath:    configPath,
 		PIDTrackerDir: dir,
-		Namespace:     namespace,
 		Stdin:         strings.NewReader(script),
 		Stdout:        &stdout,
 		ServerName:    "mcpmu-test",

@@ -38,12 +38,12 @@ func TestPrivateServerInstancesAreSessionScoped(t *testing.T) {
 	t.Cleanup(core.Close)
 
 	firstOut := &synchronizedBuffer{}
-	first, err := NewSession(core, Options{Config: cfg, ExposePrompts: true, Stdin: strings.NewReader(""), Stdout: firstOut})
+	first, err := NewSession(core, Options{SessionOptions: SessionOptions{ExposePrompts: true}, Config: cfg, Stdin: strings.NewReader(""), Stdout: firstOut})
 	if err != nil {
 		t.Fatalf("NewSession first: %v", err)
 	}
 	secondOut := &synchronizedBuffer{}
-	second, err := NewSession(core, Options{Config: cfg, ExposePrompts: true, Stdin: strings.NewReader(""), Stdout: secondOut})
+	second, err := NewSession(core, Options{SessionOptions: SessionOptions{ExposePrompts: true}, Config: cfg, Stdin: strings.NewReader(""), Stdout: secondOut})
 	if err != nil {
 		t.Fatalf("NewSession second: %v", err)
 	}

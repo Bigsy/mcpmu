@@ -160,14 +160,16 @@ func TestServer_Initialize_AdvertisesSubscribeCapability(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		LogLevel:        "error",
-		ExposeResources: true,
+		SessionOptions: SessionOptions{
+			ExposeResources: true,
+		},
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -222,7 +224,7 @@ func TestServer_ResourcesSubscribe_HappyPath(t *testing.T) {
 		},
 	}
 
-	h := startSubscribeTestServer(t, Options{Config: cfg, ExposeResources: true})
+	h := startSubscribeTestServer(t, Options{SessionOptions: SessionOptions{ExposeResources: true}, Config: cfg})
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
@@ -287,14 +289,16 @@ func TestServer_ResourcesSubscribe_UnknownURI(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:          cfg,
-		PIDTrackerDir:   t.TempDir(),
-		Stdin:           stdin,
-		Stdout:          &stdout,
-		ServerName:      "mcpmu-test",
-		ServerVersion:   "1.0.0",
-		LogLevel:        "error",
-		ExposeResources: true,
+		SessionOptions: SessionOptions{
+			ExposeResources: true,
+		},
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -339,7 +343,7 @@ func TestServer_ResourcesSubscribe_UpstreamWithoutCapability(t *testing.T) {
 		},
 	}
 
-	h := startSubscribeTestServer(t, Options{Config: cfg, ExposeResources: true})
+	h := startSubscribeTestServer(t, Options{SessionOptions: SessionOptions{ExposeResources: true}, Config: cfg})
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
@@ -390,7 +394,7 @@ func TestServer_ResourcesSubscribe_MixedCapability(t *testing.T) {
 		},
 	}
 
-	h := startSubscribeTestServer(t, Options{Config: cfg, ExposeResources: true})
+	h := startSubscribeTestServer(t, Options{SessionOptions: SessionOptions{ExposeResources: true}, Config: cfg})
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
@@ -458,7 +462,7 @@ func TestServer_ResourcesSubscribe_StrayNotificationDropped(t *testing.T) {
 		},
 	}
 
-	h := startSubscribeTestServer(t, Options{Config: cfg, ExposeResources: true})
+	h := startSubscribeTestServer(t, Options{SessionOptions: SessionOptions{ExposeResources: true}, Config: cfg})
 	// Force the upstream to start so the startup-emit actually runs.
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
@@ -496,7 +500,7 @@ func TestServer_ResourcesSubscribe_PostUnsubscribeUpdateDropped(t *testing.T) {
 		},
 	}
 
-	h := startSubscribeTestServer(t, Options{Config: cfg, ExposeResources: true})
+	h := startSubscribeTestServer(t, Options{SessionOptions: SessionOptions{ExposeResources: true}, Config: cfg})
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
@@ -541,7 +545,7 @@ func TestServer_ResourcesSubscribe_ReloadClearsSubs(t *testing.T) {
 		}
 	}
 
-	h := startSubscribeTestServer(t, Options{Config: makeCfg(), ExposeResources: true})
+	h := startSubscribeTestServer(t, Options{SessionOptions: SessionOptions{ExposeResources: true}, Config: makeCfg()})
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
@@ -619,7 +623,7 @@ func TestServer_ResourcesSubscribe_DuplicateURI(t *testing.T) {
 		},
 	}
 
-	h := startSubscribeTestServer(t, Options{Config: cfg, ExposeResources: true})
+	h := startSubscribeTestServer(t, Options{SessionOptions: SessionOptions{ExposeResources: true}, Config: cfg})
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,

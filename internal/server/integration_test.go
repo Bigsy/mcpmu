@@ -165,9 +165,11 @@ func TestServer_ManagerTool_NamespacesList(t *testing.T) {
 `)
 
 	srv, err := New(Options{
+		SessionOptions: SessionOptions{
+			Namespace: "work", // Select work namespace to pass init
+		},
 		Config:        cfg,
 		PIDTrackerDir: t.TempDir(),
-		Namespace:     "work", // Select work namespace to pass init
 		Stdin:         stdin,
 		Stdout:        &stdout,
 		ServerName:    "mcpmu-test",
@@ -295,9 +297,11 @@ func TestServer_ToolsCall_PermissionDenied(t *testing.T) {
 `)
 
 	srv, err := New(Options{
+		SessionOptions: SessionOptions{
+			Namespace: "restricted",
+		},
 		Config:        cfg,
 		PIDTrackerDir: t.TempDir(),
-		Namespace:     "restricted",
 		Stdin:         stdin,
 		Stdout:        &stdout,
 		ServerName:    "mcpmu-test",
@@ -625,10 +629,12 @@ func TestServer_NamespaceToolPermissions_EndToEnd(t *testing.T) {
 	)
 
 	srv, err := New(Options{
+		SessionOptions: SessionOptions{
+			Namespace:  "restricted",
+			EagerStart: false, // Use lazy start - servers start when tools are called
+		},
 		Config:        cfg,
 		PIDTrackerDir: t.TempDir(),
-		Namespace:     "restricted",
-		EagerStart:    false, // Use lazy start - servers start when tools are called
 		Stdin:         stdin,
 		Stdout:        &stdout,
 		ServerName:    "mcpmu-test",
@@ -864,10 +870,12 @@ func TestServer_NamespaceServerDefaults_EndToEnd(t *testing.T) {
 	)
 
 	srv, err := New(Options{
+		SessionOptions: SessionOptions{
+			Namespace:  "mixed",
+			EagerStart: false,
+		},
 		Config:        cfg,
 		PIDTrackerDir: t.TempDir(),
-		Namespace:     "mixed",
-		EagerStart:    false,
 		Stdin:         stdin,
 		Stdout:        &stdout,
 		ServerName:    "mcpmu-test",
@@ -2126,9 +2134,11 @@ func TestServer_ToolsCall_GlobalDenyWithNamespaceAllow(t *testing.T) {
 	)
 
 	srv, err := New(Options{
+		SessionOptions: SessionOptions{
+			Namespace: "ns1",
+		},
 		Config:        cfg,
 		PIDTrackerDir: t.TempDir(),
-		Namespace:     "ns1",
 		Stdin:         stdin,
 		Stdout:        &stdout,
 		ServerName:    "mcpmu-test",
@@ -2196,16 +2206,18 @@ func TestServer_ToolsList_GlobalDenyFiltering(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:             cfg,
-		PIDTrackerDir:      t.TempDir(),
-		Namespace:          "ns1",
-		EagerStart:         true,
-		ExposeManagerTools: true,
-		Stdin:              stdin,
-		Stdout:             &stdout,
-		ServerName:         "mcpmu-test",
-		ServerVersion:      "1.0.0",
-		LogLevel:           "error",
+		SessionOptions: SessionOptions{
+			Namespace:          "ns1",
+			EagerStart:         true,
+			ExposeManagerTools: true,
+		},
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -2291,15 +2303,17 @@ func TestServer_ToolsList_GlobalDenyNoNamespace(t *testing.T) {
 	)
 
 	srv, err := New(Options{
-		Config:             cfg,
-		PIDTrackerDir:      t.TempDir(),
-		EagerStart:         true,
-		ExposeManagerTools: true,
-		Stdin:              stdin,
-		Stdout:             &stdout,
-		ServerName:         "mcpmu-test",
-		ServerVersion:      "1.0.0",
-		LogLevel:           "error",
+		SessionOptions: SessionOptions{
+			EagerStart:         true,
+			ExposeManagerTools: true,
+		},
+		Config:        cfg,
+		PIDTrackerDir: t.TempDir(),
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		ServerName:    "mcpmu-test",
+		ServerVersion: "1.0.0",
+		LogLevel:      "error",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
