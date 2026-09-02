@@ -12,10 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/process"
 	"github.com/Bigsy/mcpmu/internal/server"
 )
@@ -28,12 +30,25 @@ type runningTestDaemon struct {
 	done       <-chan error
 }
 
+// emptyTestConfig is the config startTestDaemon writes: no servers, no
+// namespaces. Enough for every check that stops at the handshake or at a
+// tools/list with nothing to list.
+const emptyTestConfig = `{"schemaVersion":1,"servers":{},"namespaces":{}}`
+
 func startTestDaemon(t *testing.T, mutate func(*Options)) runningTestDaemon {
+	t.Helper()
+	return startTestDaemonWithConfig(t, emptyTestConfig, mutate)
+}
+
+// startTestDaemonWithConfig is startTestDaemon with the config file contents
+// chosen by the caller, for checks that need a namespace to exist before the
+// daemon loads its Core.
+func startTestDaemonWithConfig(t *testing.T, configJSON string, mutate func(*Options)) runningTestDaemon {
 	t.Helper()
 	runtimeRoot := makeShortTempDir(t)
 	t.Setenv("XDG_RUNTIME_DIR", runtimeRoot)
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"schemaVersion":1,"servers":{},"namespaces":{}}`), 0600); err != nil {
+	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
 		t.Fatal(err)
 	}
 	canonical, err := CanonicalConfigPath(configPath)
@@ -181,6 +196,103 @@ func TestDaemonSessionHandshakeAndMCP(t *testing.T) {
 	if _, ok := capabilities["prompts"]; !ok {
 		t.Fatalf("prompts capability missing despite session flag: %s", line)
 	}
+}
+
+// rpcCall writes one JSON-RPC line onto a handshaken session connection and
+// decodes the next line back off its reader.
+func rpcCall(t *testing.T, conn *net.UnixConn, reader *bufio.Reader, line string) map[string]any {
+	t.Helper()
+	if _, err := conn.Write([]byte(line + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	response, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(response, &message); err != nil {
+		t.Fatal(err)
+	}
+	return message
+}
+
+// toolNamesOverSession initializes a daemon session and returns the names its
+// tools/list reports, in order.
+func toolNamesOverSession(t *testing.T, d runningTestDaemon, options server.SessionOptions) []string {
+	t.Helper()
+	conn, reader, response := dialHandshake(t, d, Handshake{
+		Type: "session", Protocol: SessionProtocol, Build: d.build,
+		SessionOptions: options,
+	})
+	defer func() { _ = conn.Close() }()
+	if !response.OK {
+		t.Fatalf("handshake rejected: %+v", response)
+	}
+	initialize := rpcCall(t, conn, reader, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1"}}}`)
+	if _, ok := initialize["result"]; !ok {
+		t.Fatalf("initialize response has no result: %v", initialize)
+	}
+	listed := rpcCall(t, conn, reader, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	result, ok := listed["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("tools/list response has no result: %v", listed)
+	}
+	rawTools, _ := result["tools"].([]any)
+	names := make([]string, 0, len(rawTools))
+	for _, raw := range rawTools {
+		tool, _ := raw.(map[string]any)
+		name, _ := tool["name"].(string)
+		names = append(names, name)
+	}
+	return names
+}
+
+// TestDaemonSessionCompression drives a compression setting through the whole
+// chain — handshake over the daemon socket, SessionOptions handoff into
+// server.NewSession, per-request resolution in the Session — and asserts the
+// resulting tools/list. Every link was unit-tested in isolation before this;
+// nothing asserted they were connected. An empty config is enough: the
+// wrapper set is returned whenever compression is on, upstreams or not.
+func TestDaemonSessionCompression(t *testing.T) {
+	wrappers := []string{"list_tools", "get_tool_schema", "invoke_tool"}
+
+	t.Run("flag over handshake", func(t *testing.T) {
+		d := startTestDaemon(t, nil)
+		forced := toolNamesOverSession(t, d, server.SessionOptions{
+			Compression: config.CompressionForce(config.CompressionMedium),
+		})
+		if !slices.Equal(forced, wrappers) {
+			t.Fatalf("compressed tools/list = %v, want exactly %v", forced, wrappers)
+		}
+		plain := toolNamesOverSession(t, d, server.SessionOptions{})
+		if len(plain) != 0 {
+			t.Fatalf("uncompressed tools/list over an empty config = %v, want none", plain)
+		}
+	})
+
+	// The combination the flag cannot express: no override in the handshake,
+	// the level comes from the namespace the session lands in. This is also
+	// the path a hot reload changes.
+	t.Run("namespace config", func(t *testing.T) {
+		configJSON := `{"schemaVersion":1,"servers":{},"namespaces":{` +
+			`"work":{"serverIds":[],"compression":"medium"},` +
+			`"plain":{"serverIds":[]}},"defaultNamespace":"work"}`
+		d := startTestDaemonWithConfig(t, configJSON, nil)
+		fromDefault := toolNamesOverSession(t, d, server.SessionOptions{})
+		if !slices.Equal(fromDefault, wrappers) {
+			t.Fatalf("default-namespace tools/list = %v, want exactly %v", fromDefault, wrappers)
+		}
+		fromPlain := toolNamesOverSession(t, d, server.SessionOptions{Namespace: "plain"})
+		if len(fromPlain) != 0 {
+			t.Fatalf("uncompressed namespace tools/list = %v, want none", fromPlain)
+		}
+		forcedOff := toolNamesOverSession(t, d, server.SessionOptions{
+			Compression: config.CompressionForce(config.CompressionOff),
+		})
+		if len(forcedOff) != 0 {
+			t.Fatalf("--compress off over a compressed namespace listed %v, want none", forcedOff)
+		}
+	})
 }
 
 func TestSessionHandshakeWriteFailureClosesConnection(t *testing.T) {
