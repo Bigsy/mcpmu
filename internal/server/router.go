@@ -53,18 +53,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	// Handle manager tools (always allowed, no permission check)
 	if isManager {
 		result, rpcErr := r.handleManagerTool(ctx, qualifiedName, arguments)
-		outcome := metrics.OutcomeOK
-		if rpcErr != nil {
-			outcome = metrics.OutcomeError
-		}
-		r.session.currentRecorder().Record(metrics.CallSample{
-			Time:      start,
-			Namespace: r.activeNamespaceName,
-			Server:    "mcpmu",
-			Tool:      strings.TrimPrefix(qualifiedName, "mcpmu."),
-			Duration:  time.Since(start),
-			Outcome:   outcome,
-		})
+		r.recordMeta(strings.TrimPrefix(qualifiedName, "mcpmu."), start, rpcErr)
 		return result, rpcErr
 	}
 
@@ -189,11 +178,12 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	}, nil
 }
 
-// recordMeta records a compressed-surface meta-call (list_tools,
-// get_tool_schema) under server="mcpmu", the way manager tools are recorded —
-// visible on the Metrics page without polluting per-server error rates.
-// invoke_tool is deliberately absent: it dispatches through CallTool, which
-// records the sample against the target tool.
+// recordMeta records a call that mcpmu itself answered under server="mcpmu" —
+// a manager tool (mcpmu.*) or a compressed-surface meta-call (list_tools,
+// get_tool_schema) — so it is visible on the Metrics page without polluting
+// per-server error rates. tool is the unqualified name. invoke_tool is
+// deliberately absent: it dispatches through CallTool, which records the
+// sample against the target tool.
 func (r *Router) recordMeta(tool string, start time.Time, rpcErr *RPCError) {
 	outcome := metrics.OutcomeOK
 	if rpcErr != nil {

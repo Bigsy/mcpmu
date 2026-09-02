@@ -142,12 +142,9 @@ type Session struct {
 	subs  map[string]process.InstanceID
 }
 
-// Server is retained as the embedded-serve API name. It is exactly one
-// Session attached to one in-process Core.
-type Server = Session
-
-// New creates a new MCP server.
-func New(opts Options) (*Server, error) {
+// New creates a new MCP server: one Session attached to one in-process Core,
+// which is exactly what the embedded stdio serve path is.
+func New(opts Options) (*Session, error) {
 	core, err := NewCore(opts)
 	if err != nil {
 		return nil, err
@@ -349,7 +346,7 @@ type readResult struct {
 }
 
 // Run starts the server and processes requests until context is cancelled.
-func (s *Server) Run(ctx context.Context) error {
+func (s *Session) Run(ctx context.Context) error {
 	// Run's ctx ending (SIGTERM, client hang-up) cancels the session
 	// lifetime so in-flight handlers and background discovery stop promptly.
 	stopLifetime := context.AfterFunc(ctx, s.cancelLifetime)
@@ -494,7 +491,7 @@ func (s *Session) TrackRequest(ctx context.Context, id json.RawMessage) (context
 }
 
 // handleMessage parses and routes a JSON-RPC message.
-func (s *Server) handleMessage(ctx context.Context, data []byte) error {
+func (s *Session) handleMessage(ctx context.Context, data []byte) error {
 	if DebugLogging {
 		log.Printf("Recv: %s", string(data))
 	}
@@ -545,7 +542,7 @@ func (s *Server) handleMessage(ctx context.Context, data []byte) error {
 }
 
 // handleRequest processes a JSON-RPC request and returns a result or error.
-func (s *Server) handleRequest(ctx context.Context, method string, params json.RawMessage) (any, *RPCError) {
+func (s *Session) handleRequest(ctx context.Context, method string, params json.RawMessage) (any, *RPCError) {
 	switch method {
 	case "initialize":
 		return s.handleInitialize(ctx, params)
@@ -598,7 +595,7 @@ func (s *Server) handleRequest(ctx context.Context, method string, params json.R
 }
 
 // handleNotification processes a JSON-RPC notification.
-func (s *Server) handleNotification(ctx context.Context, method string, params json.RawMessage) error {
+func (s *Session) handleNotification(ctx context.Context, method string, params json.RawMessage) error {
 	switch method {
 	case "notifications/initialized":
 		log.Println("Client sent initialized notification")
@@ -626,7 +623,7 @@ func (s *Server) handleNotification(ctx context.Context, method string, params j
 // to produce the side effect the user was trying to stop. mcp.Client sends its
 // own notifications/cancelled upstream when a call's context ends, so
 // cancelling here reaches the far end too.
-func (s *Server) handleCancelled(params json.RawMessage) {
+func (s *Session) handleCancelled(params json.RawMessage) {
 	var req struct {
 		RequestID json.RawMessage `json:"requestId"`
 		Reason    string          `json:"reason,omitempty"`
@@ -653,7 +650,7 @@ func reasonOrNone(reason string) string {
 }
 
 // handleInitialize handles the initialize request.
-func (s *Server) handleInitialize(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+func (s *Session) handleInitialize(ctx context.Context, params json.RawMessage) (any, *RPCError) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -717,7 +714,7 @@ func (s *Session) NegotiatedProtocolVersion() string {
 }
 
 // handlePing handles the ping request.
-func (s *Server) handlePing(ctx context.Context) (any, *RPCError) {
+func (s *Session) handlePing(ctx context.Context) (any, *RPCError) {
 	return struct{}{}, nil
 }
 
@@ -740,7 +737,7 @@ func (s *Session) compressionLevel() config.CompressionLevel {
 }
 
 // handleToolsList handles the tools/list request.
-func (s *Server) handleToolsList(ctx context.Context) (any, *RPCError) {
+func (s *Session) handleToolsList(ctx context.Context) (any, *RPCError) {
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -871,13 +868,13 @@ func (s *Session) pendingServers(serverNames []string) []string {
 }
 
 // sendNotification sends a JSON-RPC notification (no ID, no response expected).
-func (s *Server) sendNotification(method string) {
+func (s *Session) sendNotification(method string) {
 	s.sendNotificationWithParams(method, nil)
 }
 
 // sendNotificationWithParams sends a JSON-RPC notification with optional
 // params (pass nil to omit the field entirely).
-func (s *Server) sendNotificationWithParams(method string, params any) {
+func (s *Session) sendNotificationWithParams(method string, params any) {
 	type notifMsg struct {
 		JSONRPC string `json:"jsonrpc"`
 		Method  string `json:"method"`
@@ -893,7 +890,7 @@ func (s *Server) sendNotificationWithParams(method string, params any) {
 // OnUpstreamNotification implements mcp.NotificationSink. It runs on the
 // upstream client's reader goroutine — must not block on stdout writes, so
 // any downstream emission happens in a goroutine.
-func (s *Server) OnUpstreamNotification(notification process.UpstreamNotification) {
+func (s *Session) OnUpstreamNotification(notification process.UpstreamNotification) {
 	if !s.ownsInstance(notification.Instance) {
 		return
 	}
@@ -965,7 +962,7 @@ func (s *Server) OnUpstreamNotification(notification process.UpstreamNotificatio
 // pendingNames is the set of servers that were still pending when the grace
 // period expired. ctx is the session lifetime: shutdown ends discovery
 // promptly instead of letting it run out the full discovery timeout.
-func (s *Server) discoverAndNotify(ctx context.Context, pendingNames []string) {
+func (s *Session) discoverAndNotify(ctx context.Context, pendingNames []string) {
 	defer s.bgDiscovering.Store(false)
 
 	ctx, cancel := context.WithTimeout(ctx, DefaultToolDiscoveryTimeout)
@@ -1039,7 +1036,7 @@ func (s *Session) callableServer(cfg *config.Config, activeServerNames []string,
 }
 
 // handleToolsCall handles the tools/call request.
-func (s *Server) handleToolsCall(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+func (s *Session) handleToolsCall(ctx context.Context, params json.RawMessage) (any, *RPCError) {
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -1259,7 +1256,7 @@ func (s *Session) resolveToolSchema(ctx context.Context, qualifiedName string) (
 // synchronizes on its own lock (s.mu, resourceMapMu, instance lifecycle), and
 // the subscription table's epoch check discards work a concurrent reload
 // invalidates.
-func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
+func (s *Session) handleResourcesList(ctx context.Context) (any, *RPCError) {
 	// Snapshot for the install guard at the bottom: a list that gathered its
 	// routing table under the old config must not land after a reload wiped
 	// this state.
@@ -1366,7 +1363,7 @@ func (s *Server) handleResourcesList(ctx context.Context) (any, *RPCError) {
 
 // handleResourcesRead handles the resources/read request. Like
 // handleResourcesList, it holds no global lock across its upstream I/O.
-func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+func (s *Session) handleResourcesRead(ctx context.Context, params json.RawMessage) (any, *RPCError) {
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -1414,7 +1411,7 @@ func (s *Server) handleResourcesRead(ctx context.Context, params json.RawMessage
 // handleResourcesSubscribe handles the resources/subscribe request. The
 // subscribe transition itself is serialized per key and epoch-checked inside
 // resourceSubscriptions, so no global lock is held across the upstream RPC.
-func (s *Server) handleResourcesSubscribe(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+func (s *Session) handleResourcesSubscribe(ctx context.Context, params json.RawMessage) (any, *RPCError) {
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -1463,7 +1460,7 @@ func (s *Server) handleResourcesSubscribe(ctx context.Context, params json.RawMe
 // handleResourcesUnsubscribe handles the resources/unsubscribe request.
 // Unknown URIs are treated as idempotent success — clients often unsubscribe
 // defensively, and the URI may have been evicted by a concurrent resources/list.
-func (s *Server) handleResourcesUnsubscribe(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+func (s *Session) handleResourcesUnsubscribe(ctx context.Context, params json.RawMessage) (any, *RPCError) {
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -1510,7 +1507,7 @@ func (s *Server) handleResourcesUnsubscribe(ctx context.Context, params json.Raw
 }
 
 // handlePromptsList handles the prompts/list request.
-func (s *Server) handlePromptsList(ctx context.Context) (any, *RPCError) {
+func (s *Session) handlePromptsList(ctx context.Context) (any, *RPCError) {
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -1584,7 +1581,7 @@ func (s *Server) handlePromptsList(ctx context.Context) (any, *RPCError) {
 }
 
 // handlePromptsGet handles the prompts/get request.
-func (s *Server) handlePromptsGet(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+func (s *Session) handlePromptsGet(ctx context.Context, params json.RawMessage) (any, *RPCError) {
 	s.mu.RLock()
 	if !s.initialized {
 		s.mu.RUnlock()
@@ -1630,7 +1627,7 @@ func (s *Server) handlePromptsGet(ctx context.Context, params json.RawMessage) (
 }
 
 // resolveNamespace determines which namespace to use and which servers are active.
-func (s *Server) resolveNamespace() *RPCError {
+func (s *Session) resolveNamespace() *RPCError {
 	cfg := s.currentConfig()
 	name, servers, method, rpcErr := resolveNamespaceSelection(cfg, s.opts.Namespace)
 	if rpcErr != nil {
@@ -1696,7 +1693,7 @@ func resolveNamespaceSelection(cfg *config.Config, namespaceArg string) (string,
 }
 
 // startEagerServers starts all servers in the active namespace.
-func (s *Server) startEagerServers(ctx context.Context) {
+func (s *Session) startEagerServers(ctx context.Context) {
 	s.mu.RLock()
 	names := slices.Clone(s.activeServerNames)
 	s.mu.RUnlock()
@@ -1713,7 +1710,7 @@ func (s *Server) startEagerServers(ctx context.Context) {
 }
 
 // shutdown cleans up resources.
-func (s *Server) shutdown() {
+func (s *Session) shutdown() {
 	log.Println("Shutting down server")
 	s.Close()
 	if s.ownsCore {
@@ -1815,7 +1812,7 @@ func (c *Core) watchConfig(ctx context.Context, configPath string) {
 // applyReload applies a new configuration once at Core scope, then re-resolves
 // every attached Session. Embedded mode has one Session; daemon mode's
 // Core-owned watcher calls this directly for all live Sessions.
-func (s *Server) applyReload(ctx context.Context, newCfg *config.Config) {
+func (s *Session) applyReload(ctx context.Context, newCfg *config.Config) {
 	s.Core.applyReload(ctx, newCfg, s)
 }
 
@@ -1949,7 +1946,7 @@ func (s *Session) applyReloadConfig(newCfg *config.Config) []string {
 }
 
 // sendError sends a JSON-RPC error response.
-func (s *Server) sendError(id json.RawMessage, rpcErr *RPCError) {
+func (s *Session) sendError(id json.RawMessage, rpcErr *RPCError) {
 	resp := RPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -1961,7 +1958,7 @@ func (s *Server) sendError(id json.RawMessage, rpcErr *RPCError) {
 // send writes a JSON-RPC message to the session writer as exactly one Write
 // call per frame (payload + trailing newline together), so a non-stdio writer
 // like the daemon's queuedWriter or the HTTP sseHub receives whole frames.
-func (s *Server) send(msg any) {
+func (s *Session) send(msg any) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 

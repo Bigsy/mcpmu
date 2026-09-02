@@ -16,10 +16,12 @@ import (
 )
 
 // resolveRoute validates the URL's namespace segment ("" for the bare /mcp
-// route). Unknown namespace → 404, reported by the caller.
-func (s *Server) resolveRoute(r *http.Request) (routeNamespace string, ok bool) {
+// route). An unknown namespace is answered with a 404 here, so a caller that
+// gets ok == false has nothing left to write.
+func (s *Server) resolveRoute(w http.ResponseWriter, r *http.Request) (routeNamespace string, ok bool) {
 	ns := r.PathValue("namespace")
 	if ns != "" && !s.core.HasNamespace(ns) {
+		http.Error(w, "unknown namespace: "+ns, http.StatusNotFound)
 		return "", false
 	}
 	return ns, true
@@ -35,9 +37,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 // contract: initialize creates a session, requests get their response on the
 // POST that carried them, notifications get 202.
 func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
-	routeNS, ok := s.resolveRoute(r)
+	routeNS, ok := s.resolveRoute(w, r)
 	if !ok {
-		http.Error(w, "unknown namespace: "+r.PathValue("namespace"), http.StatusNotFound)
 		return
 	}
 
@@ -226,9 +227,8 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, routeN
 // tools/list_changed). A second GET replaces the first. Stream disconnect ≠
 // session end.
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
-	routeNS, ok := s.resolveRoute(r)
+	routeNS, ok := s.resolveRoute(w, r)
 	if !ok {
-		http.Error(w, "unknown namespace: "+r.PathValue("namespace"), http.StatusNotFound)
 		return
 	}
 	if !acceptsEventStream(r) {
@@ -322,9 +322,8 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 
 // handleDelete terminates the session.
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
-	routeNS, ok := s.resolveRoute(r)
+	routeNS, ok := s.resolveRoute(w, r)
 	if !ok {
-		http.Error(w, "unknown namespace: "+r.PathValue("namespace"), http.StatusNotFound)
 		return
 	}
 	sessionID := r.Header.Get("Mcp-Session-Id")

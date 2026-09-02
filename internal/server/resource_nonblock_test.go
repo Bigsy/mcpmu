@@ -22,7 +22,7 @@ import (
 // its per-method delay — so the caller knows the handler is parked inside
 // upstream I/O, which is exactly where the old global resourceStateMu.RLock
 // used to block hot reload and Core.Close daemon-wide.
-func stalledListSession(t *testing.T, holdFor time.Duration) *Server {
+func stalledListSession(t *testing.T, holdFor time.Duration) *Session {
 	t.Helper()
 
 	requestLog := filepath.Join(t.TempDir(), "upstream-methods.log")

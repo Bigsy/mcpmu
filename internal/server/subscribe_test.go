@@ -21,7 +21,7 @@ import (
 // settle. The caller must call close() before reading stdout to force Run to
 // return.
 type subscribeTestServer struct {
-	srv     *Server
+	srv     *Session
 	pw      *io.PipeWriter
 	pr      *io.PipeReader
 	stdout  *bytes.Buffer

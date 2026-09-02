@@ -32,8 +32,9 @@ type sseHub struct {
 	closed   bool
 	draining bool
 	queue    []sseFrame
-	attached bool
-	replaced chan struct{} // closed when a newer GET stream takes over
+	// replaced is non-nil exactly while a GET stream holds the consumer slot,
+	// and is closed when a newer stream takes over or the hub shuts down.
+	replaced chan struct{}
 
 	// drain belongs to the currently attached stream: attach mints a fresh
 	// buffered channel per stream and Write signals only the current one.
@@ -144,10 +145,9 @@ func (h *sseHub) attach() (replaced, drain <-chan struct{}, ok bool) {
 	if h.closed || h.draining {
 		return nil, nil, false
 	}
-	if h.attached && h.replaced != nil {
+	if h.replaced != nil {
 		close(h.replaced)
 	}
-	h.attached = true
 	h.replaced = make(chan struct{})
 	next := make(chan struct{}, 1)
 	if len(h.queue) > 0 {
@@ -163,8 +163,7 @@ func (h *sseHub) attach() (replaced, drain <-chan struct{}, ok bool) {
 func (h *sseHub) detach(own <-chan struct{}) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.attached && h.replaced != nil && own == (<-chan struct{})(h.replaced) {
-		h.attached = false
+	if h.replaced != nil && own == (<-chan struct{})(h.replaced) {
 		h.replaced = nil
 	}
 }
@@ -199,10 +198,9 @@ func (h *sseHub) closeStreams() {
 		return
 	}
 	h.draining = true
-	if h.attached && h.replaced != nil {
+	if h.replaced != nil {
 		close(h.replaced)
 	}
-	h.attached = false
 	h.replaced = nil
 }
 
@@ -216,9 +214,8 @@ func (h *sseHub) close() {
 	h.closed = true
 	h.queue = nil
 	h.drain = nil
-	if h.attached && h.replaced != nil {
+	if h.replaced != nil {
 		close(h.replaced)
-		h.attached = false
 		h.replaced = nil
 	}
 }

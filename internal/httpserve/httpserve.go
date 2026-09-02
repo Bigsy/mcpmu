@@ -331,11 +331,9 @@ func (s *Server) register(id string, hs *httpSession) (ok bool, full bool) {
 	return true, false
 }
 
-// lookup returns the session for an Mcp-Session-Id, enforcing that it is
-// presented on the namespace route it was minted under.
-func (s *Server) lookup(id, routeNamespace string) *httpSession {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// lookupLocked resolves an Mcp-Session-Id, enforcing that it is presented on
+// the namespace route it was minted under. Callers hold s.mu.
+func (s *Server) lookupLocked(id, routeNamespace string) *httpSession {
 	hs, ok := s.sessions[id]
 	if !ok || hs.namespace != routeNamespace {
 		return nil
@@ -343,15 +341,25 @@ func (s *Server) lookup(id, routeNamespace string) *httpSession {
 	return hs
 }
 
+// lookup returns the session for an Mcp-Session-Id, subject to
+// lookupLocked's namespace-route check.
+func (s *Server) lookup(id, routeNamespace string) *httpSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lookupLocked(id, routeNamespace)
+}
+
 // admitPost looks the session up and marks it busy in one step under s.mu —
 // the same lock reapIdle scans with — so the reaper can never tear a session
 // down between a handler finding it and the handler starting work on it.
-// Callers must pair a non-nil return with endRequest.
+// The lookup and the busy-marking must stay in one critical section for that
+// reason; do not split them. Callers must pair a non-nil return with
+// endRequest.
 func (s *Server) admitPost(sessionID, routeNamespace string) *httpSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	hs, ok := s.sessions[sessionID]
-	if !ok || hs.namespace != routeNamespace {
+	hs := s.lookupLocked(sessionID, routeNamespace)
+	if hs == nil {
 		return nil
 	}
 	hs.beginRequest()
