@@ -25,6 +25,7 @@ type Core struct {
 	coreMu           sync.RWMutex
 	cfg              *config.Config
 	configGeneration uint64
+	retiring         map[string]bool   // guarded by coreMu; acquisitions fail during selective retirement
 	recorder         *metrics.Recorder // nil when metrics are disabled or unavailable
 	// resourceStateMu serializes the two writers that reset all subscription
 	// and resource-map state (Close and hot reload); it is never taken
@@ -241,7 +242,14 @@ func (c *Core) restartInstance(ctx context.Context, id process.InstanceID, serve
 }
 
 func (c *Core) snapshotServerConfig(id process.InstanceID, serverName string) (serverConfigSnapshot, error) {
+	if !c.privateInstanceAllowed(id) {
+		return serverConfigSnapshot{}, fmt.Errorf("private instance is no longer selected: %s", id)
+	}
 	c.coreMu.RLock()
+	if c.retiring[serverName] {
+		c.coreMu.RUnlock()
+		return serverConfigSnapshot{}, fmt.Errorf("server is reloading: %s", serverName)
+	}
 	snapshotGeneration := c.configGeneration
 	srv, ok := c.cfg.GetServer(serverName)
 	c.coreMu.RUnlock()
@@ -262,8 +270,14 @@ func (c *Core) snapshotServerConfig(id process.InstanceID, serverName string) (s
 }
 
 func (c *Core) validateServerConfigSnapshot(id process.InstanceID, serverName string, snapshot serverConfigSnapshot) error {
+	if !c.privateInstanceAllowed(id) {
+		return fmt.Errorf("private instance is no longer selected: %s", id)
+	}
 	c.coreMu.RLock()
 	defer c.coreMu.RUnlock()
+	if c.retiring[serverName] {
+		return fmt.Errorf("server is reloading: %s", serverName)
+	}
 	if c.configGeneration == snapshot.generation {
 		return nil
 	}
@@ -285,7 +299,7 @@ func (c *Core) validateServerConfigSnapshot(id process.InstanceID, serverName st
 }
 
 func normalizedServerConfig(srv config.ServerConfig) ([]byte, error) {
-	encoded, err := json.Marshal(srv)
+	encoded, err := json.Marshal(runtimeServerConfig(srv))
 	if err != nil {
 		return nil, fmt.Errorf("normalize server config: %w", err)
 	}
@@ -519,7 +533,10 @@ func (c *Core) subscribeResource(
 		callCtx, cancel := context.WithTimeout(ctx, server.timeout)
 		defer cancel()
 		return server.client.SubscribeResource(callCtx, key.URI)
-	})
+	}, func() bool { return c.subscriptionAllowed(session, key, server.handle.Generation()) })
+	if err == errSubscriptionRevoked {
+		c.cleanupOrphanSubscription(ctx, key)
+	}
 	c.notifyDroppedSubscriptions(dropped)
 	return err
 }

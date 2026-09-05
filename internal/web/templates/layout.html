@@ -149,6 +149,7 @@
   </header>
 
   <main class="main">
+    {{with configWarning}}<div role="alert" class="text-muted">{{.}}</div>{{end}}
     {{block "content" .}}{{end}}
   </main>
 

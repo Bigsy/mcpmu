@@ -22,11 +22,14 @@ func Control(ctx context.Context, configPath, command string) (ControlResponse, 
 	if err != nil {
 		return ControlResponse{}, err
 	}
-	paths, err := RuntimePaths(canonical)
+	paths, err := ExistingRuntimePaths(canonical)
 	if err != nil {
 		return ControlResponse{}, err
 	}
 
+	if err := validatePrivateRuntimeDir(paths.RuntimeDir); err != nil {
+		return ControlResponse{}, err
+	}
 	dialer := net.Dialer{}
 	rawConn, err := dialer.DialContext(ctx, "unix", paths.Socket)
 	if err != nil {
@@ -153,8 +156,11 @@ func validatedPIDRecord(configPath string) (string, Paths, PIDFile, error) {
 	if err != nil {
 		return "", Paths{}, PIDFile{}, err
 	}
-	paths, err := RuntimePaths(canonical)
+	paths, err := ExistingRuntimePaths(canonical)
 	if err != nil {
+		return "", Paths{}, PIDFile{}, err
+	}
+	if err := validatePrivateRuntimeDir(paths.RuntimeDir); err != nil {
 		return "", Paths{}, PIDFile{}, err
 	}
 	record, err := ReadPIDFile(paths.PIDFile)

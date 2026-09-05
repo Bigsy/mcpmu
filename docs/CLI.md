@@ -5,6 +5,29 @@ All commands support `--config` / `-c` to specify a custom config file path.
 For task-focused guidance, see [Tool permissions](permissions.md) and
 [Tool-surface compression](compression.md).
 
+## Read-only diagnostics
+
+```bash
+mcpmu status [--json]
+mcpmu doctor [--json]
+```
+
+Status reports the resolved config path, whether missing-file defaults were used,
+the daemon setting, availability, build compatibility when known, and the daemon's
+running instance names. It does not inspect isolated or dedicated HTTP serves.
+Doctor additionally checks local stdio executables, working directories and
+referenced bearer/header environment variables, respecting server overrides.
+Neither command starts a daemon/upstream, writes config, repairs runtime files,
+queries credentials or performs OAuth. The daemon may have inherited a different
+environment. TUI/web statuses refer only to their own management session.
+
+JSON contains `configPath`, `defaultsUsed`, `configValid`, `scope`, `daemonEnabled`,
+`daemonState`, `checks`, and optional `buildCompatible`/`daemon`. Each check has
+`server`, `kind`, optional environment-variable `name`, and boolean `ok`.
+Values of environment variables and headers are never printed. Exit 0 includes
+an absent daemon and contextual availability warnings; invalid/unreadable config
+or definite doctor prerequisite failures exit 1. An absent config uses empty defaults.
+
 ## Server management
 
 ```bash

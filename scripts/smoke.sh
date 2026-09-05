@@ -1363,8 +1363,22 @@ EOF
   return "$rc"
 }
 
+# Reuses the existing mcptest helper process; requires no network or credentials.
+smoke_selective_reload() (
+  if ! command -v python3 >/dev/null; then
+    echo "SKIP: python3 is required"
+    return 0
+  fi
+  local tmp
+  tmp=$(mktemp -d /tmp/mu-reload-bin.XXXXXX)
+  trap 'rm -rf "$tmp"' EXIT
+  go test -c -o "$tmp/upstream.test" ./internal/server || return 1
+  python3 scripts/smoke_reload.py ./mcpmu "$tmp/upstream.test"
+)
+
 # Register new smoke checks here.
 SMOKE_CHECKS=(
+  smoke_selective_reload
   smoke_cf_access_headers
   smoke_process_group_cleanup
   smoke_stdio_trailing_frame
@@ -1397,7 +1411,7 @@ run_check() {
 }
 
 main() {
-  build_binary
+  build_binary || return 1
 
   local checks=()
   if [[ $# -gt 0 ]]; then

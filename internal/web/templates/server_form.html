@@ -163,6 +163,12 @@
           </div>
 
           <div class="toggle-row">
+            <label for="shared">Share between agent connections</label>
+            <input type="hidden" name="shared" value="false">
+            <input type="checkbox" name="shared" value="true" id="shared"{{if .Form.Shared}} checked{{end}} style="width:auto">
+          </div>
+            <p class="text-muted">Turn off for stateful tools such as browsers or REPLs that need a separate instance per agent connection. Changing this affects serving instances when the config reloads.</p>
+          <div class="toggle-row">
             <label for="autostart">Autostart</label>
             <input type="hidden" name="autostart" value="false">
             <input type="checkbox" name="autostart" value="true" id="autostart"{{if .Form.Autostart}} checked{{end}} style="width:auto">

@@ -209,7 +209,7 @@ func TestServer_ApplyReload_ReSelectsNamespaceIfRemoved(t *testing.T) {
 	}
 }
 
-func TestServer_ApplyReload_KeepsPreviousNamespaceOnResolutionFailure(t *testing.T) {
+func TestServer_ApplyReload_DeniesAccessOnResolutionFailure(t *testing.T) {
 	t.Parallel()
 	enabled := true
 	oldCfg := &config.Config{
@@ -269,15 +269,15 @@ func TestServer_ApplyReload_KeepsPreviousNamespaceOnResolutionFailure(t *testing
 	// Apply reload - namespace resolution should fail (2 namespaces, none selected)
 	srv.applyReload(context.Background(), newCfg)
 
-	// Verify the server kept the previous namespace config (fail-closed)
+	// Keep the namespace identity for diagnostics but revoke its old access.
 	if srv.activeNamespaceName != "ns1" {
 		t.Errorf("Expected ns1 to be kept (fail-closed), got %q", srv.activeNamespaceName)
 	}
 	if srv.selectionMethod != SelectionOnly {
 		t.Errorf("Expected SelectionOnly to be preserved, got %v", srv.selectionMethod)
 	}
-	if len(srv.activeServerNames) != 1 || srv.activeServerNames[0] != "srv1" {
-		t.Errorf("Expected previous server list [srv1], got %v", srv.activeServerNames)
+	if len(srv.activeServerNames) != 0 {
+		t.Errorf("Expected no servers for removed namespace, got %v", srv.activeServerNames)
 	}
 }
 

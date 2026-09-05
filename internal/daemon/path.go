@@ -79,6 +79,19 @@ func CanonicalConfigPath(path string) (string, error) {
 // The short hash is only a filename hint; handshakes and pidfiles retain the
 // complete path as the authoritative identity.
 func RuntimePaths(canonicalConfigPath string) (Paths, error) {
+	paths, err := ExistingRuntimePaths(canonicalConfigPath)
+	if err != nil {
+		return Paths{}, err
+	}
+	if err := ensurePrivateRuntimeDir(paths.RuntimeDir); err != nil {
+		return Paths{}, err
+	}
+	return paths, nil
+}
+
+// ExistingRuntimePaths derives rendezvous names without creating or changing files.
+// Read-only diagnostics must use this instead of preparing a runtime directory.
+func ExistingRuntimePaths(canonicalConfigPath string) (Paths, error) {
 	if runtime.GOOS == "windows" {
 		return Paths{}, fmt.Errorf("shared daemon transport is unsupported on windows")
 	}
@@ -91,9 +104,6 @@ func RuntimePaths(canonicalConfigPath string) (Paths, error) {
 			return Paths{}, fmt.Errorf("get home directory: %w", err)
 		}
 		dir = filepath.Join(home, ".local", "state", "mcpmu")
-	}
-	if err := ensurePrivateRuntimeDir(dir); err != nil {
-		return Paths{}, err
 	}
 	sum := sha256.Sum256([]byte(canonicalConfigPath))
 	name := hex.EncodeToString(sum[:4])

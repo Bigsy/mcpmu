@@ -41,7 +41,9 @@ type Server struct {
 	auth       *auth // nil when auth is disabled
 
 	// Config file watcher: broadcasts to SSE clients on external changes.
-	configBcast *configBroadcaster
+	configBcast  *configBroadcaster
+	reloadMu     sync.Mutex
+	reloadFailed bool
 
 	// Metrics store cache, keyed by file mtime+size so htmx polling stays
 	// cheap. Guarded by metricsMu.
@@ -96,6 +98,9 @@ func New(opts Options) (*Server, error) {
 		configBcast: newConfigBroadcaster(),
 	}
 
+	for _, tmpl := range s.templates {
+		tmpl.Funcs(template.FuncMap{"configWarning": s.configWarning})
+	}
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 
@@ -237,15 +242,16 @@ var pageTemplates = []string{
 
 func parseTemplates(authEnabled bool) (map[string]*template.Template, error) {
 	funcMap := template.FuncMap{
-		"authEnabled": func() bool { return authEnabled },
-		"stateClass":  stateClass,
-		"stateDot":    stateDot,
-		"stateLabel":  stateLabel,
-		"kindBadge":   kindBadge,
-		"isRunning":   func(s events.RuntimeState) bool { return s == events.StateRunning },
-		"isStarting":  func(s events.RuntimeState) bool { return s == events.StateStarting },
-		"isStopping":  func(s events.RuntimeState) bool { return s == events.StateStopping },
-		"isNeedsAuth": func(s events.RuntimeState) bool { return s == events.StateNeedsAuth },
+		"authEnabled":   func() bool { return authEnabled },
+		"configWarning": func() string { return "" },
+		"stateClass":    stateClass,
+		"stateDot":      stateDot,
+		"stateLabel":    stateLabel,
+		"kindBadge":     kindBadge,
+		"isRunning":     func(s events.RuntimeState) bool { return s == events.StateRunning },
+		"isStarting":    func(s events.RuntimeState) bool { return s == events.StateStarting },
+		"isStopping":    func(s events.RuntimeState) bool { return s == events.StateStopping },
+		"isNeedsAuth":   func(s events.RuntimeState) bool { return s == events.StateNeedsAuth },
 		"canStart": func(s events.RuntimeState) bool {
 			return s == events.StateIdle || s == events.StateStopped || s == events.StateError || s == events.StateCrashed
 		},

@@ -474,3 +474,21 @@ mcpmu completion bash > /etc/bash_completion.d/mcpmu
 # fish
 mcpmu completion fish > ~/.config/fish/completions/mcpmu.fish
 ```
+
+
+## Read-only diagnostics and runtime ownership
+
+`mcpmu status [--json]` reports the resolved config and shared daemon status.
+`mcpmu doctor [--json]` checks config and local executable, cwd and referenced
+HTTP environment prerequisites without starting servers or authenticating.
+Both support `--config`; doctor exits 1 on definite prerequisite failures.
+Checks describe the current CLI environment plus configured overrides, which
+may differ from the daemon's inherited environment. TUI/web status and test
+start/stop actions apply only to their management session.
+
+The TUI and web server forms expose “Share between agent connections”. Turn it
+off for stateful browsers/REPLs to persist `shared: false`. Omitted sharing input
+preserves an existing setting. Reloads retain unaffected instances and subscriptions;
+metadata edits do not restart upstreams, and runtime edits retire affected instances.
+Metrics/global configuration changes conservatively use a full reload. Invalid
+external edits retain the last valid config; the web warning clears on recovery.

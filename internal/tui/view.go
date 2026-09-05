@@ -144,7 +144,7 @@ func (m Model) renderStatusBar() string {
 	runningCount := m.supervisor.RunningCount()
 	totalCount := len(m.cfg.Servers)
 
-	left := fmt.Sprintf("%d/%d servers running", runningCount, totalCount)
+	left := fmt.Sprintf("%d/%d servers running (management session)", runningCount, totalCount)
 
 	// Show context-sensitive key hints based on tab and view
 	var keys string

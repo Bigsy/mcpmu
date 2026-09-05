@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -325,5 +326,55 @@ func TestWatchConfigCoalescedSelfAndExternal(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("coalesced self+external write: external change was incorrectly suppressed")
+	}
+}
+
+func TestWatchConfigWarningRecovery(t *testing.T) {
+	srv := newTestServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	original, err := os.ReadFile(srv.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { defer close(done); srv.WatchConfig(ctx) }()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.After(4 * time.Second)
+	for srv.configWarning() == "" {
+		select {
+		case <-ticker.C:
+			if err := os.WriteFile(srv.configPath, []byte(`{"secret":"DO_NOT_EXPOSE",`), 0600); err != nil {
+				t.Fatal(err)
+			}
+		case <-deadline:
+			t.Fatal("no reload warning")
+		}
+	}
+	if strings.Contains(srv.configWarning(), "DO_NOT_EXPOSE") {
+		t.Fatal("config content exposed")
+	}
+	srv.cfgMu.Lock()
+	if len(srv.cfg.Servers) != 2 {
+		t.Fatal("invalid update replaced config")
+	}
+	srv.cfgMu.Unlock()
+	if err := os.WriteFile(srv.configPath, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.After(3 * time.Second)
+	for srv.configWarning() != "" {
+		select {
+		case <-ticker.C:
+		case <-deadline:
+			t.Fatal("equal-state recovery did not clear warning")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not stop")
 	}
 }

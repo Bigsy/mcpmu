@@ -183,9 +183,35 @@ mcpmu serve --http --addr 0.0.0.0:8081 --token "$MCPMU_TOKEN"
 ```
 
 Servers are shared by default. For stateful servers such as browser automation
-or REPLs, set `"shared": false` in that server's configuration to give each
-client session a private instance. The [CLI reference](docs/CLI.md) covers
+or REPLs, turn off **Share between agent connections** in the TUI or web server
+form (or set `"shared": false` in the config) to give each client session a private instance.
+Changing sharing takes effect when serving processes reload the config. The [CLI reference](docs/CLI.md) covers
 daemon controls, HTTP security, OAuth, custom headers, and all serve flags.
+
+## Runtime status and diagnostics
+
+TUI and web statuses describe **this management session**. Their start/stop
+controls use a separate supervisor from the daemon serving agent connections.
+A stopped server in a manager may still be running for an agent.
+
+```bash
+mcpmu status           # resolved config, daemon availability and running instances
+mcpmu status --json
+mcpmu doctor          # config, executable, working-directory and env checks
+mcpmu doctor --json
+```
+
+Both commands are read-only and support `--config`. They never start upstreams,
+perform OAuth login, or start a daemon. Doctor checks the current CLI environment
+plus server overrides; a running daemon may have inherited a different environment.
+Missing configs use empty defaults. Status succeeds for a determined absent daemon;
+doctor exits 1 for invalid config or failed local prerequisite checks. Environment
+checks show variable names and outcomes, never values.
+
+Serve reloads keep unaffected upstreams running. Permission/compression edits
+retain instances; runtime edits restart affected servers. Invalid external edits
+retain the previous valid config, and the web UI shows a warning until recovery.
+Global settings such as metrics and OAuth still use a full reload.
 
 ## More features
 
@@ -227,3 +253,9 @@ go test ./...
 make check
 make test-integration
 ```
+
+Local linting and CI use [golangci-lint v2.12.2](https://github.com/golangci/golangci-lint/releases/tag/v2.12.2),
+built with Go 1.26. Run `make check` and `make test-integration` sequentially:
+a legacy OAuth callback fixture uses a fixed port. Self-contained reload and
+diagnostic smoke coverage: `./scripts/smoke.sh smoke_selective_reload`.
+Performance fixtures and measured baselines are in [docs/performance.md](docs/performance.md).

@@ -168,3 +168,26 @@ func TestBuildServerConfig_EnabledNilKeepsExisting(t *testing.T) {
 		t.Error("explicit Enabled=true not applied")
 	}
 }
+
+func TestBuildServerConfigSharing(t *testing.T) {
+	for _, initial := range []*bool{nil, new(false), new(true)} {
+		for _, input := range []*bool{nil, new(false), new(true)} {
+			existing := ServerConfig{Command: "fixture", Shared: initial, DeniedTools: []string{"danger"}}
+			got, err := BuildServerConfig(ServerFormData{Command: "edited", Shared: input}, &existing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := existing.IsShared()
+			if input != nil {
+				want = *input
+			}
+			if got.IsShared() != want || len(got.DeniedTools) != 1 {
+				t.Fatalf("sharing or denied tools lost: %+v", got)
+			}
+		}
+	}
+	got, err := BuildServerConfig(ServerFormData{Command: "fixture"}, nil)
+	if err != nil || !got.IsShared() {
+		t.Fatalf("new default: %+v %v", got, err)
+	}
+}

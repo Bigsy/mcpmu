@@ -41,6 +41,7 @@ type ServerFormData struct {
 
 	// Common
 	Env       map[string]string
+	Shared    *bool // nil → preserve existing; new servers default to shared
 	Enabled   *bool // nil → keep existing (true for a new server)
 	Autostart bool
 	// Timeouts in seconds; 0 means "use the default".
@@ -50,7 +51,7 @@ type ServerFormData struct {
 
 // BuildServerConfig turns form input into a ServerConfig. When existing is
 // non-nil the result starts from it, so fields the form does not expose
-// (Shared, DeniedTools, OAuth.ClientSecret, ...) survive an edit. Fields that
+// (DeniedTools, OAuth.ClientSecret, ...) survive an edit. Fields that
 // belong to the other transport are cleared, so switching stdio↔HTTP leaves no
 // contradictory leftovers for Validate to reject.
 //
@@ -65,6 +66,10 @@ func BuildServerConfig(form ServerFormData, existing *ServerConfig) (ServerConfi
 
 	if form.Enabled != nil {
 		srv.SetEnabled(*form.Enabled)
+	}
+	if form.Shared != nil {
+		shared := *form.Shared
+		srv.Shared = &shared
 	}
 	srv.Autostart = form.Autostart
 	srv.StartupTimeoutSec = form.StartupTimeoutSec

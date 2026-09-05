@@ -34,6 +34,8 @@ type serverFormData struct {
 	OAuthCallbackPort string
 	OAuthScopes       string
 	EnvPairs          []envPair
+	Shared            bool
+	SharedProvided    bool
 	Enabled           bool
 	Autostart         bool
 	StartupTimeout    int
@@ -56,6 +58,8 @@ type serverFormPageData struct {
 func newServerFormData() serverFormData {
 	return serverFormData{
 		AuthMode:       "none",
+		Shared:         true,
+		SharedProvided: true,
 		Enabled:        true,
 		StartupTimeout: 10,
 		ToolTimeout:    60,
@@ -73,6 +77,8 @@ func serverFormDataFromConfig(name string, srv config.ServerConfig) serverFormDa
 		URL:            srv.URL,
 		HTTPHeaders:    config.FormatHeaderLines(srv.HTTPHeaders),
 		EnvHTTPHeaders: config.FormatHeaderLines(srv.EnvHTTPHeaders),
+		Shared:         srv.IsShared(),
+		SharedProvided: true,
 		Enabled:        srv.IsEnabled(),
 		Autostart:      srv.Autostart,
 		StartupTimeout: srv.StartupTimeout(),
@@ -121,6 +127,8 @@ func parseServerForm(r *http.Request) serverFormData {
 		OAuthClientID:     strings.TrimSpace(r.FormValue("oauth_client_id")),
 		OAuthCallbackPort: strings.TrimSpace(r.FormValue("oauth_callback_port")),
 		OAuthScopes:       strings.TrimSpace(r.FormValue("oauth_scopes")),
+		Shared:            formChecked(r, "shared"),
+		SharedProvided:    r.Form.Has("shared"),
 		Enabled:           formChecked(r, "enabled"),
 		Autostart:         formChecked(r, "autostart"),
 		StartupTimeout:    atoi(r.FormValue("startup_timeout"), 10),
@@ -166,7 +174,12 @@ func parseEnvPairs(r *http.Request) []envPair {
 // buildServerConfig maps the web form onto config.BuildServerConfig, which
 // owns the merge-with-existing rules shared with the TUI form.
 func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config.ServerConfig, error) {
+	var shared *bool
+	if fd.SharedProvided {
+		shared = &fd.Shared
+	}
 	form := config.ServerFormData{
+		Shared:            shared,
 		IsHTTP:            fd.IsHTTP,
 		Command:           fd.Command,
 		Args:              fd.Args,

@@ -1,10 +1,13 @@
 package server
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/Bigsy/mcpmu/internal/process"
 )
+
+var errSubscriptionRevoked = errors.New("resource subscription revoked during reload")
 
 // resourceSubscriptionKey identifies one upstream subscription. URI alone is
 // insufficient because different sessions may resolve the same URI to
@@ -104,12 +107,17 @@ func (r *resourceSubscriptions) subscribe(
 	key resourceSubscriptionKey,
 	generation uint64,
 	upstream func() error,
+	valid ...func() bool,
 ) (dropped []*Session, err error) {
 	lock := r.lockKey(key)
 	defer r.unlockKey(key, lock)
 
 	r.mu.RLock()
 	epoch := r.epoch
+	if len(valid) > 0 && !valid[0]() {
+		r.mu.RUnlock()
+		return nil, errSubscriptionRevoked
+	}
 	entry := r.entries[key]
 	alreadySubscribed := entry != nil && entry.sessions != nil
 	if alreadySubscribed {
@@ -148,6 +156,9 @@ func (r *resourceSubscriptions) subscribe(
 	// do not resurrect cleared local intent.
 	if epoch != r.epoch {
 		return nil, nil
+	}
+	if len(valid) > 0 && !valid[0]() {
+		return nil, errSubscriptionRevoked
 	}
 	entry = r.entries[key]
 	if entry == nil {

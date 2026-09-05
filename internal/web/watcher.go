@@ -7,14 +7,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
-	"github.com/fsnotify/fsnotify"
 )
 
 // configBroadcaster manages SSE subscribers for config-change notifications.
@@ -63,110 +58,26 @@ func (s *Server) WatchConfig(ctx context.Context) {
 	if s.configPath == "" {
 		return
 	}
-
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Printf("Failed to create config watcher: %v", err)
-		return
-	}
-	defer func() { _ = watcher.Close() }()
-
-	// Expand ~ and resolve symlinks so we watch the real file's directory.
-	// LoadFrom/SaveTo both expand ~ internally, and SaveTo resolves symlinks
-	// before writing (atomic rename targets the real path), so the watcher
-	// must watch the fully resolved path to see those events.
-	watchPath := s.configPath
-	if strings.HasPrefix(watchPath, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			watchPath = filepath.Join(home, watchPath[2:])
-		}
-	}
-	if resolved, err := filepath.EvalSymlinks(watchPath); err == nil {
-		watchPath = resolved
-	}
-
-	dir := filepath.Dir(watchPath)
-	filename := filepath.Base(watchPath)
-
-	if err := watcher.Add(dir); err != nil {
-		log.Printf("Failed to watch config directory %s: %v", dir, err)
-		return
-	}
-
-	log.Printf("Watching config file: %s (resolved: %s)", s.configPath, watchPath)
-
-	const debounceDelay = 150 * time.Millisecond
-	var debounceTimer *time.Timer
-	var debounceMu sync.Mutex
-
-	triggerReload := func() {
-		debounceMu.Lock()
-		if debounceTimer != nil {
-			debounceTimer.Stop()
-		}
-		debounceTimer = time.AfterFunc(debounceDelay, func() {
-			newCfg, err := config.LoadFrom(s.configPath)
-			if err != nil {
-				log.Printf("Failed to load config after change: %v (keeping current config)", err)
-				return
-			}
-
-			// Compare disk config with in-memory config. If they match,
-			// this was a self-write (mutateConfig already updated s.cfg)
-			// and no broadcast is needed. If they differ, something
-			// external changed — update and notify SSE clients.
-			s.cfgMu.Lock()
-			changed := !configEqual(s.cfg, newCfg)
-			if changed {
-				s.cfg = newCfg
-			}
-			s.cfgMu.Unlock()
-
-			if !changed {
-				log.Printf("Config file changed but matches in-memory state, skipping broadcast")
-				return
-			}
-
+	report := func(err error) {
+		if s.setReloadFailed(true) {
+			log.Printf("%v", err)
 			s.configBcast.Broadcast()
-			log.Printf("Config reloaded: %d servers, %d namespaces",
-				len(newCfg.Servers), len(newCfg.Namespaces))
-		})
-		debounceMu.Unlock()
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			debounceMu.Lock()
-			if debounceTimer != nil {
-				debounceTimer.Stop()
-			}
-			debounceMu.Unlock()
-			return
-
-		case event, ok := <-watcher.Events:
-			if !ok {
-				return
-			}
-
-			// Filter for our target file
-			if filepath.Base(event.Name) != filename {
-				continue
-			}
-
-			// React to write, create, rename, or remove events.
-			// Atomic writes show up as rename/create depending on OS/editor.
-			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Remove) != 0 {
-				log.Printf("Config file event: %s (%s)", event.Name, event.Op)
-				triggerReload()
-			}
-
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Printf("Config watcher error: %v", err)
 		}
+	}
+	err := config.Watch(ctx, s.configPath, 0, func(newCfg *config.Config) {
+		s.cfgMu.Lock()
+		changed := !configEqual(s.cfg, newCfg)
+		if changed {
+			s.cfg = newCfg
+		}
+		s.cfgMu.Unlock()
+		recovered := s.setReloadFailed(false)
+		if changed || recovered {
+			s.configBcast.Broadcast()
+		}
+	}, report)
+	if err != nil {
+		report(err)
 	}
 }
 
@@ -214,4 +125,21 @@ func (s *Server) handleSSEConfig(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// Reload warnings have their own lock: page rendering may already hold cfgMu.
+func (s *Server) setReloadFailed(failed bool) bool {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	changed := s.reloadFailed != failed
+	s.reloadFailed = failed
+	return changed
+}
+func (s *Server) configWarning() string {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	if s.reloadFailed {
+		return "Config reload failed; using the previous valid configuration"
+	}
+	return ""
 }

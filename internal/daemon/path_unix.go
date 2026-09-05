@@ -30,3 +30,17 @@ func ensurePrivateRuntimeDir(dir string) error {
 	}
 	return nil
 }
+
+// validatePrivateRuntimeDir checks the same ownership boundary as setup without
+// creating directories or repairing permissions during read-only inspection.
+func validatePrivateRuntimeDir(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Getuid() || !info.IsDir() || info.Mode().Perm() != 0700 {
+		return fmt.Errorf("daemon runtime directory must be owned by the current user with mode 0700")
+	}
+	return nil
+}

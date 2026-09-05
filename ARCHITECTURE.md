@@ -150,12 +150,9 @@ cannot drain is disconnected instead of blocking the shared Core. Control
 connections have a separately frozen protocol and tolerate executable-build
 mismatch so a newly installed CLI can still inspect or stop an older daemon.
 
-The daemon owns config watching and applies each reload once at Core scope:
-subscriptions and URI maps are cleared, upstreams are stopped, every attached
-Session re-resolves its namespace and permissions, eager Sessions restart
-their selected shared and private instances, and capability-scoped list-change
-notifications are sent to each Session. Embedded serve retains its
-single-Session reload consumer.
+The daemon owns config watching and applies each reload once at Core scope.
+Embedded serve retains its single-Session reload consumer. See Config watching
+and reload below for instance retention, subscription cleanup and fallbacks.
 
 A spawn lock serializes concurrent cold starts. The winning shim rechecks the
 socket, proves staleness only when the daemon run lock is free, removes a stale
@@ -423,7 +420,7 @@ Cold discovery is singleflight per instance. A verified empty result is distinct
 from an unknown server. Initialization verifies resources-only or prompts-only
 servers without issuing an unsupported `tools/list`; failure from a server that
 advertises tools stays retryable and retains the last verified tool set. Stops
-and config reloads invalidate verification, restarts publish a fresh generation,
+and runtime-changing reloads invalidate affected verification; restarts publish a fresh generation,
 and late results from older generations are ignored.
 
 Generation alone cannot order results *within* one generation, and more than one
@@ -460,9 +457,9 @@ Intent remains after an upstream process stops. Discovery of a newer process
 generation replays each retained upstream subscription once. Replay failure
 drops the entry from every affected Session and sends those Sessions
 `notifications/resources/list_changed` so they can rebuild URI ownership and
-subscribe again. Config reload is deliberately different: it clears all
-subscription intent and every attached Session's URI map before stopping the
-old transports.
+subscribe again. Selective reload retains unaffected intent and URI routes,
+pruning revoked sessions and retired identities. Full fallback reloads clear all
+intent and URI maps before stopping the old transports.
 
 Subscribe, unsubscribe, replay, and `resources/updated` dispatch are
 serialized per `(InstanceID, URI)` across the upstream response and local
@@ -514,15 +511,14 @@ kinds of reader to exit.
 
 ### Process Lifecycle Foundations
 
-Every upstream is keyed internally by a stable `InstanceID`; current embedded
-mode constructs the shared identity from the server name, while the type can
-also carry the session discriminator needed by future private instances.
+Every upstream is keyed internally by a stable `InstanceID`: shared identities
+use the server name; private identities also carry the owning session discriminator.
 Start, stop, and restart use one lock per instance. The enforced lock order is
 `instance lifecycle lock → Supervisor map lock → Handle lock`, and process
 exit is never awaited while holding the map lock. A config reload advances a
 Core generation before stopping upstreams. A get-or-start operation holding an
-older snapshot must revalidate the canonical JSON encoding of the complete
-`ServerConfig` under the lifecycle lock, so a removed or changed definition
+older snapshot must revalidate normalized runtime settings and private membership
+under the lifecycle lock, so a removed or changed definition
 cannot be started after the reload barrier.
 
 Stdio servers run in their own Unix process group. Normal stop sends SIGTERM
@@ -775,7 +771,7 @@ mcpmu embeds a `SKILL.md` file in the binary (`cmd/mcpmu/skill_data/SKILL.md` vi
 
 **Direction (F4): TUI and web as daemon clients.** Today `cmd/mcpmu/manager_startup.go` (`startManager`, shared by `mcpmu tui` and `mcpmu web`) builds a private `Supervisor`, so in daemon mode the managers show and control a *different* set of upstream processes than the one agents are using — the root cause of "status is wrong" reports and of a manager spawning a duplicate upstream. The intended end state is that both managers are thin clients of the daemon's control socket and own no supervision of their own; every change to `web/` or `tui/` from here on should move toward that and not deepen their private supervision. Control-protocol additions this needs (not yet built): a `status` request returning per-server runtime state, PID, session count and last error; a `subscribe` stream forwarding `events.Bus` events (status, log lines, tool discovery) over the socket; `start`/`stop`/`restart` requests resolved the same way manager tools are (shared vs private instance); a `reload` request so a manager that has just written config can ask the daemon to pick it up immediately; and a `tools` request serving the verified catalog so the managers stop reading `toolcache.json` directly. When no daemon is running the managers fall back to today's embedded `Supervisor`.
 
-**Config mutations**: every write goes through `config.Mutate` / `config.MutateWithCache` (`internal/config/mutate.go`): take the cross-process lock (`config.json.lock`), reload from disk, apply the caller's function, validate, save atomically, and return the saved config for the caller to adopt. CLI, TUI and web all use it — a load→edit→save anywhere else would lose a concurrent writer's update. `RenameServer`, `DeleteServer` and `UpdateServer` (when command/args/URL change) record ToolCache side effects on the `Config`, which `Mutate` applies after the save, so a rename keeps the server's cached tools and a removal drops them regardless of which surface did it. The web `mutateConfig` method is a thin adapter that also serialises on `cfgMu` and swaps `s.cfg`. The form-to-`ServerConfig` merge rules (what an edit preserves — `OAuth.ClientSecret`, `Shared`, `DeniedTools` — and what switching transport clears) live once in `config.BuildServerConfig`, shared by the TUI and web forms.
+**Config mutations**: every write goes through `config.Mutate` / `config.MutateWithCache` (`internal/config/mutate.go`): take the cross-process lock (`config.json.lock`), reload from disk, apply the caller's function, validate, save atomically, and return the saved config for the caller to adopt. CLI, TUI and web all use it — a load→edit→save anywhere else would lose a concurrent writer's update. `RenameServer`, `DeleteServer` and `UpdateServer` (when command/args/URL change) record ToolCache side effects on the `Config`, which `Mutate` applies after the save, so a rename keeps the server's cached tools and a removal drops them regardless of which surface did it. The web `mutateConfig` method is a thin adapter that also serialises on `cfgMu` and swaps `s.cfg`. The form-to-`ServerConfig` merge rules (what an edit preserves — `OAuth.ClientSecret`, omitted `Shared`, `DeniedTools` — and what switching transport clears) live once in `config.BuildServerConfig`, shared by the TUI and web forms.
 
 ## Usage Metrics
 
@@ -808,3 +804,79 @@ Every tool call routed through serve mode is counted into daily usage buckets an
    no-daemon/single-process simplicity so concurrent agents do not duplicate
    every upstream; embedded mode remains the failure fallback and explicit
    isolation escape hatch.
+
+## Config watching and reload
+
+`internal/config/watch.go` owns directory watching, path resolution through
+`config.ResolvePath`, the 150 ms default debounce timer, and serialized loading
+and callback delivery. Relative paths become absolute after resolution; symlink
+saves follow the same target as `SaveTo`. Watching a directory detects atomic
+replacement and creation of a missing target. Removal, malformed content and
+unreadable files retain the previous valid config. Error messages omit parser
+contents. Callbacks run synchronously in the watcher loop, must honor context
+cancellation, and cannot execute after `Watch` returns. No consumer channel is
+closed. Core's callback waits for its reload queue or cancellation, so a busy
+consumer cannot permanently drop the final saved state. Web keeps its own
+self-write comparison and broadcasts only changed content or warning state.
+A valid equal-state recovery also clears the warning. The TUI does not watch
+external config edits.
+
+`reload_classify.go` uses explicit normalization and conservative fallbacks:
+
+| Change | Handling |
+|---|---|
+| Namespace description, compression, tool permissions, global denied tools | Swap immutable config; retain catalogs, generations, subscriptions and processes |
+| Server command/args/cwd/env, URL, headers, auth, sharing, enablement or timeout | Retire affected shared and private identities |
+| Server removed | Retire its identities; block subsequent acquisition |
+| Server added | Discoverable on demand; eager sessions start it |
+| Namespace membership/default | Re-resolve sessions, revoke visibility and subscription intent, retire excluded private instances; retain shared upstreams |
+| Metrics, global OAuth, daemon mode, schema or unclassified global fields | Existing full reload, including recorder lifecycle and flush |
+
+Runtime comparisons normalize enabled/shared defaults, transport inference,
+timeouts and empty runtime maps/slices. A metadata-only edit reads fresh
+authorization/compression on the next request without replacing a catalog.
+Requests already dispatched retain existing cancellation semantics.
+
+For selective reload, Core publishes the new config and generation plus an
+acquisition barrier for changed server names. Sessions re-resolve their namespace
+and replace router/config wrappers while retaining their verified catalogs.
+Resolution failure retains the namespace identity for diagnostics but exposes
+no servers; deleted namespaces cannot retain old access. Supervisor retires
+matching identities under their per-instance lifecycle locks, including starts
+already queued on those locks. Catalog generation tombstones reject delayed
+results from retired processes. Unaffected catalog entries and discovery flights
+survive. Successfully stopped identities are forgotten. Revoked URI routes are
+pruned in every session before the acquisition barrier is removed; then
+eager sessions restart selected instances, and capability-scoped list-change
+notifications are sent. There is no Core lock held during shutdown or network I/O.
+Calls acquiring a changed server during this short retirement interval can return
+“server is reloading”; subsequent requests use its replacement.
+
+Subscription intent is removed immediately for revoked sessions and retired
+instances, preserving other sessions' refcounts. In-flight subscribe commits
+recheck visibility and process generation. Orphaned subscriptions on retained
+upstreams are released in a Core worker under the existing per-key lock; cleanup
+rechecks for new subscribers before sending unsubscribe. Retired transports own
+their upstream-side cleanup. Metrics/global fallback reloads retain the original
+full generation/epoch barrier and stop-all ordering.
+
+## Implementation file ownership and diagnostics
+
+Session construction and connection state stay in `server.go`; `session_protocol.go`
+owns the wire loop and RPC envelopes. Tools, resources, prompts, discovery and
+namespace handling live in the corresponding `session_*.go` files. Core reload
+coordination lives in `reload.go` and `reload_selective.go`. Supervisor orchestration
+stays in `supervisor.go`, with `handle.go`, `start_stdio.go`, `start_http.go` and
+`oauth.go` owning handle lifecycle, transport startup and authentication helpers.
+SessionOptions and daemon handshake JSON tags are unchanged.
+
+Public `status`/`doctor` use daemon `Inspect`, with a two-second control deadline.
+`ExistingRuntimePaths` derives paths without preparing runtime state; inspection
+validates directory ownership/permissions without repairing them. Status reports
+running, not_running, disabled, unsupported, incompatible, control_unavailable or
+unavailable; build compatibility is unknown in pidfile fallback mode. JSON checks
+have stable `server`, `kind`, optional `name` and `ok` fields. Configuration errors
+and definite local prerequisite failures exit 1; determined daemon absence and
+contextual daemon availability warnings do not fail diagnostics. Executable checks
+never run commands or query credentials. These commands describe the shared daemon
+and local CLI environment, not dedicated HTTP or isolated serving processes.

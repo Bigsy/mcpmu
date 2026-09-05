@@ -276,3 +276,11 @@ func (s catalogState) String() string {
 		return fmt.Sprintf("catalogState(%d)", s)
 	}
 }
+
+// retire drops a changed instance's tools and rejects delayed discovery from
+// its old process generation. The next Supervisor generation can populate it.
+func (c *verifiedCatalog) retire(id process.InstanceID, generation uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[id] = catalogEntry{generation: generation + 1}
+}

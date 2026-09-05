@@ -7,23 +7,6 @@ on:
     branches: [main]
 
 jobs:
-  unit:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Run unit tests
-        run: go test -race -v ./...
-
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -52,10 +35,13 @@ jobs:
         with:
           go-version: '1.26'
 
+      - name: Check formatting
+        run: make fmt-check
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          version: v2.12.2
           args: --timeout=3m
 
   build:
@@ -76,4 +62,19 @@ jobs:
           GOOS=darwin GOARCH=amd64 go build -o mcpmu-darwin-amd64 ./cmd/mcpmu
 
       - name: Verify Linux binary
-        run: ./mcpmu-linux-amd64 --help || true
+        run: ./mcpmu-linux-amd64 --help
+
+      - name: Self-contained reload and diagnostics smoke
+        run: ./scripts/smoke.sh smoke_selective_reload
+
+  macos:
+    name: Native macOS lifecycle
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Process, lock, daemon and shim tests
+        run: go test -tags=integration -race -timeout=5m ./internal/process ./internal/flock ./internal/daemon ./internal/shim

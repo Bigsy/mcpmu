@@ -483,7 +483,9 @@ func TestCoreSubscriptionsReloadClearsEverySession(t *testing.T) {
 		}
 	}
 
-	first.applyReload(context.Background(), cfg)
+	reloaded := *cfg
+	reloaded.Metrics = &config.MetricsConfig{Enabled: new(false)} // full reload fallback
+	first.applyReload(context.Background(), &reloaded)
 	if core.subscriptions.hasSubscribers(key) {
 		t.Fatal("reload retained Core subscription state")
 	}

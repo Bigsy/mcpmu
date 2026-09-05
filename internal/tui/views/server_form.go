@@ -49,6 +49,7 @@ type ServerFormModel struct {
 	envHTTPHeaders    string // Only used for HTTP — multi-line "Name: ENV_VAR"
 	oauthClientID     string // Only used for HTTP
 	oauthCallbackPort string // Only used for HTTP (string for form input)
+	shared            bool
 	autostart         bool
 	oauthScopes       string // comma-separated, HTTP only
 	startupTimeout    string // parsed to int
@@ -65,6 +66,7 @@ type ServerFormModel struct {
 	initialEnvHTTPHeaders    string
 	initialOAuthClientID     string
 	initialOAuthCallbackPort string
+	initialShared            bool
 	initialAutostart         bool
 	initialOAuthScopes       string
 	initialStartupTimeout    string
@@ -106,6 +108,7 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.envHTTPHeaders = ""
 	m.oauthClientID = ""
 	m.oauthCallbackPort = ""
+	m.shared = true
 	m.autostart = false
 	m.oauthScopes = ""
 	m.startupTimeout = ""
@@ -121,6 +124,7 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.initialEnvHTTPHeaders = ""
 	m.initialOAuthClientID = ""
 	m.initialOAuthCallbackPort = ""
+	m.initialShared = true
 	m.initialAutostart = false
 	m.initialOAuthScopes = ""
 	m.initialStartupTimeout = ""
@@ -148,6 +152,7 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.envHTTPHeaders = ""
 	m.oauthClientID = oauthClientID
 	m.oauthCallbackPort = oauthCallbackPort
+	m.shared = true
 	m.autostart = false
 	m.oauthScopes = oauthScopes
 	m.startupTimeout = ""
@@ -163,6 +168,7 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.initialEnvHTTPHeaders = ""
 	m.initialOAuthClientID = oauthClientID
 	m.initialOAuthCallbackPort = oauthCallbackPort
+	m.initialShared = true
 	m.initialAutostart = false
 	m.initialOAuthScopes = oauthScopes
 	m.initialStartupTimeout = ""
@@ -213,6 +219,7 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	}
 	m.cwd = srv.Cwd
 	m.env = formatEnvVars(srv.Env)
+	m.shared = srv.IsShared()
 	m.autostart = srv.Autostart
 	if srv.StartupTimeoutSec > 0 {
 		m.startupTimeout = strconv.Itoa(srv.StartupTimeoutSec)
@@ -236,6 +243,7 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	m.initialEnvHTTPHeaders = m.envHTTPHeaders
 	m.initialOAuthClientID = m.oauthClientID
 	m.initialOAuthCallbackPort = m.oauthCallbackPort
+	m.initialShared = m.shared
 	m.initialAutostart = m.autostart
 	m.initialOAuthScopes = m.oauthScopes
 	m.initialStartupTimeout = m.startupTimeout
@@ -341,6 +349,11 @@ func (m *ServerFormModel) buildForm() {
 				Value(&m.oauthScopes),
 
 			huh.NewConfirm().
+				Title("Share between agent connections").
+				Description("Turn off for stateful tools such as browsers or REPLs that need a separate instance per agent connection. Applies when serving config reloads.").
+				Value(&m.shared),
+
+			huh.NewConfirm().
 				Title("Autostart").
 				Description("Start server automatically on app launch").
 				Value(&m.autostart),
@@ -404,6 +417,7 @@ func (m *ServerFormModel) isDirty() bool {
 		m.envHTTPHeaders != m.initialEnvHTTPHeaders ||
 		m.oauthClientID != m.initialOAuthClientID ||
 		m.oauthCallbackPort != m.initialOAuthCallbackPort ||
+		m.shared != m.initialShared ||
 		m.autostart != m.initialAutostart ||
 		m.oauthScopes != m.initialOAuthScopes ||
 		m.startupTimeout != m.initialStartupTimeout ||
@@ -584,6 +598,7 @@ func (m ServerFormModel) buildServerConfig() (config.ServerConfig, error) {
 		OAuthCallbackPort: m.oauthCallbackPort,
 		OAuthScopes:       m.oauthScopes,
 		Env:               parseEnvVars(m.env),
+		Shared:            &m.shared,
 		Autostart:         m.autostart,
 	}
 	if s := strings.TrimSpace(m.startupTimeout); s != "" {

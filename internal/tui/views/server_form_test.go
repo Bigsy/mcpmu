@@ -496,3 +496,26 @@ func TestIsDirty_NewFields(t *testing.T) {
 		t.Error("should be dirty after changing oauthScopes")
 	}
 }
+
+func TestServerFormSharing(t *testing.T) {
+	form := NewServerForm(theme.New())
+	form.ShowAdd()
+	if !form.shared {
+		t.Fatal("new form must default to shared")
+	}
+	original := config.ServerConfig{Command: "fixture", Shared: new(false), DeniedTools: []string{"danger"}}
+	form.ShowEdit("private", original)
+	if form.shared || form.isDirty() {
+		t.Fatal("edit did not load effective private setting")
+	}
+	form.args = "changed"
+	got, err := form.buildServerConfig()
+	if err != nil || got.IsShared() || len(got.DeniedTools) != 1 {
+		t.Fatalf("unrelated edit lost private config: %+v %v", got, err)
+	}
+	form.shared = true
+	got, err = form.buildServerConfig()
+	if err != nil || !got.IsShared() {
+		t.Fatalf("sharing toggle not saved: %+v %v", got, err)
+	}
+}

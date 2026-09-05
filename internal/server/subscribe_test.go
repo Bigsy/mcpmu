@@ -555,7 +555,9 @@ func TestServer_ResourcesSubscribe_ReloadClearsSubs(t *testing.T) {
 
 	// Reload rebuilds the supervisor set — upstream transports close, local
 	// subs clear, list_changed notifications are emitted.
-	h.srv.applyReload(context.Background(), makeCfg())
+	reloaded := makeCfg()
+	reloaded.Metrics = &config.MetricsConfig{Enabled: new(false)} // exercise full reload
+	h.srv.applyReload(context.Background(), reloaded)
 	h.settle(300 * time.Millisecond)
 	h.close(t)
 
