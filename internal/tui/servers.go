@@ -263,11 +263,10 @@ func (m *Model) toggleServerEnabled(id string) {
 	err := m.mutate(func(cfg *config.Config) error {
 		srv, ok := cfg.GetServer(id)
 		if !ok {
-			return fmt.Errorf("server %q not found", id)
+			return config.Errorf(config.ErrNotFound, "server %q not found", id)
 		}
 		srv.SetEnabled(newEnabled)
-		cfg.Servers[id] = srv
-		return nil
+		return cfg.UpdateServer(id, srv)
 	})
 	if err != nil {
 		log.Printf("Failed to save config after toggle: %v", err)
@@ -334,7 +333,7 @@ func (m Model) handleToolDenyResult(result views.ToolDenyResult) (tea.Model, tea
 	err := m.mutate(func(cfg *config.Config) error {
 		srv, ok := cfg.GetServer(result.ServerName)
 		if !ok {
-			return fmt.Errorf("server %q not found", result.ServerName)
+			return config.Errorf(config.ErrNotFound, "server %q not found", result.ServerName)
 		}
 		// Replace the deny list
 		if len(result.DeniedTools) == 0 {
@@ -342,8 +341,7 @@ func (m Model) handleToolDenyResult(result views.ToolDenyResult) (tea.Model, tea
 		} else {
 			srv.DeniedTools = slices.Sorted(slices.Values(result.DeniedTools))
 		}
-		cfg.Servers[result.ServerName] = srv
-		return nil
+		return cfg.UpdateServer(result.ServerName, srv)
 	})
 	if err != nil {
 		log.Printf("Failed to save denied tools: %v", err)

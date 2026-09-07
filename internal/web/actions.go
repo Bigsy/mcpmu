@@ -15,9 +15,10 @@ import (
 
 // handleServerStart starts a server via the supervisor.
 func (s *Server) handleServerStart(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	srv, ok := s.cfg.GetServer(name)
+	srv, ok := cfg.GetServer(name)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -46,9 +47,10 @@ func (s *Server) handleServerStart(w http.ResponseWriter, r *http.Request) {
 
 // handleServerStop stops a running server.
 func (s *Server) handleServerStop(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	if _, ok := s.cfg.GetServer(name); !ok {
+	if _, ok := cfg.GetServer(name); !ok {
 		http.NotFound(w, r)
 		return
 	}
@@ -62,9 +64,10 @@ func (s *Server) handleServerStop(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIServerStart is the JSON API for starting a server.
 func (s *Server) handleAPIServerStart(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	srv, ok := s.cfg.GetServer(name)
+	srv, ok := cfg.GetServer(name)
 	if !ok {
 		jsonError(w, fmt.Sprintf("server %q not found", name), http.StatusNotFound)
 		return
@@ -93,9 +96,10 @@ func (s *Server) handleAPIServerStart(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIServerStop is the JSON API for stopping a server.
 func (s *Server) handleAPIServerStop(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	if _, ok := s.cfg.GetServer(name); !ok {
+	if _, ok := cfg.GetServer(name); !ok {
 		jsonError(w, fmt.Sprintf("server %q not found", name), http.StatusNotFound)
 		return
 	}
@@ -112,9 +116,10 @@ func (s *Server) handleAPIServerStop(w http.ResponseWriter, r *http.Request) {
 
 // handleServerLogin triggers OAuth login for an HTTP server.
 func (s *Server) handleServerLogin(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	srv, ok := s.cfg.GetServer(name)
+	srv, ok := cfg.GetServer(name)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -149,9 +154,10 @@ func (s *Server) handleServerLogin(w http.ResponseWriter, r *http.Request) {
 
 // handleServerLogout clears OAuth credentials for an HTTP server.
 func (s *Server) handleServerLogout(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	srv, ok := s.cfg.GetServer(name)
+	srv, ok := cfg.GetServer(name)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -182,9 +188,10 @@ func (s *Server) handleServerLogout(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIServerLogin is the JSON API for OAuth login.
 func (s *Server) handleAPIServerLogin(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	srv, ok := s.cfg.GetServer(name)
+	srv, ok := cfg.GetServer(name)
 	if !ok {
 		jsonError(w, fmt.Sprintf("server %q not found", name), http.StatusNotFound)
 		return
@@ -228,9 +235,10 @@ func (s *Server) handleAPIServerLogin(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIServerLogout is the JSON API for OAuth logout.
 func (s *Server) handleAPIServerLogout(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	srv, ok := s.cfg.GetServer(name)
+	srv, ok := cfg.GetServer(name)
 	if !ok {
 		jsonError(w, fmt.Sprintf("server %q not found", name), http.StatusNotFound)
 		return
@@ -286,7 +294,7 @@ func (s *Server) handleServerDeniedTools(w http.ResponseWriter, r *http.Request)
 
 	err := s.mutateConfig(func(cfg *config.Config) error {
 		if _, ok := cfg.GetServer(name); !ok {
-			return fmt.Errorf("server %q not found", name)
+			return config.Errorf(config.ErrNotFound, "server %q not found", name)
 		}
 		switch action {
 		case "add":
@@ -317,7 +325,7 @@ func (s *Server) handleNamespaceSetDefault(w http.ResponseWriter, r *http.Reques
 
 	err := s.mutateConfig(func(cfg *config.Config) error {
 		if _, ok := cfg.GetNamespace(name); !ok {
-			return fmt.Errorf("namespace %q not found", name)
+			return config.Errorf(config.ErrNotFound, "namespace %q not found", name)
 		}
 		if cfg.DefaultNamespace == name {
 			cfg.DefaultNamespace = "" // toggle off
@@ -351,7 +359,7 @@ func (s *Server) handleNamespacePermission(w http.ResponseWriter, r *http.Reques
 
 	err := s.mutateConfig(func(cfg *config.Config) error {
 		if _, ok := cfg.GetNamespace(name); !ok {
-			return fmt.Errorf("namespace %q not found", name)
+			return config.Errorf(config.ErrNotFound, "namespace %q not found", name)
 		}
 		// Reject setting permissions on server-level denied tools (but allow unset to clean up stale entries)
 		if action == "set" {
@@ -397,7 +405,7 @@ func (s *Server) handleNamespaceServerDefault(w http.ResponseWriter, r *http.Req
 
 	err := s.mutateConfig(func(cfg *config.Config) error {
 		if _, ok := cfg.GetNamespace(name); !ok {
-			return fmt.Errorf("namespace %q not found", name)
+			return config.Errorf(config.ErrNotFound, "namespace %q not found", name)
 		}
 		switch action {
 		case "set":

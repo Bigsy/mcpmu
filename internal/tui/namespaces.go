@@ -350,7 +350,7 @@ func (m Model) handleServerPickerResult(result views.ServerPickerResult) (tea.Mo
 	err := m.mutate(func(cfg *config.Config) error {
 		ns, ok := cfg.GetNamespace(m.detailNamespaceID)
 		if !ok {
-			return fmt.Errorf("namespace %q not found", m.detailNamespaceID)
+			return config.Errorf(config.ErrNotFound, "namespace %q not found", m.detailNamespaceID)
 		}
 		ns.ServerIDs = result.SelectedIDs
 		cfg.Namespaces[m.detailNamespaceID] = ns
@@ -387,30 +387,11 @@ func (m Model) handleToolPermissionsResult(result views.ToolPermissionsResult) (
 	}
 
 	err := m.mutate(func(cfg *config.Config) error {
-		// Apply permission changes
-		for key, enabled := range result.Changes {
-			parts := strings.SplitN(key, ":", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			serverName, toolName := parts[0], parts[1]
-			if err := cfg.SetToolPermission(m.detailNamespaceID, serverName, toolName, enabled); err != nil {
-				log.Printf("Failed to set permission: %v", err)
-			}
+		changes, err := parsePermissionChanges(result)
+		if err != nil {
+			return err
 		}
-
-		// Apply permission deletions (revert to default)
-		for _, key := range result.Deletions {
-			parts := strings.SplitN(key, ":", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			serverName, toolName := parts[0], parts[1]
-			if err := cfg.UnsetToolPermission(m.detailNamespaceID, serverName, toolName); err != nil {
-				log.Printf("Failed to unset permission: %v", err)
-			}
-		}
-		return nil
+		return cfg.ApplyPermissionChanges(m.detailNamespaceID, changes)
 	})
 	if err != nil {
 		log.Printf("Failed to save config: %v", err)
@@ -526,4 +507,28 @@ func (m *Model) refreshNamespaceDetailIfShowing() {
 		permissions,
 		serverTokens,
 	)
+}
+
+// Parse all UI keys before applying any edits; tools may themselves contain colons.
+func parsePermissionChanges(result views.ToolPermissionsResult) ([]config.PermissionChange, error) {
+	changes := make([]config.PermissionChange, 0, len(result.Changes)+len(result.Deletions))
+	parse := func(key string, enabled, remove bool) error {
+		server, tool, ok := strings.Cut(key, ":")
+		if !ok || server == "" || tool == "" {
+			return fmt.Errorf("invalid permission key %q", key)
+		}
+		changes = append(changes, config.PermissionChange{Server: server, Tool: tool, Enabled: enabled, Remove: remove})
+		return nil
+	}
+	for key, enabled := range result.Changes {
+		if err := parse(key, enabled, false); err != nil {
+			return nil, err
+		}
+	}
+	for _, key := range result.Deletions {
+		if err := parse(key, false, true); err != nil {
+			return nil, err
+		}
+	}
+	return changes, nil
 }

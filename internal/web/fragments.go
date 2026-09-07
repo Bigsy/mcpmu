@@ -11,13 +11,14 @@ import (
 // handleFragmentServerTable returns the server table HTML fragment.
 // Used by htmx polling to refresh the server list without a full page reload.
 func (s *Server) handleFragmentServerTable(w http.ResponseWriter, r *http.Request) {
-	entries := s.cfg.ServerEntries()
+	cfg := s.configSnapshot()
+	entries := cfg.ServerEntries()
 	statuses := s.status.All()
 
 	var rows []serverRow
 	for _, entry := range entries {
 		row := s.buildServerRow(entry.Name, entry.Config, statuses)
-		for nsName, nsCfg := range s.cfg.Namespaces {
+		for nsName, nsCfg := range cfg.Namespaces {
 			if slices.Contains(nsCfg.ServerIDs, entry.Name) {
 				row.Namespaces = append(row.Namespaces, nsName)
 			}
@@ -32,9 +33,10 @@ func (s *Server) handleFragmentServerTable(w http.ResponseWriter, r *http.Reques
 // handleFragmentServerStatus returns a server status pill HTML fragment.
 // Used by htmx to poll for status changes on the detail page.
 func (s *Server) handleFragmentServerStatus(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	if _, ok := s.cfg.GetServer(name); !ok {
+	if _, ok := cfg.GetServer(name); !ok {
 		http.NotFound(w, r)
 		return
 	}

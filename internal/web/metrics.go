@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/metrics"
 	"github.com/Bigsy/mcpmu/internal/server"
 )
@@ -258,17 +259,17 @@ func outcomePillClass(o metrics.Outcome) string {
 	}
 }
 
-func (s *Server) buildMetricsPageData(q metricsQuery) metricsPageData {
+func (s *Server) buildMetricsPageData(cfg *config.Config, q metricsQuery) metricsPageData {
 	store := s.loadMetricsStore()
 	f := q.filter()
 
 	data := metricsPageData{
 		Page:          "metrics",
 		ConfigPath:    s.configPathDisplay(),
-		Enabled:       s.cfg.MetricsEnabled(),
+		Enabled:       cfg.MetricsEnabled(),
 		HasData:       len(store.Rows) > 0 || len(store.RecentCalls) > 0,
 		Query:         q,
-		Namespaces:    s.buildNSOptions(q, store.HasNoNamespaceCalls(f)),
+		Namespaces:    s.buildNSOptions(cfg, q, store.HasNoNamespaceCalls(f)),
 		DayChoices:    buildDayChoices(q),
 		Chart:         buildChart(store.DailyTotals(f)),
 		Table:         s.buildMetricsTable(store, q),
@@ -276,7 +277,7 @@ func (s *Server) buildMetricsPageData(q metricsQuery) metricsPageData {
 		RecentFragURL: "/fragments/metrics/recent?" + q.values().Encode(),
 	}
 
-	coverage := s.buildUnused(store, f, q.NS, "")
+	coverage := s.buildUnused(cfg, store, f, q.NS, "")
 	data.Unused = coverage.Groups
 	data.UnusedTotal = coverage.Unused
 
@@ -307,12 +308,12 @@ func (s *Server) buildMetricsPageData(q metricsQuery) metricsPageData {
 // appears when it can select something — rows recorded without an active
 // namespace — or when it is already the current selection, so a bookmarked URL
 // still shows what it filtered by.
-func (s *Server) buildNSOptions(q metricsQuery, hasNoNamespaceCalls bool) []nsOption {
+func (s *Server) buildNSOptions(cfg *config.Config, q metricsQuery, hasNoNamespaceCalls bool) []nsOption {
 	options := []nsOption{{Value: "", Label: "All namespaces", Selected: q.NS == ""}}
-	for _, entry := range s.cfg.NamespaceEntries() {
+	for _, entry := range cfg.NamespaceEntries() {
 		options = append(options, nsOption{Value: entry.Name, Label: entry.Name, Selected: q.NS == entry.Name})
 	}
-	if len(s.cfg.Namespaces) > 0 && (hasNoNamespaceCalls || q.NS == nsNoneParam) {
+	if len(cfg.Namespaces) > 0 && (hasNoNamespaceCalls || q.NS == nsNoneParam) {
 		options = append(options, nsOption{Value: nsNoneParam, Label: nsNoneLabel, Selected: q.NS == nsNoneParam})
 	}
 	return options
@@ -555,13 +556,13 @@ type unusedResult struct {
 //
 // nsParam narrows to one namespace ("" = all, nsNoneParam = the empty
 // namespace); serverFilter narrows to one server ("" = all).
-func (s *Server) buildUnused(store *metrics.Store, f metrics.Filter, nsParam, serverFilter string) unusedResult {
+func (s *Server) buildUnused(cfg *config.Config, store *metrics.Store, f metrics.Filter, nsParam, serverFilter string) unusedResult {
 	type nsGroup struct {
 		name    string
 		servers []string
 	}
 	var groups []nsGroup
-	for _, entry := range s.cfg.NamespaceEntries() {
+	for _, entry := range cfg.NamespaceEntries() {
 		groups = append(groups, nsGroup{name: entry.Name, servers: entry.Config.ServerIDs})
 	}
 	// The empty namespace is what serve exposes when the config has no
@@ -572,7 +573,7 @@ func (s *Server) buildUnused(store *metrics.Store, f metrics.Filter, nsParam, se
 	// exposure, which is the only thing serve can expose today.
 	if len(groups) == 0 || nsParam == nsNoneParam {
 		var all []string
-		for _, entry := range s.cfg.ServerEntries() {
+		for _, entry := range cfg.ServerEntries() {
 			if entry.Config.IsEnabled() {
 				all = append(all, entry.Name)
 			}
@@ -617,7 +618,7 @@ func (s *Server) buildUnused(store *metrics.Store, f metrics.Filter, nsParam, se
 			if serverFilter != "" && serverName != serverFilter {
 				continue
 			}
-			if _, ok := s.cfg.GetServer(serverName); !ok {
+			if _, ok := cfg.GetServer(serverName); !ok {
 				continue
 			}
 			cached, ok := s.cachedTools(serverName)
@@ -627,7 +628,7 @@ func (s *Server) buildUnused(store *metrics.Store, f metrics.Filter, nsParam, se
 			}
 			var unusedTools []string
 			for _, tool := range cached {
-				allowed, _ := server.IsToolAllowed(s.cfg, group.name, serverName, tool)
+				allowed, _ := server.IsToolAllowed(cfg, group.name, serverName, tool)
 				if !allowed {
 					continue
 				}
@@ -672,8 +673,8 @@ type serverUsageVM struct {
 
 // buildServerUsage builds the last-30-days usage block for one server,
 // reusing the metrics-page view-model builders with the server filter set.
-func (s *Server) buildServerUsage(serverName string) serverUsageVM {
-	vm := serverUsageVM{Enabled: s.cfg.MetricsEnabled()}
+func (s *Server) buildServerUsage(cfg *config.Config, serverName string) serverUsageVM {
+	vm := serverUsageVM{Enabled: cfg.MetricsEnabled()}
 	if !vm.Enabled {
 		return vm
 	}
@@ -707,7 +708,7 @@ func (s *Server) buildServerUsage(serverName string) serverUsageVM {
 	vm.Errors = sum.Errors
 	vm.Denied = sum.Denied
 
-	vm.Unused = s.buildUnused(store, f, "", serverName).Groups
+	vm.Unused = s.buildUnused(cfg, store, f, "", serverName).Groups
 	return vm
 }
 
@@ -731,8 +732,9 @@ func (s *Server) cachedTools(serverName string) ([]string, bool) {
 // --- Handlers ---
 
 func (s *Server) handleMetricsPage(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	q := parseMetricsQuery(r)
-	s.render(w, "metrics.html", s.buildMetricsPageData(q))
+	s.render(w, "metrics.html", s.buildMetricsPageData(cfg, q))
 }
 
 func (s *Server) handleFragmentMetricsTable(w http.ResponseWriter, r *http.Request) {
@@ -748,13 +750,14 @@ func (s *Server) handleFragmentMetricsRecent(w http.ResponseWriter, r *http.Requ
 // handleAPIMetrics returns the same summary + tool table + unused view as the
 // page, as JSON, honouring the same query parameters.
 func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	q := parseMetricsQuery(r)
 	store := s.loadMetricsStore()
 	f := q.filter()
 
 	rows := store.ToolTable(f)
 	sortToolStats(rows, q.Sort, q.Dir)
-	coverage := s.buildUnused(store, f, q.NS, "")
+	coverage := s.buildUnused(cfg, store, f, q.NS, "")
 
 	type apiUnusedServer struct {
 		Server      string   `json:"server"`
@@ -797,7 +800,7 @@ func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
 		UnusedCount  int                  `json:"unusedCount"`
 		Unused       []apiUnusedNamespace `json:"unused"`
 	}{
-		Enabled: s.cfg.MetricsEnabled(),
+		Enabled: cfg.MetricsEnabled(),
 		Since:   f.Since,
 		Until:   f.Until,
 		Daily:   store.DailyTotals(f),

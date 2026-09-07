@@ -127,7 +127,7 @@ func (s *Server) handleSSEConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Reload warnings have their own lock: page rendering may already hold cfgMu.
+// Reload warnings have their own lock, independent of config snapshots.
 func (s *Server) setReloadFailed(failed bool) bool {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()

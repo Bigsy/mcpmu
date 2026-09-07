@@ -1,7 +1,6 @@
 package web
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -259,8 +258,9 @@ func (s *Server) handleServerAddPage(w http.ResponseWriter, r *http.Request) {
 
 // handleServerEditPage renders the edit server form.
 func (s *Server) handleServerEditPage(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
-	srv, ok := s.cfg.GetServer(name)
+	srv, ok := cfg.GetServer(name)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -334,7 +334,7 @@ func (s *Server) handleServerUpdate(w http.ResponseWriter, r *http.Request) {
 	err := s.mutateConfig(func(cfg *config.Config) error {
 		existing, ok := cfg.GetServer(name)
 		if !ok {
-			return fmt.Errorf("server %q not found", name)
+			return config.Errorf(config.ErrNotFound, "server %q not found", name)
 		}
 		srv, err := buildServerConfig(fd, &existing)
 		if err != nil {
@@ -387,11 +387,10 @@ func (s *Server) handleServerToggle(w http.ResponseWriter, r *http.Request) {
 	err := s.mutateConfig(func(cfg *config.Config) error {
 		srv, ok := cfg.GetServer(name)
 		if !ok {
-			return fmt.Errorf("server %q not found", name)
+			return config.Errorf(config.ErrNotFound, "server %q not found", name)
 		}
 		srv.SetEnabled(!srv.IsEnabled())
-		cfg.Servers[name] = srv
-		return nil
+		return cfg.UpdateServer(name, srv)
 	})
 
 	if err != nil {
@@ -467,8 +466,9 @@ func (s *Server) handleNamespaceAddPage(w http.ResponseWriter, r *http.Request) 
 
 // handleNamespaceEditPage renders the edit namespace form.
 func (s *Server) handleNamespaceEditPage(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
-	ns, ok := s.cfg.GetNamespace(name)
+	ns, ok := cfg.GetNamespace(name)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -481,7 +481,7 @@ func (s *Server) handleNamespaceEditPage(w http.ResponseWriter, r *http.Request)
 	}
 
 	var available []string
-	for _, entry := range s.cfg.ServerEntries() {
+	for _, entry := range cfg.ServerEntries() {
 		if !assignedSet[entry.Name] {
 			available = append(available, entry.Name)
 		}
@@ -555,7 +555,7 @@ func (s *Server) handleNamespaceUpdate(w http.ResponseWriter, r *http.Request) {
 	err := s.mutateConfig(func(cfg *config.Config) error {
 		ns, ok := cfg.GetNamespace(name)
 		if !ok {
-			return fmt.Errorf("namespace %q not found", name)
+			return config.Errorf(config.ErrNotFound, "namespace %q not found", name)
 		}
 		ns.Description = strings.TrimSpace(r.FormValue("description"))
 		ns.DenyByDefault = formChecked(r, "deny_by_default")

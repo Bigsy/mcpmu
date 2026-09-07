@@ -1407,7 +1407,14 @@ smoke_add_sharing() (
   ' "$cfg" >/dev/null
 )
 
+# Real HTTP requests, live ToolCache, and disk persistence; no private endpoints.
+smoke_web_config_cache() {
+  command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 is required"; return 0; }
+  python3 scripts/smoke_web_config.py ./mcpmu
+}
+
 SMOKE_CHECKS=(
+  smoke_web_config_cache
   smoke_add_sharing
   smoke_selective_reload
   smoke_cf_access_headers

@@ -86,7 +86,7 @@ func MutateWithCache(path string, tc *ToolCache, fn func(*Config) error) (*Confi
 			return err
 		}
 		if err := cfg.Validate(); err != nil {
-			return fmt.Errorf("invalid config: %w", err)
+			return Errorf(ErrInvalidInput, "invalid config: %w", err)
 		}
 		if err := SaveTo(cfg, path); err != nil {
 			return fmt.Errorf("save config: %w", err)

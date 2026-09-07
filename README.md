@@ -135,6 +135,10 @@ The precedence is: **server global deny > explicit tool rule > server default >
 namespace default > allow**. See [Tool permissions](docs/permissions.md) for
 recipes, the full resolution model, and the interaction with compression.
 
+Permission edits submitted together in the TUI save as one batch. If a referenced
+server or namespace was removed while the editor was open, the save fails and
+reports the error without saving any of the batch.
+
 ## Reduce tool-schema context costs
 
 Large MCP setups can send thousands of tokens of tool schemas when a session

@@ -29,7 +29,7 @@ var templateFS embed.FS
 // Server is the HTTP server for the web UI.
 type Server struct {
 	cfg        *config.Config
-	cfgMu      sync.Mutex // protects config read-modify-write cycles
+	cfgMu      sync.Mutex // protects cfg publication and serializes config mutations
 	configPath string
 	supervisor *process.Supervisor
 	bus        *events.Bus
@@ -378,9 +378,20 @@ func kindBadge(srv config.ServerConfig) string {
 	return "stdio"
 }
 
+// configSnapshot returns an immutable published config. Readers must capture one
+// snapshot per operation and pass it to response-building helpers. Neither callers
+// nor helpers may modify its maps, slices, or pointed-to values. Writers edit a
+// freshly loaded config through mutateConfig before publishing it under cfgMu.
+// The lock is never held during rendering, network calls, or process operations.
+func (s *Server) configSnapshot() *config.Config {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.cfg
+}
+
 // mutateConfig applies fn to the config file through config.MutateWithCache
 // and adopts the saved result as this server's in-memory config. The mutex
-// serialises this process's handlers so s.cfg is never replaced mid-cycle; the
+// serialises writers and publishes a fresh immutable config; the
 // cross-process lock, reload-merge and ToolCache upkeep live in config.Mutate.
 func (s *Server) mutateConfig(fn func(cfg *config.Config) error) error {
 	s.cfgMu.Lock()

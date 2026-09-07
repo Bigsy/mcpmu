@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -35,7 +36,8 @@ type apiServer struct {
 }
 
 func (s *Server) handleAPIListServers(w http.ResponseWriter, r *http.Request) {
-	entries := s.cfg.ServerEntries()
+	cfg := s.configSnapshot()
+	entries := cfg.ServerEntries()
 	statuses := s.status.All()
 
 	servers := make([]apiServer, 0, len(entries))
@@ -51,8 +53,9 @@ func (s *Server) handleAPIListServers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIGetServer(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
-	srv, ok := s.cfg.GetServer(name)
+	srv, ok := cfg.GetServer(name)
 	if !ok {
 		jsonError(w, fmt.Sprintf("server %q not found", name), http.StatusNotFound)
 		return
@@ -81,7 +84,7 @@ func (s *Server) handleAPICreateServer(w http.ResponseWriter, r *http.Request) {
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		jsonError(w, "name is required", http.StatusBadRequest)
+		jsonConfigError(w, config.Errorf(config.ErrInvalidInput, "name is required"))
 		return
 	}
 
@@ -90,11 +93,7 @@ func (s *Server) handleAPICreateServer(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		code := http.StatusUnprocessableEntity
-		if strings.Contains(err.Error(), "already exists") {
-			code = http.StatusConflict
-		}
-		jsonError(w, err.Error(), code)
+		jsonConfigError(w, err)
 		return
 	}
 
@@ -128,7 +127,7 @@ func (s *Server) handleAPIUpdateServer(w http.ResponseWriter, r *http.Request) {
 	err := s.mutateConfig(func(cfg *config.Config) error {
 		srv, ok := cfg.GetServer(name)
 		if !ok {
-			return fmt.Errorf("server %q not found", name)
+			return config.Errorf(config.ErrNotFound, "server %q not found", name)
 		}
 
 		// Apply only the fields that are present in the request
@@ -155,10 +154,9 @@ func (s *Server) handleAPIUpdateServer(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Validate and save the merged config
-		if err := srv.Validate(); err != nil {
-			return fmt.Errorf("invalid server config: %w", err)
+		if err := cfg.UpdateServer(name, srv); err != nil {
+			return err
 		}
-		cfg.Servers[name] = srv
 
 		// Rename last (changes the key)
 		if req.Name != nil && *req.Name != name {
@@ -169,22 +167,17 @@ func (s *Server) handleAPIUpdateServer(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		code := http.StatusUnprocessableEntity
-		if strings.Contains(err.Error(), "not found") {
-			code = http.StatusNotFound
-		} else if strings.Contains(err.Error(), "already exists") {
-			code = http.StatusConflict
-		}
-		jsonError(w, err.Error(), code)
+		jsonConfigError(w, err)
 		return
 	}
 
+	cfg := s.configSnapshot()
 	// Return the updated server
 	finalName := name
 	if req.Name != nil {
 		finalName = *req.Name
 	}
-	srv, _ := s.cfg.GetServer(finalName)
+	srv, _ := cfg.GetServer(finalName)
 	jsonOK(w, apiServer{Name: finalName, Config: srv})
 }
 
@@ -203,11 +196,7 @@ func (s *Server) handleAPIDeleteServer(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		code := http.StatusInternalServerError
-		if strings.Contains(err.Error(), "not found") {
-			code = http.StatusNotFound
-		}
-		jsonError(w, err.Error(), code)
+		jsonConfigError(w, err)
 		return
 	}
 
@@ -224,21 +213,23 @@ type apiNamespace struct {
 }
 
 func (s *Server) handleAPIListNamespaces(w http.ResponseWriter, r *http.Request) {
-	entries := s.cfg.NamespaceEntries()
+	cfg := s.configSnapshot()
+	entries := cfg.NamespaceEntries()
 	namespaces := make([]apiNamespace, 0, len(entries))
 	for _, e := range entries {
 		namespaces = append(namespaces, apiNamespace{
 			Name:      e.Name,
 			Config:    e.Config,
-			IsDefault: e.Name == s.cfg.DefaultNamespace,
+			IsDefault: e.Name == cfg.DefaultNamespace,
 		})
 	}
 	jsonOK(w, namespaces)
 }
 
 func (s *Server) handleAPIGetNamespace(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
-	ns, ok := s.cfg.GetNamespace(name)
+	ns, ok := cfg.GetNamespace(name)
 	if !ok {
 		jsonError(w, fmt.Sprintf("namespace %q not found", name), http.StatusNotFound)
 		return
@@ -247,7 +238,7 @@ func (s *Server) handleAPIGetNamespace(w http.ResponseWriter, r *http.Request) {
 	result := apiNamespace{
 		Name:      name,
 		Config:    ns,
-		IsDefault: name == s.cfg.DefaultNamespace,
+		IsDefault: name == cfg.DefaultNamespace,
 	}
 
 	jsonOK(w, result)
@@ -268,7 +259,7 @@ func (s *Server) handleAPICreateNamespace(w http.ResponseWriter, r *http.Request
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		jsonError(w, "name is required", http.StatusBadRequest)
+		jsonConfigError(w, config.Errorf(config.ErrInvalidInput, "name is required"))
 		return
 	}
 
@@ -281,11 +272,7 @@ func (s *Server) handleAPICreateNamespace(w http.ResponseWriter, r *http.Request
 	})
 
 	if err != nil {
-		code := http.StatusUnprocessableEntity
-		if strings.Contains(err.Error(), "already exists") {
-			code = http.StatusConflict
-		}
-		jsonError(w, err.Error(), code)
+		jsonConfigError(w, err)
 		return
 	}
 
@@ -317,7 +304,7 @@ func (s *Server) handleAPIUpdateNamespace(w http.ResponseWriter, r *http.Request
 	err := s.mutateConfig(func(cfg *config.Config) error {
 		ns, ok := cfg.GetNamespace(name)
 		if !ok {
-			return fmt.Errorf("namespace %q not found", name)
+			return config.Errorf(config.ErrNotFound, "namespace %q not found", name)
 		}
 
 		if req.Description != nil {
@@ -343,19 +330,9 @@ func (s *Server) handleAPIUpdateNamespace(w http.ResponseWriter, r *http.Request
 
 		// Replace permissions for this namespace
 		if req.Permissions != nil {
-			// Remove existing permissions for this namespace
-			filtered := make([]config.ToolPermission, 0, len(cfg.ToolPermissions))
-			for _, tp := range cfg.ToolPermissions {
-				if tp.Namespace != name {
-					filtered = append(filtered, tp)
-				}
+			if err := cfg.ReplaceToolPermissions(name, *req.Permissions); err != nil {
+				return err
 			}
-			// Add new permissions
-			for _, tp := range *req.Permissions {
-				tp.Namespace = name
-				filtered = append(filtered, tp)
-			}
-			cfg.ToolPermissions = filtered
 		}
 
 		// Set as default namespace
@@ -376,25 +353,20 @@ func (s *Server) handleAPIUpdateNamespace(w http.ResponseWriter, r *http.Request
 	})
 
 	if err != nil {
-		code := http.StatusUnprocessableEntity
-		if strings.Contains(err.Error(), "not found") {
-			code = http.StatusNotFound
-		} else if strings.Contains(err.Error(), "already exists") {
-			code = http.StatusConflict
-		}
-		jsonError(w, err.Error(), code)
+		jsonConfigError(w, err)
 		return
 	}
 
+	cfg := s.configSnapshot()
 	finalName := name
 	if req.Name != nil {
 		finalName = *req.Name
 	}
-	ns, _ := s.cfg.GetNamespace(finalName)
+	ns, _ := cfg.GetNamespace(finalName)
 	jsonOK(w, apiNamespace{
 		Name:      finalName,
 		Config:    ns,
-		IsDefault: finalName == s.cfg.DefaultNamespace,
+		IsDefault: finalName == cfg.DefaultNamespace,
 	})
 }
 
@@ -406,11 +378,7 @@ func (s *Server) handleAPIDeleteNamespace(w http.ResponseWriter, r *http.Request
 	})
 
 	if err != nil {
-		code := http.StatusInternalServerError
-		if strings.Contains(err.Error(), "not found") {
-			code = http.StatusNotFound
-		}
-		jsonError(w, err.Error(), code)
+		jsonConfigError(w, err)
 		return
 	}
 
@@ -420,9 +388,10 @@ func (s *Server) handleAPIDeleteNamespace(w http.ResponseWriter, r *http.Request
 // --- Config export/import ---
 
 func (s *Server) handleAPIExportConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=mcpmu-config.json")
-	if err := json.NewEncoder(w).Encode(s.cfg); err != nil {
+	if err := json.NewEncoder(w).Encode(cfg); err != nil {
 		log.Printf("export config: %v", err)
 	}
 }
@@ -440,6 +409,7 @@ type importDiff struct {
 }
 
 func (s *Server) handleAPIImportConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	var incoming config.Config
 	if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 		jsonError(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -451,7 +421,7 @@ func (s *Server) handleAPIImportConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current := s.cfg
+	current := cfg
 	preview := importPreview{}
 
 	// Diff servers
@@ -492,23 +462,32 @@ func (s *Server) handleAPIImportApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := incoming.Validate(); err != nil {
-		jsonError(w, "invalid config: "+err.Error(), http.StatusUnprocessableEntity)
-		return
-	}
-
 	err := s.mutateConfig(func(cfg *config.Config) error {
-		// Replace the entire config with the imported one.
-		// Preserve nothing from the current config — the import is a full replacement.
-		// SaveTo will update LastModified automatically.
-		*cfg = incoming
-		return nil
+		return cfg.Replace(&incoming)
 	})
 
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		jsonConfigError(w, err)
 		return
 	}
 
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// configErrorStatus relies on identity through transaction wrapping, never text.
+func configErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, config.ErrNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, config.ErrAlreadyExists):
+		return http.StatusConflict
+	case errors.Is(err, config.ErrInvalidInput):
+		return http.StatusUnprocessableEntity
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func jsonConfigError(w http.ResponseWriter, err error) {
+	jsonError(w, err.Error(), configErrorStatus(err))
 }

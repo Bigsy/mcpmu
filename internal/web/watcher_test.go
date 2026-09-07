@@ -178,7 +178,7 @@ func TestWatchConfigDetectsExternalWrite(t *testing.T) {
 	select {
 	case <-ch:
 		// Verify config was updated
-		if _, ok := srv.cfg.GetServer("external-server"); !ok {
+		if _, ok := srv.configSnapshot().GetServer("external-server"); !ok {
 			t.Fatal("config should contain 'external-server' after reload")
 		}
 	case <-time.After(3 * time.Second):
@@ -266,7 +266,7 @@ func TestWatchConfigExternalAfterSelfWrite(t *testing.T) {
 
 	select {
 	case <-ch:
-		if _, ok := srv.cfg.GetServer("cli-server"); !ok {
+		if _, ok := srv.configSnapshot().GetServer("cli-server"); !ok {
 			t.Fatal("config should contain 'cli-server' after external reload")
 		}
 	case <-time.After(3 * time.Second):
@@ -318,10 +318,10 @@ func TestWatchConfigCoalescedSelfAndExternal(t *testing.T) {
 	// web-server but not cli-server) and broadcast.
 	select {
 	case <-ch:
-		if _, ok := srv.cfg.GetServer("cli-server"); !ok {
+		if _, ok := srv.configSnapshot().GetServer("cli-server"); !ok {
 			t.Fatal("config should contain 'cli-server' after coalesced reload")
 		}
-		if _, ok := srv.cfg.GetServer("web-server"); !ok {
+		if _, ok := srv.configSnapshot().GetServer("web-server"); !ok {
 			t.Fatal("config should still contain 'web-server' after coalesced reload")
 		}
 	case <-time.After(3 * time.Second):

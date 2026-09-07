@@ -63,25 +63,7 @@ func LoadFrom(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	// Initialize maps if nil (for older configs)
-	if cfg.Servers == nil {
-		cfg.Servers = make(map[string]ServerConfig)
-	}
-	if cfg.Namespaces == nil {
-		cfg.Namespaces = make(map[string]NamespaceConfig)
-	}
-
-	// Canonicalize hand-edited compression values ("OFF", " medium ") so every
-	// display and edit surface can compare them literally — the same load-time
-	// migration spirit as ServerConfig's legacy OAuth fields. Unknown levels
-	// are kept as typed (visible in list/detail views) and degrade to off in
-	// serve mode; they deliberately do not fail the load (see Config.Validate).
-	for name, ns := range cfg.Namespaces {
-		if normalized := NormalizeCompressionLevel(ns.Compression); normalized != ns.Compression {
-			ns.Compression = normalized
-			cfg.Namespaces[name] = ns
-		}
-	}
+	cfg.normalizeLoaded()
 
 	// Validate all servers
 	if err := cfg.Validate(); err != nil {
@@ -213,17 +195,17 @@ func (c *Config) ReservedNameConflicts() []string {
 func (c *Config) AddServer(name string, srv ServerConfig) error {
 	// Validate name
 	if err := ValidateServerName(name); err != nil {
-		return fmt.Errorf("invalid name: %w", err)
+		return Errorf(ErrInvalidInput, "invalid name: %w", err)
 	}
 
 	// Validate server config
 	if err := srv.Validate(); err != nil {
-		return fmt.Errorf("invalid server config: %w", err)
+		return Errorf(ErrInvalidInput, "invalid server config: %w", err)
 	}
 
 	// Check for duplicate name
 	if _, exists := c.Servers[name]; exists {
-		return fmt.Errorf("server %q already exists", name)
+		return Errorf(ErrAlreadyExists, "server %q already exists", name)
 	}
 
 	c.Servers[name] = srv
@@ -233,12 +215,12 @@ func (c *Config) AddServer(name string, srv ServerConfig) error {
 // UpdateServer updates an existing server configuration.
 func (c *Config) UpdateServer(name string, srv ServerConfig) error {
 	if _, exists := c.Servers[name]; !exists {
-		return fmt.Errorf("server %q not found", name)
+		return Errorf(ErrNotFound, "server %q not found", name)
 	}
 
 	// Validate server config
 	if err := srv.Validate(); err != nil {
-		return fmt.Errorf("invalid server config: %w", err)
+		return Errorf(ErrInvalidInput, "invalid server config: %w", err)
 	}
 
 	if toolSetChanged(c.Servers[name], srv) {
@@ -252,7 +234,7 @@ func (c *Config) UpdateServer(name string, srv ServerConfig) error {
 // Also cleans up namespace references and tool permissions.
 func (c *Config) DeleteServer(name string) error {
 	if _, exists := c.Servers[name]; !exists {
-		return fmt.Errorf("server %q not found", name)
+		return Errorf(ErrNotFound, "server %q not found", name)
 	}
 	delete(c.Servers, name)
 	c.noteToolCacheDelete(name)
@@ -285,13 +267,13 @@ func (c *Config) DeleteServer(name string) error {
 func (c *Config) RenameServer(oldName, newName string) error {
 	srv, exists := c.Servers[oldName]
 	if !exists {
-		return fmt.Errorf("server %q not found", oldName)
+		return Errorf(ErrNotFound, "server %q not found", oldName)
 	}
 	if _, exists := c.Servers[newName]; exists {
-		return fmt.Errorf("server %q already exists", newName)
+		return Errorf(ErrAlreadyExists, "server %q already exists", newName)
 	}
 	if err := ValidateServerName(newName); err != nil {
-		return fmt.Errorf("invalid name: %w", err)
+		return Errorf(ErrInvalidInput, "invalid name: %w", err)
 	}
 
 	// Move in servers map
@@ -330,18 +312,18 @@ func (c *Config) RenameServer(oldName, newName string) error {
 func (c *Config) AddNamespace(name string, ns NamespaceConfig) error {
 	// Validate name
 	if err := ValidateName(name); err != nil {
-		return fmt.Errorf("invalid name: %w", err)
+		return Errorf(ErrInvalidInput, "invalid name: %w", err)
 	}
 
 	// Check for duplicate name
 	if _, exists := c.Namespaces[name]; exists {
-		return fmt.Errorf("namespace %q already exists", name)
+		return Errorf(ErrAlreadyExists, "namespace %q already exists", name)
 	}
 
 	// Canonicalize, then validate the namespace config
 	ns.Compression = NormalizeCompressionLevel(ns.Compression)
 	if err := ns.Validate(); err != nil {
-		return err
+		return Errorf(ErrInvalidInput, "%w", err)
 	}
 
 	// Initialize ServerIDs if nil
@@ -356,11 +338,11 @@ func (c *Config) AddNamespace(name string, ns NamespaceConfig) error {
 // UpdateNamespace updates an existing namespace configuration.
 func (c *Config) UpdateNamespace(name string, ns NamespaceConfig) error {
 	if _, exists := c.Namespaces[name]; !exists {
-		return fmt.Errorf("namespace %q not found", name)
+		return Errorf(ErrNotFound, "namespace %q not found", name)
 	}
 	ns.Compression = NormalizeCompressionLevel(ns.Compression)
 	if err := ns.Validate(); err != nil {
-		return err
+		return Errorf(ErrInvalidInput, "%w", err)
 	}
 	c.Namespaces[name] = ns
 	return nil
@@ -370,7 +352,7 @@ func (c *Config) UpdateNamespace(name string, ns NamespaceConfig) error {
 // Also cleans up tool permissions and default namespace reference.
 func (c *Config) DeleteNamespace(name string) error {
 	if _, exists := c.Namespaces[name]; !exists {
-		return fmt.Errorf("namespace %q not found", name)
+		return Errorf(ErrNotFound, "namespace %q not found", name)
 	}
 
 	delete(c.Namespaces, name)
@@ -396,13 +378,13 @@ func (c *Config) DeleteNamespace(name string) error {
 func (c *Config) RenameNamespace(oldName, newName string) error {
 	ns, exists := c.Namespaces[oldName]
 	if !exists {
-		return fmt.Errorf("namespace %q not found", oldName)
+		return Errorf(ErrNotFound, "namespace %q not found", oldName)
 	}
 	if _, exists := c.Namespaces[newName]; exists {
-		return fmt.Errorf("namespace %q already exists", newName)
+		return Errorf(ErrAlreadyExists, "namespace %q already exists", newName)
 	}
 	if err := ValidateName(newName); err != nil {
-		return fmt.Errorf("invalid name: %w", err)
+		return Errorf(ErrInvalidInput, "invalid name: %w", err)
 	}
 
 	// Move in namespaces map
@@ -428,13 +410,13 @@ func (c *Config) RenameNamespace(oldName, newName string) error {
 func (c *Config) DuplicateNamespace(oldName, newName string) error {
 	ns, exists := c.Namespaces[oldName]
 	if !exists {
-		return fmt.Errorf("namespace %q not found", oldName)
+		return Errorf(ErrNotFound, "namespace %q not found", oldName)
 	}
 	if err := ValidateName(newName); err != nil {
-		return fmt.Errorf("invalid name: %w", err)
+		return Errorf(ErrInvalidInput, "invalid name: %w", err)
 	}
 	if _, exists := c.Namespaces[newName]; exists {
-		return fmt.Errorf("namespace %q already exists", newName)
+		return Errorf(ErrAlreadyExists, "namespace %q already exists", newName)
 	}
 
 	// Deep copy the namespace config: struct copy carries every scalar field
@@ -468,12 +450,12 @@ func (c *Config) DuplicateNamespace(oldName, newName string) error {
 func (c *Config) AssignServerToNamespace(namespaceName, serverName string) error {
 	ns, exists := c.Namespaces[namespaceName]
 	if !exists {
-		return fmt.Errorf("namespace %q not found", namespaceName)
+		return Errorf(ErrNotFound, "namespace %q not found", namespaceName)
 	}
 
 	// Check server exists
 	if _, ok := c.GetServer(serverName); !ok {
-		return fmt.Errorf("server %q not found", serverName)
+		return Errorf(ErrNotFound, "server %q not found", serverName)
 	}
 
 	// Check if already assigned
@@ -491,7 +473,7 @@ func (c *Config) AssignServerToNamespace(namespaceName, serverName string) error
 func (c *Config) UnassignServerFromNamespace(namespaceName, serverName string) error {
 	ns, exists := c.Namespaces[namespaceName]
 	if !exists {
-		return fmt.Errorf("namespace %q not found", namespaceName)
+		return Errorf(ErrNotFound, "namespace %q not found", namespaceName)
 	}
 
 	ns.ServerIDs = slices.DeleteFunc(slices.Clone(ns.ServerIDs), func(item string) bool { return item == serverName })
@@ -508,14 +490,8 @@ func (c *Config) UnassignServerFromNamespace(namespaceName, serverName string) e
 // SetToolPermission sets a permission for a tool in a namespace.
 // If a permission already exists, it is updated.
 func (c *Config) SetToolPermission(namespaceName, serverName, toolName string, enabled bool) error {
-	// Validate namespace exists
-	if _, exists := c.Namespaces[namespaceName]; !exists {
-		return fmt.Errorf("namespace %q not found", namespaceName)
-	}
-
-	// Validate server exists
-	if _, ok := c.GetServer(serverName); !ok {
-		return fmt.Errorf("server %q not found", serverName)
+	if err := c.validatePermission(namespaceName, serverName, toolName); err != nil {
+		return err
 	}
 
 	// Check if permission already exists
@@ -564,11 +540,11 @@ func (c *Config) GetToolPermission(namespaceName, serverName, toolName string) (
 func (c *Config) SetServerDefault(namespaceName, serverName string, denyByDefault bool) error {
 	ns, exists := c.Namespaces[namespaceName]
 	if !exists {
-		return fmt.Errorf("namespace %q not found", namespaceName)
+		return Errorf(ErrNotFound, "namespace %q not found", namespaceName)
 	}
 
 	if _, ok := c.GetServer(serverName); !ok {
-		return fmt.Errorf("server %q not found", serverName)
+		return Errorf(ErrNotFound, "server %q not found", serverName)
 	}
 
 	if ns.ServerDefaults == nil {
@@ -597,7 +573,7 @@ func (c *Config) GetServerDefault(namespaceName, serverName string) (bool, bool)
 func (c *Config) UnsetServerDefault(namespaceName, serverName string) error {
 	ns, exists := c.Namespaces[namespaceName]
 	if !exists {
-		return fmt.Errorf("namespace %q not found", namespaceName)
+		return Errorf(ErrNotFound, "namespace %q not found", namespaceName)
 	}
 
 	if ns.ServerDefaults != nil {
@@ -614,7 +590,7 @@ func (c *Config) UnsetServerDefault(namespaceName, serverName string) error {
 func (c *Config) DenyTool(serverName, toolName string) error {
 	srv, exists := c.Servers[serverName]
 	if !exists {
-		return fmt.Errorf("server %q not found", serverName)
+		return Errorf(ErrNotFound, "server %q not found", serverName)
 	}
 	if srv.IsToolDenied(toolName) {
 		return nil // Already denied, no-op
@@ -629,7 +605,7 @@ func (c *Config) DenyTool(serverName, toolName string) error {
 func (c *Config) AllowTool(serverName, toolName string) error {
 	srv, exists := c.Servers[serverName]
 	if !exists {
-		return fmt.Errorf("server %q not found", serverName)
+		return Errorf(ErrNotFound, "server %q not found", serverName)
 	}
 	srv.DeniedTools = slices.DeleteFunc(slices.Clone(srv.DeniedTools), func(item string) bool { return item == toolName })
 	if len(srv.DeniedTools) == 0 {
@@ -643,7 +619,7 @@ func (c *Config) AllowTool(serverName, toolName string) error {
 func (c *Config) GetDeniedTools(serverName string) ([]string, error) {
 	srv, exists := c.Servers[serverName]
 	if !exists {
-		return nil, fmt.Errorf("server %q not found", serverName)
+		return nil, Errorf(ErrNotFound, "server %q not found", serverName)
 	}
 	result := append([]string{}, srv.DeniedTools...)
 	slices.Sort(result)
@@ -659,4 +635,27 @@ func (c *Config) GetToolPermissionsForNamespace(namespaceName string) []ToolPerm
 		}
 	}
 	return result
+}
+
+// normalizeLoaded initializes maps and tolerantly canonicalizes imported or loaded values.
+func (c *Config) normalizeLoaded() {
+	// Initialize maps if nil (for older configs)
+	if c.Servers == nil {
+		c.Servers = make(map[string]ServerConfig)
+	}
+	if c.Namespaces == nil {
+		c.Namespaces = make(map[string]NamespaceConfig)
+	}
+
+	// Canonicalize hand-edited compression values ("OFF", " medium ") so every
+	// display and edit surface can compare them literally — the same load-time
+	// migration spirit as ServerConfig's legacy OAuth fields. Unknown levels
+	// are kept as typed (visible in list/detail views) and degrade to off in
+	// serve mode; they deliberately do not fail the load (see Config.Validate).
+	for name, ns := range c.Namespaces {
+		if normalized := NormalizeCompressionLevel(ns.Compression); normalized != ns.Compression {
+			ns.Compression = normalized
+			c.Namespaces[name] = ns
+		}
+	}
 }

@@ -14,10 +14,11 @@ import (
 // On connect, it flushes historical logs from the handle's buffer,
 // then streams live events from the bus.
 func (s *Server) handleSSELogs(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
 	// Verify server exists in config
-	if _, ok := s.cfg.GetServer(name); !ok {
+	if _, ok := cfg.GetServer(name); !ok {
 		http.NotFound(w, r)
 		return
 	}

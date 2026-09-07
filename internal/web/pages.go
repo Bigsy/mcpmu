@@ -67,7 +67,8 @@ func (s *Server) buildServerRow(name string, srv config.ServerConfig, statuses m
 }
 
 func (s *Server) handleServersPage(w http.ResponseWriter, r *http.Request) {
-	entries := s.cfg.ServerEntries()
+	cfg := s.configSnapshot()
+	entries := cfg.ServerEntries()
 	statuses := s.status.All()
 
 	var rows []serverRow
@@ -82,7 +83,7 @@ func (s *Server) handleServersPage(w http.ResponseWriter, r *http.Request) {
 		totalTools += row.ToolCount
 
 		// Find which namespaces this server belongs to
-		for nsName, nsCfg := range s.cfg.Namespaces {
+		for nsName, nsCfg := range cfg.Namespaces {
 			if slices.Contains(nsCfg.ServerIDs, entry.Name) {
 				row.Namespaces = append(row.Namespaces, nsName)
 			}
@@ -127,9 +128,10 @@ type toolDisplay struct {
 }
 
 func (s *Server) handleServerDetailPage(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	srv, ok := s.cfg.GetServer(name)
+	srv, ok := cfg.GetServer(name)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -196,14 +198,14 @@ func (s *Server) handleServerDetailPage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Namespaces
-	for nsName, nsCfg := range s.cfg.Namespaces {
+	for nsName, nsCfg := range cfg.Namespaces {
 		if slices.Contains(nsCfg.ServerIDs, name) {
 			data.Namespaces = append(data.Namespaces, nsName)
 		}
 	}
 
 	// Usage metrics (last 30 days)
-	data.Usage = s.buildServerUsage(name)
+	data.Usage = s.buildServerUsage(cfg, name)
 
 	s.render(w, "server_detail.html", data)
 }
@@ -227,19 +229,20 @@ type namespaceRow struct {
 }
 
 func (s *Server) handleNamespacesPage(w http.ResponseWriter, r *http.Request) {
-	entries := s.cfg.NamespaceEntries()
+	cfg := s.configSnapshot()
+	entries := cfg.NamespaceEntries()
 
 	var rows []namespaceRow
 	var totalAssigned int
 
 	for _, entry := range entries {
-		perms := s.cfg.GetToolPermissionsForNamespace(entry.Name)
+		perms := cfg.GetToolPermissionsForNamespace(entry.Name)
 		row := namespaceRow{
 			Name:        entry.Name,
 			Config:      entry.Config,
 			ServerCount: len(entry.Config.ServerIDs),
 			PermCount:   len(perms),
-			IsDefault:   entry.Name == s.cfg.DefaultNamespace,
+			IsDefault:   entry.Name == cfg.DefaultNamespace,
 		}
 		totalAssigned += row.ServerCount
 		rows = append(rows, row)
@@ -251,7 +254,7 @@ func (s *Server) handleNamespacesPage(w http.ResponseWriter, r *http.Request) {
 		Namespaces:       rows,
 		TotalCount:       len(entries),
 		TotalAssigned:    totalAssigned,
-		DefaultNamespace: s.cfg.DefaultNamespace,
+		DefaultNamespace: cfg.DefaultNamespace,
 	}
 
 	s.render(w, "namespaces.html", data)
@@ -282,9 +285,10 @@ type namespaceDetailData struct {
 }
 
 func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Request) {
+	cfg := s.configSnapshot()
 	name := r.PathValue("name")
 
-	ns, ok := s.cfg.GetNamespace(name)
+	ns, ok := cfg.GetNamespace(name)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -294,14 +298,14 @@ func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Reques
 
 	var servers []serverRow
 	for _, sid := range ns.ServerIDs {
-		srv, ok := s.cfg.GetServer(sid)
+		srv, ok := cfg.GetServer(sid)
 		if !ok {
 			continue
 		}
 		servers = append(servers, s.buildServerRow(sid, srv, statuses))
 	}
 
-	perms := s.cfg.GetToolPermissionsForNamespace(name)
+	perms := cfg.GetToolPermissionsForNamespace(name)
 
 	// Build permission lookup maps
 	permMap := make(map[string]bool, len(perms))
@@ -315,7 +319,7 @@ func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Reques
 	// Build tools per server for the permissions editor
 	serverTools := make(map[string][]toolDisplay)
 	for _, sid := range ns.ServerIDs {
-		srv, _ := s.cfg.GetServer(sid)
+		srv, _ := cfg.GetServer(sid)
 		var tools []toolDisplay
 		// Prefer live tools from status tracker
 		if liveTools, ok := s.status.Tools(sid); ok && len(liveTools) > 0 {
@@ -358,7 +362,7 @@ func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Reques
 	// Build server-level denied tool set for fallback permissions table
 	deniedToolSet := make(map[string]bool)
 	for _, sid := range ns.ServerIDs {
-		if srv, ok := s.cfg.GetServer(sid); ok {
+		if srv, ok := cfg.GetServer(sid); ok {
 			for _, t := range srv.DeniedTools {
 				deniedToolSet[sid+":"+t] = true
 			}
@@ -370,8 +374,8 @@ func (s *Server) handleNamespaceDetailPage(w http.ResponseWriter, r *http.Reques
 		ConfigPath:        s.configPathDisplay(),
 		Name:              name,
 		Config:            ns,
-		IsDefault:         name == s.cfg.DefaultNamespace,
-		DefaultNamespace:  s.cfg.DefaultNamespace,
+		IsDefault:         name == cfg.DefaultNamespace,
+		DefaultNamespace:  cfg.DefaultNamespace,
 		Servers:           servers,
 		Permissions:       perms,
 		ServerTools:       serverTools,
