@@ -1377,7 +1377,38 @@ smoke_selective_reload() (
 )
 
 # Register new smoke checks here.
+# Verify flag presence and explicit booleans survive real CLI/config persistence.
+smoke_add_sharing() (
+  command -v jq >/dev/null 2>&1 || { echo "SKIP: jq is required"; return 0; }
+  local task_dir cfg transport mode name
+  task_dir=$(mktemp -d) || return 1
+  trap 'rm -rf "$task_dir"' EXIT
+  cfg="$task_dir/config.json"
+  for transport in stdio http; do
+    for mode in default true false; do
+      name="$transport-$mode"
+      local flags=()
+      [[ "$mode" == default ]] || flags=("--shared=$mode")
+      if [[ "$transport" == stdio ]]; then
+        ./mcpmu --config "$cfg" add "$name" "${flags[@]}" -- echo ok || return 1
+      else
+        ./mcpmu --config "$cfg" add "$name" "${flags[@]}" https://example.invalid/mcp || return 1
+      fi
+    done
+  done
+  jq -e '
+    [.servers["stdio-default"], .servers["http-default"]] | all(has("shared") | not)
+  ' "$cfg" >/dev/null || return 1
+  jq -e '
+    (.servers["stdio-true"].shared == true) and
+    (.servers["http-true"].shared == true) and
+    (.servers["stdio-false"].shared == false) and
+    (.servers["http-false"].shared == false)
+  ' "$cfg" >/dev/null
+)
+
 SMOKE_CHECKS=(
+  smoke_add_sharing
   smoke_selective_reload
   smoke_cf_access_headers
   smoke_process_group_cleanup

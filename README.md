@@ -184,7 +184,8 @@ mcpmu serve --http --addr 0.0.0.0:8081 --token "$MCPMU_TOKEN"
 
 Servers are shared by default. For stateful servers such as browser automation
 or REPLs, turn off **Share between agent connections** in the TUI or web server
-form (or set `"shared": false` in the config) to give each client session a private instance.
+form, add with `mcpmu add browser --shared=false -- browser-command`,
+or set `"shared": false` in the config to give each client session a private instance.
 Changing sharing takes effect when serving processes reload the config. The [CLI reference](docs/CLI.md) covers
 daemon controls, HTTP security, OAuth, custom headers, and all serve flags.
 

@@ -7,6 +7,7 @@ import (
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/tui/theme"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestShowAddWithDefaults_PrePopulatesFields(t *testing.T) {
@@ -517,5 +518,52 @@ func TestServerFormSharing(t *testing.T) {
 	got, err = form.buildServerConfig()
 	if err != nil || !got.IsShared() {
 		t.Fatalf("sharing toggle not saved: %+v %v", got, err)
+	}
+}
+
+func TestServerFormSmallTerminal(t *testing.T) {
+	form := NewServerForm(theme.New())
+	form.SetSize(80, 24)
+	form.ShowEdit("browser", config.ServerConfig{Command: "browser"})
+	checkFits := func(width, height int) {
+		t.Helper()
+		view := form.RenderOverlay("", width, height)
+		if lipgloss.Height(view) > height || lipgloss.Width(view) > width {
+			t.Fatalf("overlay is %dx%d in %dx%d terminal", lipgloss.Width(view), lipgloss.Height(view), width, height)
+		}
+	}
+	checkFits(80, 24)
+	form.form.NextGroup()
+	form.Update(nil)
+	for range 6 {
+		form.form.NextField()
+		checkFits(80, 24)
+	}
+	if !strings.Contains(form.View(), "Share between agent connections") {
+		t.Fatal("focused sharing control is not visible")
+	}
+	form.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if form.shared {
+		t.Fatal("sharing control did not toggle off")
+	}
+	for _, size := range [][2]int{{110, 50}, {60, 24}, {80, 24}} {
+		form.SetSize(size[0], size[1])
+		form.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		checkFits(size[0], size[1])
+		if !strings.Contains(form.View(), "Share between agent connections") {
+			t.Fatal("resize hid the focused sharing control")
+		}
+	}
+	for range 3 {
+		form.form.NextField()
+		checkFits(80, 24)
+	}
+	if !strings.Contains(form.View(), "Tool Timeout") {
+		t.Fatal("final field is not visible")
+	}
+	form.form.NextGroup()
+	result := form.Update(nil)().(ServerFormResult)
+	if !result.Submitted || result.Server.IsShared() {
+		t.Fatalf("private setting was not saved: %+v", result)
 	}
 }

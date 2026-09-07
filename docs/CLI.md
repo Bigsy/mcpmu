@@ -73,6 +73,7 @@ Note: `--bearer-env` and OAuth flags are mutually exclusive. `--header` and `--e
 
 **General (stdio and HTTP):**
 - `--autostart` — start server automatically on app launch
+- `--shared=<bool>` — share between agent connections (default: true); use `--shared=false` for a private instance per connection
 - `--startup-timeout` — connection, initialization, and initial-discovery timeout in seconds (default: 10)
 - `--tool-timeout` — tool call timeout in seconds (default: 60)
 

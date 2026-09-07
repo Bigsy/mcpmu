@@ -880,3 +880,9 @@ and definite local prerequisite failures exit 1; determined daemon absence and
 contextual daemon availability warnings do not fail diagnostics. Executable checks
 never run commands or query credentials. These commands describe the shared daemon
 and local CLI environment, not dedicated HTTP or isolated serving processes.
+
+The CLI `add --shared=<bool>` persists an explicit server sharing setting for
+both transports; an omitted flag leaves `Shared` unset (shared by default).
+The TUI server form sizes huh's scrolling groups to the terminal's available
+height, reserving space for the overlay border and padding. Resizing updates
+the existing form without rebuilding fields or losing edits.

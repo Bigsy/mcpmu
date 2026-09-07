@@ -191,6 +191,7 @@ Flags for HTTP servers:
 
 General flags (stdio and HTTP):
 - `--autostart` — start server automatically on app launch
+- `--shared=<bool>` — share between agent connections (default: true); use `--shared=false` for a private instance per connection
 - `--startup-timeout` — startup timeout in seconds (default: 10)
 - `--tool-timeout` — tool call timeout in seconds (default: 60)
 

@@ -403,6 +403,7 @@ func (m *ServerFormModel) buildForm() {
 		WithShowHelp(true).
 		WithShowErrors(true).
 		WithKeyMap(keymap)
+	m.SetSize(m.width, m.height)
 }
 
 // isDirty returns true if any form values have changed from their initial values.
@@ -439,6 +440,15 @@ func (m ServerFormModel) IsVisible() bool {
 func (m *ServerFormModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+	if m.form != nil {
+		// Reserve the overlay border/padding and a one-cell terminal margin.
+		if width > 0 {
+			m.form.WithWidth(max(1, min(60, width-16)))
+		}
+		if height > 0 {
+			m.form.WithHeight(max(1, height-6))
+		}
+	}
 }
 
 // Update handles messages for the form.
@@ -668,7 +678,7 @@ func (m ServerFormModel) RenderOverlay(base string, width, height int) string {
 	// Wrap in a styled box
 	dialogWidth := 70
 	if width > 0 && width < 80 {
-		dialogWidth = width - 10
+		dialogWidth = max(1, width-10)
 	}
 
 	var content string
