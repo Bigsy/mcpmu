@@ -40,10 +40,11 @@ type ServerFormData struct {
 	OAuthScopes       string // comma-separated
 
 	// Common
-	Env       map[string]string
-	Shared    *bool // nil → preserve existing; new servers default to shared
-	Enabled   *bool // nil → keep existing (true for a new server)
-	Autostart bool
+	Env               map[string]string
+	Shared            *bool // nil → preserve existing; new servers default to shared
+	Enabled           *bool // nil → keep existing (true for a new server)
+	RecordErrorInputs *bool // nil preserves the setting when a form does not expose it
+	Autostart         bool
 	// Timeouts in seconds; 0 means "use the default".
 	StartupTimeoutSec int
 	ToolTimeoutSec    int
@@ -70,6 +71,9 @@ func BuildServerConfig(form ServerFormData, existing *ServerConfig) (ServerConfi
 	if form.Shared != nil {
 		shared := *form.Shared
 		srv.Shared = &shared
+	}
+	if form.RecordErrorInputs != nil {
+		srv.RecordErrorInputs = *form.RecordErrorInputs
 	}
 	srv.Autostart = form.Autostart
 	srv.StartupTimeoutSec = form.StartupTimeoutSec

@@ -39,6 +39,9 @@ type serverFormData struct {
 	Autostart         bool
 	StartupTimeout    int
 	ToolTimeout       int
+
+	RecordErrorInputs         bool
+	RecordErrorInputsProvided bool
 }
 
 // serverFormPageData is the template data for the server add/edit form page.
@@ -82,6 +85,9 @@ func serverFormDataFromConfig(name string, srv config.ServerConfig) serverFormDa
 		Autostart:      srv.Autostart,
 		StartupTimeout: srv.StartupTimeout(),
 		ToolTimeout:    srv.ToolTimeout(),
+
+		RecordErrorInputs:         srv.RecordErrorInputs,
+		RecordErrorInputsProvided: true,
 	}
 
 	// Auth mode
@@ -133,6 +139,9 @@ func parseServerForm(r *http.Request) serverFormData {
 		StartupTimeout:    atoi(r.FormValue("startup_timeout"), 10),
 		ToolTimeout:       atoi(r.FormValue("tool_timeout"), 60),
 		EnvPairs:          parseEnvPairs(r),
+
+		RecordErrorInputs:         formChecked(r, "record_error_inputs"),
+		RecordErrorInputsProvided: r.Form.Has("record_error_inputs"),
 	}
 }
 
@@ -177,6 +186,10 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config
 	if fd.SharedProvided {
 		shared = &fd.Shared
 	}
+	var recordErrorInputs *bool
+	if fd.RecordErrorInputsProvided {
+		recordErrorInputs = &fd.RecordErrorInputs
+	}
 	form := config.ServerFormData{
 		Shared:            shared,
 		IsHTTP:            fd.IsHTTP,
@@ -195,6 +208,8 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config
 		Autostart:         fd.Autostart,
 		StartupTimeoutSec: fd.StartupTimeout,
 		ToolTimeoutSec:    fd.ToolTimeout,
+
+		RecordErrorInputs: recordErrorInputs,
 	}
 	if form.AuthMode == "" {
 		form.AuthMode = config.AuthModeNone

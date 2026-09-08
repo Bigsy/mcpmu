@@ -64,6 +64,10 @@ func (r *Recorder) Record(s CallSample) {
 	if r == nil {
 		return
 	}
+	input := ""
+	if s.Outcome.IsError() && len(s.ErrorInput) > 0 {
+		input = redactErrorInput(s.ErrorInput)
+	}
 	key := BucketKey{
 		Date:      s.Time.Format(dateLayout),
 		Namespace: s.Namespace,
@@ -98,7 +102,7 @@ func (r *Recorder) Record(s CallSample) {
 		Outcome:    s.Outcome,
 	}
 	if s.Outcome.IsError() {
-		r.errors = append(r.errors, ErrorCall{RecentCall: call, Response: s.ErrorResponse})
+		r.errors = append(r.errors, ErrorCall{RecentCall: call, Response: s.ErrorResponse, Input: input})
 	}
 	r.recent = append(r.recent, call)
 	if len(r.recent) > recentCap {

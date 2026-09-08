@@ -54,6 +54,8 @@ type ServerConfig struct {
 	StartupTimeoutSec int `json:"startup_timeout_sec,omitempty"` // Default 10
 	ToolTimeoutSec    int `json:"tool_timeout_sec,omitempty"`    // Default 60
 
+	RecordErrorInputs bool `json:"recordErrorInputs,omitempty"` // Opt in to redacted arguments on failed calls.
+
 	// Global deny list — tools listed here are denied regardless of namespace permissions
 	DeniedTools []string `json:"deniedTools,omitempty"`
 }

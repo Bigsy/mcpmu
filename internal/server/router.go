@@ -57,6 +57,8 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 		return result, rpcErr
 	}
 
+	cfg := r.session.currentConfig()
+	srv, serverExists := cfg.GetServer(serverName)
 	var sample *metrics.CallSample
 	defer func() {
 		if sample == nil {
@@ -67,6 +69,12 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 				sample.ErrorResponse = errorResponseJSON(finalError)
 			} else if finalResult != nil {
 				sample.ErrorResponse = errorResponseJSON(finalResult)
+			}
+		}
+		if sample.Outcome.IsError() && srv.RecordErrorInputs {
+			sample.ErrorInput = arguments
+			if len(sample.ErrorInput) == 0 {
+				sample.ErrorInput = json.RawMessage(`{}`)
 			}
 		}
 		r.session.currentRecorder().Record(*sample)
@@ -99,7 +107,6 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	// 1. Global deny (applies even without a namespace)
 	// 2. Namespace-scoped permissions (when namespace is active)
 	// 3. Returns true for everything else when namespace is empty
-	cfg := r.session.currentConfig()
 	allowed, reason := IsToolAllowed(cfg, r.activeNamespaceName, serverName, toolName)
 	if !allowed {
 		record(metrics.OutcomeDenied, 0)
@@ -107,8 +114,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	}
 
 	// Validate server exists
-	srv, ok := cfg.GetServer(serverName)
-	if !ok {
+	if !serverExists {
 		return nil, ErrServerNotFound(serverName)
 	}
 

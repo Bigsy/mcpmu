@@ -3,10 +3,13 @@
 // Counters are bucketed per (date, namespace, server, tool) and hold call
 // counts, outcome tallies, and a fixed-boundary latency histogram. The
 // error history retains failed responses for 60 days. Successful responses
-// and request arguments are not collected.
+// are not collected. Failed-call inputs are optional and redacted.
 package metrics
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Outcome classifies how a tool call ended.
 type Outcome string
@@ -36,7 +39,8 @@ type CallSample struct {
 	Tool          string        // unqualified tool name
 	Duration      time.Duration // 0 for denied calls
 	Outcome       Outcome
-	ErrorResponse string // failed response JSON or diagnostic text
+	ErrorInput    json.RawMessage // only supplied when the server opts in; redacted before retention
+	ErrorResponse string          // failed response JSON or diagnostic text
 }
 
 // BucketKey identifies one daily counter row.
@@ -201,6 +205,7 @@ const ErrorRetentionDays = 60
 type ErrorCall struct {
 	RecentCall
 	Response string `json:"response"`
+	Input    string `json:"input,omitempty"`
 }
 
 func (o Outcome) IsError() bool {

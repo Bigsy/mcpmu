@@ -191,3 +191,14 @@ func TestBuildServerConfigSharing(t *testing.T) {
 		t.Fatalf("new default: %+v %v", got, err)
 	}
 }
+
+func TestBuildServerConfigErrorInputSetting(t *testing.T) {
+	existing := ServerConfig{Command: "fixture", RecordErrorInputs: true}
+	for _, value := range []*bool{nil, new(false), new(true)} {
+		got, err := BuildServerConfig(ServerFormData{Command: "fixture", RecordErrorInputs: value}, &existing)
+		want := value == nil || *value
+		if err != nil || got.RecordErrorInputs != want {
+			t.Fatalf("got %+v, %v; want capture=%t", got, err, want)
+		}
+	}
+}

@@ -231,8 +231,12 @@ Global settings such as metrics and OAuth still use a full reload.
   errors and transport diagnostics, filtered by namespace and time window.
   Error responses are stored locally in `metrics.json` for 60 days, independently
   of counter retention, and flushed every ~30 seconds while metrics are enabled.
-  Request arguments and successful responses are not collected; error responses
-  retain whatever diagnostic content the upstream returned. Older counts have
+  Successful calls do not store inputs or responses. To retain inputs for failed
+  calls, enable **Record inputs for failed tool calls** in the server edit form
+  (or set `recordErrorInputs: true` on that server in the config). This defaults
+  to off per server. Inputs share the error history’s 60-day retention and redact
+  common secret fields recursively; free text and other data remain unchanged.
+  Error responses retain whatever diagnostic content the upstream returned. Older counts have
   no response history. Expired responses are hidden on read and pruned while
   serve mode is running.
 - Share upstream processes across concurrent stdio clients while allowing

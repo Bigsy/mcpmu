@@ -105,14 +105,15 @@ func (s *Server) handleAPICreateServer(w http.ResponseWriter, r *http.Request) {
 // Only included fields are applied (partial update). Uses json.RawMessage
 // to distinguish absent fields from zero values.
 type apiUpdateServerRequest struct {
-	Name        *string   `json:"name,omitempty"`        // rename
-	Enabled     *bool     `json:"enabled,omitempty"`     // enable/disable
-	DeniedTools *[]string `json:"deniedTools,omitempty"` // replace denied tools
-	Autostart   *bool     `json:"autostart,omitempty"`
-	Command     *string   `json:"command,omitempty"`
-	Args        *[]string `json:"args,omitempty"`
-	Cwd         *string   `json:"cwd,omitempty"`
-	URL         *string   `json:"url,omitempty"`
+	Name              *string   `json:"name,omitempty"`    // rename
+	Enabled           *bool     `json:"enabled,omitempty"` // enable/disable
+	RecordErrorInputs *bool     `json:"recordErrorInputs,omitempty"`
+	DeniedTools       *[]string `json:"deniedTools,omitempty"` // replace denied tools
+	Autostart         *bool     `json:"autostart,omitempty"`
+	Command           *string   `json:"command,omitempty"`
+	Args              *[]string `json:"args,omitempty"`
+	Cwd               *string   `json:"cwd,omitempty"`
+	URL               *string   `json:"url,omitempty"`
 }
 
 func (s *Server) handleAPIUpdateServer(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +134,9 @@ func (s *Server) handleAPIUpdateServer(w http.ResponseWriter, r *http.Request) {
 		// Apply only the fields that are present in the request
 		if req.Enabled != nil {
 			srv.SetEnabled(*req.Enabled)
+		}
+		if req.RecordErrorInputs != nil {
+			srv.RecordErrorInputs = *req.RecordErrorInputs
 		}
 		if req.DeniedTools != nil {
 			srv.DeniedTools = *req.DeniedTools

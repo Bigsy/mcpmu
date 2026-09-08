@@ -15,7 +15,14 @@
     <span class="pill pill-outcome-error">{{.Outcome}}</span>
   </div>
   <div class="card-body">
-    {{if .Response}}<pre class="mono text-sm" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto">{{.Response}}</pre>{{else}}<p class="text-faint">No response body was recorded for this error.</p>{{end}}
+    <details>
+      <summary>Input</summary>
+      {{if .Input}}<pre class="mono text-sm" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto">{{.Input}}</pre>{{else}}<p class="text-faint">No input was recorded. Enable “Record inputs for failed tool calls” in this server’s settings for future failures.</p>{{end}}
+    </details>
+    <details open>
+      <summary>Error response</summary>
+      {{if .Response}}<pre class="mono text-sm" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto">{{.Response}}</pre>{{else}}<p class="text-faint">No response body was recorded for this error.</p>{{end}}
+    </details>
   </div>
 </div>
 {{else}}

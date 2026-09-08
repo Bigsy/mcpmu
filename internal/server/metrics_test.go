@@ -519,3 +519,46 @@ func TestMetrics_UpstreamRPCErrorData(t *testing.T) {
 		t.Fatal("request argument recorded")
 	}
 }
+
+func TestMetrics_FailedInputOptIn(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess integration test")
+	}
+	for _, tc := range []struct {
+		name          string
+		optIn, failed bool
+	}{
+		{"opted in failure", true, true}, {"default failure", false, true}, {"opted in success", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := fakeUpstream(fmt.Sprintf(`{"tools":[{"name":"debug"}],"echoToolCalls":true,"toolCallIsError":%t}`, tc.failed))
+			srv.RecordErrorInputs = tc.optIn
+			cfg := &config.Config{SchemaVersion: 1, Servers: map[string]config.ServerConfig{"own": srv}}
+			script := initLine + "\n" + `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"own.debug","arguments":{"query":"reproduce-me","password":"input-secret"}}}` + "\n"
+			store, stdout := runServeWithMetrics(t, cfg, "", script, 15*time.Second)
+			if !strings.Contains(stdout, "input-secret") {
+				t.Fatal("redaction modified the actual tool call")
+			}
+			if !tc.failed {
+				if len(store.ErrorCalls) != 0 {
+					t.Fatal("successful input retained")
+				}
+				return
+			}
+			if len(store.ErrorCalls) != 1 {
+				t.Fatalf("errors: %+v", store.ErrorCalls)
+			}
+			input := store.ErrorCalls[0].Input
+			if !tc.optIn {
+				if input != "" {
+					t.Fatalf("input recorded without opt-in: %s", input)
+				}
+				return
+			}
+			if !strings.Contains(input, "reproduce-me") || !strings.Contains(input, "[REDACTED]") || strings.Contains(input, "input-secret") {
+				t.Fatalf("incorrect input: %s", input)
+			}
+		})
+	}
+}

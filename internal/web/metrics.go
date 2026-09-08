@@ -857,7 +857,7 @@ type metricsErrorsData struct {
 	Rows                                                       []metricsErrorRow
 }
 type metricsErrorRow struct {
-	Time, Namespace, Outcome, Duration, Response string
+	Time, Namespace, Outcome, Duration, Response, Input string
 }
 
 func (s *Server) handleMetricsErrors(w http.ResponseWriter, r *http.Request) {
@@ -894,7 +894,7 @@ func (s *Server) handleMetricsErrors(w http.ResponseWriter, r *http.Request) {
 		if ns == "" {
 			ns = nsNoneLabel
 		}
-		data.Rows = append(data.Rows, metricsErrorRow{Time: call.Time.Local().Format("2006-01-02 15:04:05 MST"), Namespace: ns, Outcome: string(call.Outcome), Duration: formatMs(call.DurationMs), Response: call.Response})
+		data.Rows = append(data.Rows, metricsErrorRow{Time: call.Time.Local().Format("2006-01-02 15:04:05 MST"), Namespace: ns, Outcome: string(call.Outcome), Duration: formatMs(call.DurationMs), Response: call.Response, Input: call.Input})
 	}
 	s.render(w, "metrics_errors.html", data)
 }
