@@ -164,6 +164,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /namespaces", s.handleNamespacesPage)
 	mux.HandleFunc("GET /namespaces/{name}", s.handleNamespaceDetailPage)
 	mux.HandleFunc("GET /metrics", s.handleMetricsPage)
+	mux.HandleFunc("GET /metrics/errors", s.handleMetricsErrors)
 
 	// Pages — forms (Phase 2)
 	mux.HandleFunc("GET /servers/add", s.handleServerAddPage)
@@ -238,6 +239,7 @@ var pageTemplates = []string{
 	"templates/config_import.html",
 	"templates/registry.html",
 	"templates/metrics.html",
+	"templates/metrics_errors.html",
 }
 
 func parseTemplates(authEnabled bool) (map[string]*template.Template, error) {

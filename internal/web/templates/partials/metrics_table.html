@@ -21,7 +21,7 @@
       </td>
       <td><span class="mono text-sm">{{.Calls}}</span></td>
       <td>
-        {{if gt .Errors 0}}<span class="mono text-sm" style="color: var(--danger)">{{.Errors}}</span>{{else}}<span class="text-faint">&mdash;</span>{{end}}
+        {{if gt .Errors 0}}<a href="{{.ErrorsURL}}" class="mono text-sm" style="color: var(--danger); text-decoration: underline" aria-label="View errors for {{.Server}}.{{.Tool}}">{{.Errors}}</a>{{else}}<span class="text-faint">&mdash;</span>{{end}}
         {{if gt .Denied 0}}<span class="badge badge-warning" title="Denied calls">{{.Denied}} denied</span>{{end}}
       </td>
       <td><span class="mono text-sm">{{.P50}}</span></td>

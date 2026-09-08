@@ -42,7 +42,7 @@ func (r *Router) SetActiveNamespace(namespaceName string, selection SelectionMet
 // exit, whatever the path. Misaddressed calls (server not found) are not tool
 // usage and are not recorded; the internal 4xx-reinit retry is one call, so
 // only the final outcome is recorded.
-func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, meta json.RawMessage) (*ToolCallResult, *RPCError) {
+func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, meta json.RawMessage) (finalResult *ToolCallResult, finalError *RPCError) {
 	log.Printf("CallTool: %s", qualifiedName)
 
 	start := time.Now()
@@ -57,15 +57,32 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 		return result, rpcErr
 	}
 
-	record := func(outcome metrics.Outcome, duration time.Duration) {
-		r.session.currentRecorder().Record(metrics.CallSample{
+	var sample *metrics.CallSample
+	defer func() {
+		if sample == nil {
+			return
+		}
+		if sample.Outcome.IsError() && sample.ErrorResponse == "" {
+			if finalError != nil {
+				sample.ErrorResponse = errorResponseJSON(finalError)
+			} else if finalResult != nil {
+				sample.ErrorResponse = errorResponseJSON(finalResult)
+			}
+		}
+		r.session.currentRecorder().Record(*sample)
+	}()
+	record := func(outcome metrics.Outcome, duration time.Duration, cause ...error) {
+		sample = &metrics.CallSample{
 			Time:      start,
 			Namespace: r.activeNamespaceName,
 			Server:    serverName,
 			Tool:      toolName,
 			Duration:  duration,
 			Outcome:   outcome,
-		})
+		}
+		if outcome.IsError() && len(cause) > 0 {
+			sample.ErrorResponse = errorResponseJSON(cause[0])
+		}
 	}
 	// failureOutcome classifies a failure at recording time: a cancelled
 	// parent context means the client hung up, wherever the failure surfaced
@@ -98,7 +115,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	// Acquire through the Core's single lazy-start/readiness path.
 	sc, rpcErr := r.session.getOrStartServer(ctx, serverName)
 	if rpcErr != nil {
-		record(failureOutcome(), time.Since(start))
+		record(failureOutcome(), time.Since(start), rpcErr)
 		return nil, rpcErr
 	}
 	client := sc.client
@@ -133,7 +150,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 
 			reinitialized, reinitErr := r.session.getOrStartServer(ctx, serverName)
 			if reinitErr != nil {
-				record(failureOutcome(), time.Since(start))
+				record(failureOutcome(), time.Since(start), fmt.Errorf("reinitialization failed: %w (original: %v)", reinitErr, err))
 				return nil, ErrInternalError(fmt.Sprintf("tool call failed (reinit: %v) (original: %v)", reinitErr, err))
 			}
 			client = reinitialized.client
@@ -147,13 +164,13 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 					record(metrics.OutcomeTimeout, time.Since(start))
 					return nil, ErrToolCallTimeout(serverName, toolName)
 				}
-				record(failureOutcome(), time.Since(start))
+				record(failureOutcome(), time.Since(start), err)
 				return nil, ErrInternalError(fmt.Sprintf("tool call failed after reinit: %v", err))
 			}
 
 			log.Printf("CallTool: retry succeeded for %s.%s after reinit", serverName, toolName)
 		} else {
-			record(failureOutcome(), time.Since(start))
+			record(failureOutcome(), time.Since(start), err)
 			return nil, ErrInternalError(fmt.Sprintf("tool call failed: %v", err))
 		}
 	}
@@ -186,16 +203,19 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 // sample against the target tool.
 func (r *Router) recordMeta(tool string, start time.Time, rpcErr *RPCError) {
 	outcome := metrics.OutcomeOK
+	response := ""
 	if rpcErr != nil {
 		outcome = metrics.OutcomeError
+		response = errorResponseJSON(rpcErr)
 	}
 	r.session.currentRecorder().Record(metrics.CallSample{
-		Time:      start,
-		Namespace: r.activeNamespaceName,
-		Server:    "mcpmu",
-		Tool:      tool,
-		Duration:  time.Since(start),
-		Outcome:   outcome,
+		Time:          start,
+		Namespace:     r.activeNamespaceName,
+		Server:        "mcpmu",
+		Tool:          tool,
+		Duration:      time.Since(start),
+		Outcome:       outcome,
+		ErrorResponse: response,
 	})
 }
 
@@ -478,4 +498,25 @@ func mustJSON(v any) string {
 		panic(err)
 	}
 	return string(b)
+}
+
+// errorResponseJSON captures the response returned to the caller, including
+// structured tool content and RPC error data. No request arguments are added.
+func errorResponseJSON(value any) string {
+	if cause, ok := value.(error); ok {
+		diagnostic := cause.Error()
+		for errors.Unwrap(cause) != nil {
+			cause = errors.Unwrap(cause)
+		}
+		data, err := json.MarshalIndent(cause, "", "  ")
+		if err == nil && string(data) != "{}" {
+			return string(data)
+		}
+		return diagnostic
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Sprint(value)
+	}
+	return string(data)
 }

@@ -186,6 +186,7 @@ type tableHeader struct {
 
 type metricsRowVM struct {
 	Server, Tool string
+	ErrorsURL    string
 	Calls        uint64
 	Errors       uint64
 	Denied       uint64
@@ -419,6 +420,7 @@ func (s *Server) buildMetricsTable(store *metrics.Store, q metricsQuery) metrics
 			Tool:       row.Tool,
 			Calls:      row.Calls,
 			Errors:     row.Errors,
+			ErrorsURL:  metricsErrorsURL(q, row.Server, row.Tool),
 			Denied:     row.Denied,
 			P50:        formatLatency(row.P50Ms, row.TimedCalls),
 			P95:        formatLatency(row.P95Ms, row.TimedCalls),
@@ -694,6 +696,7 @@ func (s *Server) buildServerUsage(cfg *config.Config, serverName string) serverU
 			Tool:       row.Tool,
 			Calls:      row.Calls,
 			Errors:     row.Errors,
+			ErrorsURL:  metricsErrorsURL(q, row.Server, row.Tool),
 			Denied:     row.Denied,
 			P50:        formatLatency(row.P50Ms, row.TimedCalls),
 			P95:        formatLatency(row.P95Ms, row.TimedCalls),
@@ -839,4 +842,59 @@ func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, resp)
+}
+
+func metricsErrorsURL(q metricsQuery, server, tool string) string {
+	v := q.sortValues()
+	v.Set("server", server)
+	v.Set("tool", tool)
+	return "/metrics/errors?" + v.Encode()
+}
+
+type metricsErrorsData struct {
+	Page, ConfigPath, Qualified, BackURL, PreviousURL, NextURL string
+	Days, Total                                                int
+	Rows                                                       []metricsErrorRow
+}
+type metricsErrorRow struct {
+	Time, Namespace, Outcome, Duration, Response string
+}
+
+func (s *Server) handleMetricsErrors(w http.ResponseWriter, r *http.Request) {
+	// Responses may contain upstream diagnostic data; avoid browser/proxy caching.
+	w.Header().Set("Cache-Control", "no-store")
+	q := parseMetricsQuery(r)
+	server, tool := r.URL.Query().Get("server"), r.URL.Query().Get("tool")
+	if server == "" || tool == "" {
+		http.Error(w, "server and tool are required", http.StatusBadRequest)
+		return
+	}
+	f := q.filter()
+	f.Server = server
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	page = max(1, min(page, 1000000))
+	const pageSize = 50
+	calls, total := s.loadMetricsStore().Errors(f, tool, (page-1)*pageSize, pageSize)
+	data := metricsErrorsData{Page: "metrics", ConfigPath: s.configPathDisplay(), Qualified: server + "." + tool, BackURL: "/metrics?" + q.sortValues().Encode(), Days: q.Days, Total: total}
+	pageURL := func(n int) string {
+		v := q.sortValues()
+		v.Set("server", server)
+		v.Set("tool", tool)
+		v.Set("page", strconv.Itoa(n))
+		return "/metrics/errors?" + v.Encode()
+	}
+	if page > 1 {
+		data.PreviousURL = pageURL(page - 1)
+	}
+	if page*pageSize < total {
+		data.NextURL = pageURL(page + 1)
+	}
+	for _, call := range calls {
+		ns := call.Namespace
+		if ns == "" {
+			ns = nsNoneLabel
+		}
+		data.Rows = append(data.Rows, metricsErrorRow{Time: call.Time.Local().Format("2006-01-02 15:04:05 MST"), Namespace: ns, Outcome: string(call.Outcome), Duration: formatMs(call.DurationMs), Response: call.Response})
+	}
+	s.render(w, "metrics_errors.html", data)
 }

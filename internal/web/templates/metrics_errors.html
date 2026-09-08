@@ -1,0 +1,28 @@
+{{define "title"}}Error responses — mcpmu{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Error responses</h1>
+    <p class="subtitle mono">{{.Qualified}}</p>
+  </div>
+  <a class="btn btn-sm" href="{{.BackURL}}">Back to metrics</a>
+</div>
+<p class="text-sm text-faint">{{.Total}} recorded errors in the selected {{.Days}}-day window. Responses are retained for 60 days and saved every ~30s. Counts from before response recording was added may have no details.</p>
+{{range .Rows}}
+<div class="card">
+  <div class="card-header">
+    <span class="mono text-sm">{{.Time}} &middot; {{.Namespace}} &middot; {{.Duration}}</span>
+    <span class="pill pill-outcome-error">{{.Outcome}}</span>
+  </div>
+  <div class="card-body">
+    {{if .Response}}<pre class="mono text-sm" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto">{{.Response}}</pre>{{else}}<p class="text-faint">No response body was recorded for this error.</p>{{end}}
+  </div>
+</div>
+{{else}}
+<div class="card"><div class="card-body"><p class="text-faint">No error responses recorded for this tool in the selected window.</p></div></div>
+{{end}}
+<div class="btn-group">
+  {{if .PreviousURL}}<a class="btn btn-sm" href="{{.PreviousURL}}">Newer errors</a>{{end}}
+  {{if .NextURL}}<a class="btn btn-sm" href="{{.NextURL}}">Older errors</a>{{end}}
+</div>
+{{end}}

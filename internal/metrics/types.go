@@ -1,9 +1,9 @@
 // Package metrics collects per-tool usage counters for serve mode and
 // persists them to a sidecar file (metrics.json) next to the active config.
 // Counters are bucketed per (date, namespace, server, tool) and hold call
-// counts, outcome tallies, and a fixed-boundary latency histogram. The hard
-// privacy rule: names, timestamps, durations, and outcomes only — never tool
-// arguments, results, or error message bodies.
+// counts, outcome tallies, and a fixed-boundary latency histogram. The
+// error history retains failed responses for 60 days. Successful responses
+// and request arguments are not collected.
 package metrics
 
 import "time"
@@ -30,12 +30,13 @@ const dateLayout = "2006-01-02"
 // CallSample is the single unit handed to the Recorder. Deliberately flat —
 // if OTel export is ever added, these fields map 1:1 onto span attributes.
 type CallSample struct {
-	Time      time.Time
-	Namespace string        // "" when no namespace is active; store as ""
-	Server    string        // config server name; "mcpmu" for manager tools
-	Tool      string        // unqualified tool name
-	Duration  time.Duration // 0 for denied calls
-	Outcome   Outcome
+	Time          time.Time
+	Namespace     string        // "" when no namespace is active; store as ""
+	Server        string        // config server name; "mcpmu" for manager tools
+	Tool          string        // unqualified tool name
+	Duration      time.Duration // 0 for denied calls
+	Outcome       Outcome
+	ErrorResponse string // failed response JSON or diagnostic text
 }
 
 // BucketKey identifies one daily counter row.
@@ -191,4 +192,17 @@ func durationMs(d time.Duration) uint64 {
 		return 0
 	}
 	return uint64(ms)
+}
+
+// ErrorRetentionDays is independent of the aggregate counter retention setting.
+const ErrorRetentionDays = 60
+
+// ErrorCall retains a failed response separately from the bounded recent feed.
+type ErrorCall struct {
+	RecentCall
+	Response string `json:"response"`
+}
+
+func (o Outcome) IsError() bool {
+	return o == OutcomeToolError || o == OutcomeError || o == OutcomeTimeout
 }

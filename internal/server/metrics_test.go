@@ -147,6 +147,9 @@ func TestMetrics_OutcomeToolError(t *testing.T) {
 	if c.Outcomes[metrics.OutcomeToolError] != 1 {
 		t.Errorf("counters = %+v, want 1 tool_error", c)
 	}
+	if len(store.ErrorCalls) != 1 || !strings.Contains(store.ErrorCalls[0].Response, `"isError": true`) || !strings.Contains(store.ErrorCalls[0].Response, `"content"`) {
+		t.Fatalf("missing upstream response: %+v", store.ErrorCalls)
+	}
 }
 
 func TestMetrics_OutcomeTimeout(t *testing.T) {
@@ -466,5 +469,53 @@ func TestMetrics_RetryAfter4xxRecordsOneSample(t *testing.T) {
 	}
 	if len(store.RecentCalls) != 1 {
 		t.Errorf("recent = %d entries, want 1", len(store.RecentCalls))
+	}
+}
+
+func TestMetrics_UpstreamRPCErrorData(t *testing.T) {
+	if testing.Short() {
+		t.Skip("HTTP upstream integration test")
+	}
+	testutil.SetupTestHome(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"own","version":"1"}}}`, req.ID)
+		case "tools/list":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"debug","inputSchema":{"type":"object"}}]}}`, req.ID)
+		case "tools/call":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32001,"message":"query failed","data":{"trace":"trace-123","detail":"database unavailable"}}}`, req.ID)
+		default:
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	defer upstream.Close()
+	cfg := &config.Config{SchemaVersion: 1, Servers: map[string]config.ServerConfig{"own": {URL: upstream.URL + "/mcp"}}}
+	script := initLine + "\n" + `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"own.debug","arguments":{"secret":"do-not-record"}}}` + "\n"
+	store, _ := runServeWithMetrics(t, cfg, "", script, 15*time.Second)
+	if len(store.ErrorCalls) != 1 {
+		t.Fatalf("errors: %+v", store.ErrorCalls)
+	}
+	response := store.ErrorCalls[0].Response
+	for _, want := range []string{"-32001", "query failed", "trace-123", "database unavailable"} {
+		if !strings.Contains(response, want) {
+			t.Errorf("missing %q in %s", want, response)
+		}
+	}
+	if strings.Contains(response, "do-not-record") {
+		t.Fatal("request argument recorded")
 	}
 }

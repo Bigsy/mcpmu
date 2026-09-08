@@ -226,8 +226,15 @@ Global settings such as metrics and OAuth still use a full reload.
 - Hot-reload configuration without restarting serve mode.
 - Start servers lazily or pre-start them with `--eager`.
 - Pass through upstream resources and prompts.
-- Track per-tool call counts, error rates, latency, and unused tools without
-  recording arguments or results.
+- Track per-tool call counts, error rates, latency, and unused tools. Click a
+  tool’s error count to inspect failed responses, including structured MCP
+  errors and transport diagnostics, filtered by namespace and time window.
+  Error responses are stored locally in `metrics.json` for 60 days, independently
+  of counter retention, and flushed every ~30 seconds while metrics are enabled.
+  Request arguments and successful responses are not collected; error responses
+  retain whatever diagnostic content the upstream returned. Older counts have
+  no response history. Expired responses are hidden on read and pruned while
+  serve mode is running.
 - Share upstream processes across concurrent stdio clients while allowing
   private instances per server.
 - Negotiate MCP protocol revisions through 2025-11-25 and relay cancellation

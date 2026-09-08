@@ -57,6 +57,7 @@ func MetricsPath(configPath string) (string, error) {
 type Store struct {
 	Rows        map[BucketKey]*Counters
 	RecentCalls []RecentCall
+	ErrorCalls  []ErrorCall
 }
 
 // NewStore returns an empty store.
@@ -68,6 +69,7 @@ func NewStore() *Store {
 // nested maps keyed by composite strings — tool names come from arbitrary
 // upstreams and cannot be trusted not to contain a separator character.
 type storeFile struct {
+	Errors  []ErrorCall  `json:"errors,omitempty"`
 	Version int          `json:"version"`
 	Rows    []storeRow   `json:"rows"`
 	Recent  []RecentCall `json:"recent,omitempty"`
@@ -126,6 +128,7 @@ func parseStore(data []byte) (*Store, error) {
 		}
 	}
 	store.RecentCalls = file.Recent
+	store.ErrorCalls = file.Errors
 	return store, nil
 }
 
@@ -133,7 +136,7 @@ func parseStore(data []byte) (*Store, error) {
 // Each flush contributes only its own delta since the last flush, so
 // concurrent writers (daemon + embedded serves) never clobber each other's
 // counts.
-func mergeAndSave(path string, delta map[BucketKey]*Counters, recent []RecentCall, retentionDays int) error {
+func mergeAndSave(path string, delta map[BucketKey]*Counters, recent []RecentCall, retentionDays int, errors ...ErrorCall) error {
 	release, err := process.LockFileBlocking(path+".lock", lockTimeout)
 	if err != nil {
 		return fmt.Errorf("acquire metrics lock: %w", err)
@@ -150,6 +153,8 @@ func mergeAndSave(path string, delta map[BucketKey]*Counters, recent []RecentCal
 		}
 	}
 
+	store.ErrorCalls = append(store.ErrorCalls, errors...)
+	slices.SortStableFunc(store.ErrorCalls, func(a, b ErrorCall) int { return b.Time.Compare(a.Time) })
 	store.RecentCalls = append(store.RecentCalls, recent...)
 	slices.SortStableFunc(store.RecentCalls, func(a, b RecentCall) int {
 		return b.Time.Compare(a.Time) // newest first
@@ -186,6 +191,9 @@ func loadForMerge(path string) *Store {
 // prune drops rows and recent entries older than the retention window.
 // ISO date strings sort lexicographically, so a string compare suffices.
 func (s *Store) prune(retentionDays int, now time.Time) {
+	s.ErrorCalls = slices.DeleteFunc(s.ErrorCalls, func(ec ErrorCall) bool {
+		return ec.Time.Before(now.AddDate(0, 0, -ErrorRetentionDays))
+	})
 	cutoffTime := now.AddDate(0, 0, -retentionDays)
 	cutoff := cutoffTime.Format(dateLayout)
 	for key := range s.Rows {
@@ -201,7 +209,7 @@ func (s *Store) prune(retentionDays int, now time.Time) {
 // saveAtomic writes the store to a pid-suffixed temp file in the same
 // directory, fsyncs, then renames over the target.
 func (s *Store) saveAtomic(path string) error {
-	file := storeFile{Version: StoreVersion, Rows: make([]storeRow, 0, len(s.Rows)), Recent: s.RecentCalls}
+	file := storeFile{Version: StoreVersion, Rows: make([]storeRow, 0, len(s.Rows)), Recent: s.RecentCalls, Errors: s.ErrorCalls}
 	for key, c := range s.Rows {
 		file.Rows = append(file.Rows, storeRow{
 			Date:          key.Date,

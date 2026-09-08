@@ -487,3 +487,42 @@ func TestMetricsPage_WindowLinksKeepSort(t *testing.T) {
 		t.Error("the 7d link carries no sort state")
 	}
 }
+
+func TestMetricsErrorDetails(t *testing.T) {
+	srv := newMetricsTestServer(t)
+	rec := metrics.NewRecorder(filepath.Join(filepath.Dir(srv.configPath), "metrics.json"), 60)
+	defer rec.Close()
+	for i := 0; i < 51; i++ {
+		rec.Record(metrics.CallSample{Time: time.Now(), Namespace: "work", Server: "github", Tool: "create_issue", Outcome: metrics.OutcomeToolError, ErrorResponse: "<script>alert('upstream')</script>"})
+	}
+	rec.Record(metrics.CallSample{Time: time.Now(), Namespace: "play", Server: "github", Tool: "create_issue", Outcome: metrics.OutcomeError, ErrorResponse: "other namespace diagnostic"})
+	if err := rec.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	q := metricsQuery{NS: "work", Days: 60, Sort: "errors", Dir: "desc"}
+	url := metricsErrorsURL(q, "github", "create_issue")
+	status, body := get(t, srv, url)
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	if strings.Contains(body, "<script>alert") || strings.Contains(body, "other namespace diagnostic") {
+		t.Fatal("unsafe or unfiltered response")
+	}
+	for _, want := range []string{"&lt;script&gt;", "52 recorded errors", "Older errors", "days=60", "ns=work"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	_, body = get(t, srv, url+"&page=2")
+	if !strings.Contains(body, "No response body was recorded") || !strings.Contains(body, "Newer errors") || strings.Contains(body, "Older errors") {
+		t.Fatal("incorrect second page")
+	}
+	status, _ = get(t, srv, "/metrics/errors")
+	if status != http.StatusBadRequest {
+		t.Fatalf("missing tool: %d", status)
+	}
+	_, body = get(t, srv, "/fragments/metrics/table?ns=work&days=60")
+	if !strings.Contains(body, "href=\"/metrics/errors?") || !strings.Contains(body, "tool=create_issue") {
+		t.Fatal("missing error count link")
+	}
+}

@@ -308,3 +308,24 @@ func (s *Store) CalledSet(f Filter) map[string]struct{} {
 func CalledKey(server, tool string) string {
 	return server + "\x00" + tool
 }
+
+// Errors returns retained failures, newest first, with pagination applied after
+// filtering. Expired responses are hidden even when no recorder is running.
+func (s *Store) Errors(f Filter, tool string, offset, limit int) ([]ErrorCall, int) {
+	cutoff := time.Now().AddDate(0, 0, -ErrorRetentionDays)
+	matches := make([]ErrorCall, 0)
+	for _, call := range s.ErrorCalls {
+		if call.Time.Before(cutoff) || !f.matchDate(call.Time.Format(dateLayout)) || !f.matchDims(call.Namespace, call.Server) || (tool != "" && call.Tool != tool) {
+			continue
+		}
+		matches = append(matches, call)
+	}
+	slices.SortStableFunc(matches, func(a, b ErrorCall) int { return b.Time.Compare(a.Time) })
+	total := len(matches)
+	offset = min(max(offset, 0), total)
+	end := total
+	if limit > 0 {
+		end = min(total, offset+limit)
+	}
+	return matches[offset:end], total
+}

@@ -25,6 +25,7 @@ type Recorder struct {
 	retentionDays int
 	delta         map[BucketKey]*Counters // since last successful flush
 	recent        []RecentCall            // since last successful flush, oldest first
+	errors        []ErrorCall
 	capWarned     bool
 
 	stopOnce sync.Once
@@ -88,14 +89,18 @@ func (r *Recorder) Record(s CallSample) {
 	}
 	c.addSample(ms, s.Outcome)
 
-	r.recent = append(r.recent, RecentCall{
+	call := RecentCall{
 		Time:       s.Time,
 		Namespace:  s.Namespace,
 		Server:     s.Server,
 		Tool:       s.Tool,
 		DurationMs: ms,
 		Outcome:    s.Outcome,
-	})
+	}
+	if s.Outcome.IsError() {
+		r.errors = append(r.errors, ErrorCall{RecentCall: call, Response: s.ErrorResponse})
+	}
+	r.recent = append(r.recent, call)
 	if len(r.recent) > recentCap {
 		r.recent = r.recent[len(r.recent)-recentCap:]
 	}
@@ -109,16 +114,14 @@ func (r *Recorder) Flush() error {
 		return nil
 	}
 	r.mu.Lock()
-	if len(r.delta) == 0 && len(r.recent) == 0 {
-		r.mu.Unlock()
-		return nil
-	}
-	delta, recent, retention := r.delta, r.recent, r.retentionDays
+	// Flush even without new calls so idle servers prune expired responses.
+	delta, recent, retention, errors := r.delta, r.recent, r.retentionDays, r.errors
+	r.errors = nil
 	r.delta = make(map[BucketKey]*Counters)
 	r.recent = nil
 	r.mu.Unlock()
 
-	if err := mergeAndSave(r.path, delta, recent, retention); err != nil {
+	if err := mergeAndSave(r.path, delta, recent, retention, errors...); err != nil {
 		r.mu.Lock()
 		for key, c := range delta {
 			if existing, ok := r.delta[key]; ok {
@@ -133,6 +136,7 @@ func (r *Recorder) Flush() error {
 			merged = merged[len(merged)-recentCap:]
 		}
 		r.recent = merged
+		r.errors = append(errors, r.errors...)
 		r.mu.Unlock()
 		return err
 	}
