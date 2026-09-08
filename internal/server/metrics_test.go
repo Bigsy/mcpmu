@@ -493,11 +493,11 @@ func TestMetrics_UpstreamRPCErrorData(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch req.Method {
 		case "initialize":
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"own","version":"1"}}}`, req.ID)
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"own","version":"1"}}}`, req.ID)
 		case "tools/list":
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"debug","inputSchema":{"type":"object"}}]}}`, req.ID)
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"debug","inputSchema":{"type":"object"}}]}}`, req.ID)
 		case "tools/call":
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32001,"message":"query failed","data":{"trace":"trace-123","detail":"database unavailable"}}}`, req.ID)
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32001,"message":"query failed","data":{"trace":"trace-123","detail":"database unavailable"}}}`, req.ID)
 		default:
 			w.WriteHeader(http.StatusAccepted)
 		}

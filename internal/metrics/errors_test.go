@@ -11,9 +11,9 @@ import (
 func TestErrorHistoryRetentionAndRecentIndependence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metrics.json")
 	rec := NewRecorder(path, 7)
-	defer rec.Close()
+	defer func() { _ = rec.Close() }()
 	now := time.Now()
-	for i := 0; i < 250; i++ {
+	for range 250 {
 		rec.Record(CallSample{Time: now.AddDate(0, 0, -40), Namespace: "work", Server: "own", Tool: "debug", Outcome: OutcomeToolError, ErrorResponse: "structured failure"})
 	}
 	rec.Record(CallSample{Time: now.AddDate(0, 0, -61), Server: "own", Tool: "debug", Outcome: OutcomeError, ErrorResponse: "expired response"})
@@ -70,7 +70,7 @@ func TestErrorHistoryFailedFlushAndMultipleWriters(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := NewRecorder(filepath.Join(blocked, "metrics.json"), 60)
-	defer rec.Close()
+	defer func() { _ = rec.Close() }()
 	rec.Record(CallSample{Time: time.Now(), Server: "own", Tool: "debug", Outcome: OutcomeError, ErrorResponse: "first"})
 	if err := rec.Flush(); err == nil {
 		t.Fatal("expected write failure")
@@ -82,7 +82,7 @@ func TestErrorHistoryFailedFlushAndMultipleWriters(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := NewRecorder(rec.path, 60)
-	defer other.Close()
+	defer func() { _ = other.Close() }()
 	other.Record(CallSample{Time: time.Now(), Server: "own", Tool: "debug", Outcome: OutcomeTimeout, ErrorResponse: "second"})
 	if err := other.Flush(); err != nil {
 		t.Fatal(err)

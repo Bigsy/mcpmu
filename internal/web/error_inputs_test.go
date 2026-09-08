@@ -41,7 +41,7 @@ func TestErrorInputFormSetting(t *testing.T) {
 func TestMetricsInputDisplay(t *testing.T) {
 	srv := newMetricsTestServer(t)
 	rec := metrics.NewRecorder(filepath.Join(filepath.Dir(srv.configPath), "metrics.json"), 60)
-	defer rec.Close()
+	defer func() { _ = rec.Close() }()
 	rec.Record(metrics.CallSample{Time: time.Now(), Namespace: "work", Server: "github", Tool: "create_issue", Outcome: metrics.OutcomeError, ErrorInput: json.RawMessage(`{"query":"<script>input</script>","api_key":"input-secret"}`), ErrorResponse: "diagnostic"})
 	if err := rec.Flush(); err != nil {
 		t.Fatal(err)

@@ -35,7 +35,7 @@ func TestRedactErrorInput(t *testing.T) {
 func TestRecorderInputsOnlyOnFailures(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metrics.json")
 	rec := NewRecorder(path, 60)
-	defer rec.Close()
+	defer func() { _ = rec.Close() }()
 	for _, outcome := range []Outcome{OutcomeOK, OutcomeDenied, OutcomeCancelled, OutcomeToolError, OutcomeError, OutcomeTimeout} {
 		rec.Record(CallSample{Time: time.Now(), Server: "own", Tool: string(outcome), Outcome: outcome, ErrorInput: json.RawMessage(`{"query":"debug-` + string(outcome) + `","password":"never-persist"}`)})
 	}

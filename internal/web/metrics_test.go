@@ -491,8 +491,8 @@ func TestMetricsPage_WindowLinksKeepSort(t *testing.T) {
 func TestMetricsErrorDetails(t *testing.T) {
 	srv := newMetricsTestServer(t)
 	rec := metrics.NewRecorder(filepath.Join(filepath.Dir(srv.configPath), "metrics.json"), 60)
-	defer rec.Close()
-	for i := 0; i < 51; i++ {
+	defer func() { _ = rec.Close() }()
+	for range 51 {
 		rec.Record(metrics.CallSample{Time: time.Now(), Namespace: "work", Server: "github", Tool: "create_issue", Outcome: metrics.OutcomeToolError, ErrorResponse: "<script>alert('upstream')</script>"})
 	}
 	rec.Record(metrics.CallSample{Time: time.Now(), Namespace: "play", Server: "github", Tool: "create_issue", Outcome: metrics.OutcomeError, ErrorResponse: "other namespace diagnostic"})
