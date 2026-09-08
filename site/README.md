@@ -1,7 +1,8 @@
 # mcpmu website
 
 Static product site published by `.github/workflows/pages.yml` from this directory.
-No build dependencies, analytics or external fonts. Screenshots are copied from
+No build dependencies, analytics or external fonts; Inter is self-hosted from
+`assets/fonts/` (SIL OFL, licence alongside). Screenshots are copied from
 the main project README; refresh them when the management interfaces change.
 
 Preview with `python3 -m http.server 4321 --directory site` from the repo root.
