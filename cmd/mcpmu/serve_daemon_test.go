@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Bigsy/mcpmu/internal/daemon"
+	"github.com/Bigsy/mcpmu/internal/flock"
 )
 
 const testInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}` + "\n"
@@ -76,6 +77,58 @@ func runServeProcessWithInput(t *testing.T, runtimeRoot, input string, args ...s
 	return stdout.String(), stderr.String(), err
 }
 
+// Register after the config TempDir so the daemon finishes its final writes
+// before testing removes the directory. Stop acknowledges the request, not exit.
+func cleanupServeDaemon(t *testing.T, configPath string) {
+	t.Helper()
+	t.Cleanup(func() {
+		canonical, err := daemon.CanonicalConfigPath(configPath)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		paths, err := daemon.ExistingRuntimePaths(canonical)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		lock, err := os.OpenFile(paths.RunLock, os.O_RDWR, 0)
+		if os.IsNotExist(err) {
+			return // Startup failed before a daemon acquired its lifetime lock.
+		}
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = lock.Close() }()
+		if flock.TryLock(lock) == nil {
+			return // The daemon has already completed shutdown.
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := daemon.Stop(ctx, configPath); err != nil {
+			t.Errorf("stop test daemon: %v", err)
+			return
+		}
+		// Run releases this lock after closing the core (including metrics),
+		// removing its PID file and closing its listener. Socket disappearance
+		// alone is insufficient: requestStop closes the listener before draining.
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if err := flock.TryLock(lock); err == nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				t.Errorf("test daemon did not finish shutdown: %v", ctx.Err())
+				return
+			case <-ticker.C:
+			}
+		}
+	})
+}
+
 func TestServeDaemonModeSharesUpstreamAcrossTenConcurrentSessions(t *testing.T) {
 	runtimeRoot, err := os.MkdirTemp("/tmp", "mu-share-")
 	if err != nil {
@@ -121,11 +174,7 @@ done
 	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_, _ = daemon.Stop(ctx, configPath)
-	})
+	cleanupServeDaemon(t, configPath)
 
 	type result struct {
 		session        int
@@ -178,11 +227,7 @@ func TestServeRecoversAfterDaemonCrash(t *testing.T) {
 	}
 	t.Setenv("XDG_RUNTIME_DIR", runtimeRoot)
 	configPath := writeServeConfig(t, true)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_, _ = daemon.Stop(ctx, configPath)
-	})
+	cleanupServeDaemon(t, configPath)
 
 	stdinReader, stdinWriter := io.Pipe()
 	command := exec.Command(testBinary, "serve", "--config", configPath)
@@ -286,11 +331,7 @@ func TestServeDefaultDaemonModeAutoSpawnsDetachedShim(t *testing.T) {
 	}
 	t.Setenv("XDG_RUNTIME_DIR", runtimeRoot)
 	configPath := writeDefaultServeConfig(t)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_, _ = daemon.Stop(ctx, configPath)
-	})
+	cleanupServeDaemon(t, configPath)
 
 	stdout, stderr, err := runServeProcess(t, runtimeRoot, "serve", "--config", configPath)
 	if err != nil {
@@ -404,11 +445,7 @@ func TestServeAbsentConfigWithAbsentParent(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeRoot) })
 	t.Setenv("XDG_RUNTIME_DIR", runtimeRoot)
 	missing := filepath.Join(t.TempDir(), "not-created", "config.json")
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_, _ = daemon.Stop(ctx, missing)
-	})
+	cleanupServeDaemon(t, missing)
 
 	stdout, stderr, err := runServeProcess(t, runtimeRoot, "serve", "--config", missing)
 	if err != nil {
