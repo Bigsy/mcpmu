@@ -16,6 +16,7 @@
          id="server-table"
          hx-get="/fragments/servers/table"
          hx-trigger="every 5s"
+         hx-on::before-request="if (event.detail.elt === this &amp;&amp; this.querySelector('details[open]')) event.preventDefault()"
          hx-swap="innerHTML">
       {{template "server_table" .}}
     </div>

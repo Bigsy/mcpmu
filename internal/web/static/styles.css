@@ -128,6 +128,7 @@ code, .mono {
 .shell {
   display: grid;
   grid-template-rows: auto 1fr;
+  grid-template-columns: minmax(0, 1fr);
   min-height: 100vh;
 }
 
@@ -197,7 +198,7 @@ code, .mono {
   gap: 12px;
 }
 
-.main { padding: 24px; max-width: 1680px; margin: 0 auto; width: 100%; }
+.main { min-width: 0; padding: 24px; max-width: 1680px; margin: 0 auto; width: 100%; }
 
 [data-preserve-scroll] {
   overflow-anchor: none;
@@ -777,7 +778,7 @@ textarea { min-height: 80px; resize: vertical; }
 /* ── Detail sections ── */
 .detail-grid {
   display: grid;
-  grid-template-columns: 140px 1fr;
+  grid-template-columns: 140px minmax(0, 1fr);
   gap: 8px 16px;
   font-size: 13px;
 }
@@ -787,7 +788,7 @@ textarea { min-height: 80px; resize: vertical; }
   font-weight: 500;
 }
 
-.detail-value { color: var(--text); }
+.detail-value { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
 .detail-value.mono {
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
@@ -868,7 +869,7 @@ textarea { min-height: 80px; resize: vertical; }
 /* ── Two-column detail layout ── */
 .detail-layout {
   display: grid;
-  grid-template-columns: 1fr 380px;
+  grid-template-columns: minmax(0, 1fr) 380px;
   gap: 24px;
 }
 
@@ -1031,3 +1032,49 @@ textarea { min-height: 80px; resize: vertical; }
 .pill-outcome-denied  { background: var(--bg-hover); color: var(--text-faint); }
 /* cancelled is a caller hanging up, not a failure — neutral, like denied. */
 .pill-outcome-cancelled { background: var(--bg-hover); color: var(--text-faint); }
+
+/* Keep long configuration values from determining the page or table width. */
+.topbar { min-width: 0; }
+.topbar-right { min-width: 0; }
+.topbar-right > .btn, .topbar-logo, .topbar nav { flex-shrink: 0; }
+.config-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.servers-table { table-layout: fixed; }
+.servers-table .server-dot { width: 36px; }
+.servers-table .server-status { width: 120px; }
+.servers-table .server-type { width: 80px; }
+.servers-table .server-tools { width: 70px; }
+.servers-table .server-uptime { width: 90px; }
+.servers-table .server-namespaces { width: 140px; }
+.servers-table .td-actions { width: 260px; }
+.servers-table .td-name > a { display: block; overflow-wrap: anywhere; }
+.servers-table .badge-ns { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.server-actions { display: none; }
+.server-actions-desktop .btn-group { justify-content: flex-end; }
+
+@media (max-width: 1200px) {
+  .servers-table .td-actions { width: 110px; }
+  .server-actions-desktop { display: none; }
+  .server-actions { display: block; }
+  .server-actions > summary { display: inline-flex; }
+  .server-actions:not([open]) > .btn-group { display: none; }
+  .server-actions[open] > .btn-group { flex-direction: column; margin-top: 8px; }
+  .server-actions .btn { justify-content: center; }
+  .servers-table th:nth-child(6), .servers-table td:nth-child(6),
+  .servers-table th:nth-child(7), .servers-table td:nth-child(7) { display: none; }
+}
+
+@media (max-width: 700px) {
+  .main { padding: 16px; }
+  .topbar { height: auto; min-height: 52px; flex-wrap: wrap; padding: 12px 16px; }
+  .topbar nav { order: 3; flex-basis: 100%; }
+  .topbar-nav { flex-wrap: wrap; }
+  .topbar-right { margin-left: auto; }
+  .config-path { display: none; }
+  .servers-table th, .servers-table td { padding: 10px 8px; }
+  .servers-table .server-dot { width: 24px; }
+  .servers-table .server-status { width: 105px; }
+  .servers-table .td-actions { width: 85px; }
+  .servers-table th:nth-child(4), .servers-table td:nth-child(4),
+  .servers-table th:nth-child(5), .servers-table td:nth-child(5) { display: none; }
+}

@@ -1,15 +1,15 @@
 {{define "server_table"}}
 {{if .Servers}}
-<table>
+<table class="servers-table">
   <thead>
     <tr>
-      <th style="width: 24px"></th>
+      <th class="server-dot"></th>
       <th>Name</th>
-      <th>Status</th>
-      <th>Type</th>
-      <th>Tools</th>
-      <th>Uptime</th>
-      <th>Namespaces</th>
+      <th class="server-status">Status</th>
+      <th class="server-type">Type</th>
+      <th class="server-tools">Tools</th>
+      <th class="server-uptime">Uptime</th>
+      <th class="server-namespaces">Namespaces</th>
       <th class="td-actions">Actions</th>
     </tr>
   </thead>
@@ -19,7 +19,7 @@
       <td><span class="dot {{stateDot .Status.State}}"></span></td>
       <td class="td-name">
         <a href="/servers/{{.Name}}">{{.Name}}</a>
-        <span class="sub mono">{{serverCommand .Config}}</span>
+        <span class="sub mono truncate">{{serverCommand .Config}}</span>
       </td>
       <td>
         {{if not .Config.IsEnabled}}
@@ -55,6 +55,27 @@
         {{end}}
       </td>
       <td class="td-actions">
+        <div class="server-actions-desktop">{{template "server_row_actions" .}}</div>
+        <details class="server-actions">
+          <summary class="btn btn-sm" aria-label="Actions for {{.Name}}">Actions</summary>
+          {{template "server_row_actions" .}}
+        </details>
+      </td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="empty">
+  <div class="empty-icon">&#9881;</div>
+  <h3>No servers configured</h3>
+  <p>Add a server to get started.</p>
+  <a href="/servers/add" class="btn btn-primary">+ Add Server</a>
+</div>
+{{end}}
+{{end}}
+
+{{define "server_row_actions"}}
         <div class="btn-group">
           {{if .Config.IsEnabled}}
             {{if isRunning .Status.State}}
@@ -87,17 +108,4 @@
                   hx-confirm="Delete server '{{.Name}}'? This cannot be undone."
                   hx-swap="none">Del</button>
         </div>
-      </td>
-    </tr>
-    {{end}}
-  </tbody>
-</table>
-{{else}}
-<div class="empty">
-  <div class="empty-icon">&#9881;</div>
-  <h3>No servers configured</h3>
-  <p>Add a server to get started.</p>
-  <a href="/servers/add" class="btn btn-primary">+ Add Server</a>
-</div>
-{{end}}
 {{end}}

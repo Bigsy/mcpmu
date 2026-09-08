@@ -141,7 +141,7 @@
       </ul>
     </nav>
     <div class="topbar-right">
-      <span class="text-xs text-faint">config: {{.ConfigPath}}</span>
+      <span class="text-xs text-faint config-path" title="{{.ConfigPath}}">config: {{.ConfigPath}}</span>
       <a href="/api/config/export" class="btn btn-sm" title="Export config" download>Export</a>
       <a href="/config/import" class="btn btn-sm" title="Import config">Import</a>
       {{if authEnabled}}<form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-sm" title="Sign out">Logout</button></form>{{end}}
