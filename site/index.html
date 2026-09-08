@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mcpmu — One MCP config. Every agent.</title>
+  <meta name="description" content="Configure MCP servers once and share them across your agents. Save context with on-demand tool schemas and enforce tool permissions at the gateway. Free and open source.">
+  <link rel="canonical" href="https://mcpmu.bigsy.uk/">
+  <meta name="theme-color" content="#111313">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="wrap nav"><a class="brand" href="#" aria-label="mcpmu home">mcp<span>μ</span></a><nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#compression">Compression</a><a href="#permissions">Permissions</a><a class="github" href="https://github.com/Bigsy/mcpmu">GitHub ↗</a></nav></header>
+<main id="main">
+<section class="hero wrap">
+  <div class="eyebrow"><span class="dot"></span> FREE &amp; OPEN SOURCE · MIT LICENSE</div>
+  <h1>One MCP config.<br><span>Every agent.</span></h1>
+  <p class="intro">Your tools, shared across Claude Code, Codex, Cursor and beyond. Configure once. Load less context. Decide exactly what each agent can do.</p>
+  <div class="actions"><a class="button" href="#install">Get mcpmu <span>↓</span></a><a class="text-link" href="https://github.com/Bigsy/mcpmu#readme">Read the docs ↗</a></div>
+  <div class="gateway" aria-label="Claude Code, Codex, Cursor and other MCP clients connect through one mcpmu configuration to shared MCP servers. mcpmu applies namespaces, compression and permissions.">
+    <div class="flow-label">YOUR AGENTS</div><div class="clients"><span>Claude Code</span><span>Codex</span><span>Cursor</span><span>Any MCP client</span></div>
+    <div class="connector"></div><div class="hub"><div class="hub-brand">mcp<span>μ</span></div><div class="hub-caption">ONE SHARED CONFIG</div><div class="hub-features"><span>Namespaces</span><span>Compression</span><span>Permissions</span></div></div>
+    <div class="connector lower"></div><div class="servers"><span>Documentation</span><span>Filesystem</span><span>GitHub</span><span>Your servers</span></div><div class="flow-label bottom">LOCAL STDIO + REMOTE HTTP</div>
+  </div>
+  <div class="hero-foot"><span>Runs on your machine</span><span>Terminal + web UI</span><span>No subscription</span></div>
+</section>
+<section class="section wrap" id="how-it-works">
+  <div class="section-top"><span class="number">01 / SHARE</span><span class="kicker">Stop maintaining the same setup everywhere.</span></div>
+  <div class="split"><div><h2>Configure your servers.<br>Connect your agents.</h2><p>Add a server to mcpmu once. Point each agent at the gateway and share the same server definitions, authentication and tool rules.</p><p>Keep work, personal and project tools in separate namespaces. Each agent gets the right view of the same configuration.</p><a class="text-link" href="https://github.com/Bigsy/mcpmu#give-each-agent-the-right-tools">Explore namespaces ↗</a></div>
+  <div class="code-panel"><div class="panel-heading"><span>ONE SETUP. MULTIPLE CLIENTS.</span><span class="mini-mark">μ</span></div><pre><code><span class="comment"># Add your server once</span>
+mcpmu add context7 -- npx -y @upstash/context7-mcp
+
+<span class="comment"># Connect Claude Code</span>
+claude mcp add mcpmu -- mcpmu serve --stdio
+
+<span class="comment"># Connect Codex to the same setup</span>
+codex mcp add mcpmu -- mcpmu serve --stdio</code></pre><div class="panel-note">Use stdio locally, or a persistent Streamable HTTP endpoint.</div></div></div>
+</section>
+<section class="section compression" id="compression"><div class="wrap">
+  <div class="section-top"><span class="number">02 / COMPRESS</span><span class="kicker">More room for the work that matters.</span></div>
+  <div class="split"><div><h2>Your context is precious.<br><span>Spend it on the task.</span></h2><p>A large tool catalog can fill your context with schemas before an agent starts working. mcpmu replaces that upfront payload with three wrapper tools and a compact catalog.</p><p>Your agent discovers what’s available, fetches full schemas when needed, and calls the underlying tools. You choose how much detail the catalog includes.</p></div><div class="schema-panel"><div class="schema-before"><span class="small-label">FULL TOOL SURFACE</span><div class="schema-lines" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><p>Every tool. Every schema. Up front.</p></div><div class="schema-after"><span class="small-label">WITH MCPMU COMPRESSION</span><code>list_tools</code><code>get_tool_schema</code><code>invoke_tool</code><p>Compact catalog. Full schemas on demand.</p></div></div></div>
+  <div class="levels"><div><b>low</b><span>Full descriptions</span></div><div class="recommended"><b>medium <em>START HERE</em></b><span>First sentence</span></div><div><b>high</b><span>Names + arguments</span></div><div><b>max</b><span>Tool names only</span></div></div>
+  <div class="command"><code>mcpmu namespace set-compression work medium</code><button type="button" data-copy="mcpmu namespace set-compression work medium" aria-label="Copy compression command">Copy</button></div>
+  <p class="fine">Opt-in, per namespace. Actual context savings depend on your tool catalog and compression level. <a href="https://github.com/Bigsy/mcpmu/blob/main/docs/compression.md">How compression works ↗</a></p>
+</div></section>
+<section class="section wrap" id="permissions">
+  <div class="section-top"><span class="number">03 / CONTROL</span><span class="kicker">A shared config doesn’t mean shared access.</span></div>
+  <div class="split"><div><h2>The right tools.<br>For the right agent.</h2><p>Give a research agent read access. Allow a development agent to make changes. Block a dangerous tool across every namespace.</p><p>mcpmu enforces permissions at the gateway, including calls through compression. Denied tools stay out of discovery and their calls are blocked before dispatch.</p><a class="text-link" href="https://github.com/Bigsy/mcpmu/blob/main/docs/permissions.md">Understand tool permissions ↗</a></div><div class="permission-panel"><div class="panel-heading">EXAMPLE ACCESS POLICY</div><table><caption class="sr-only">Example permissions for research and development namespaces</caption><thead><tr><th scope="col">Tool</th><th scope="col">Research</th><th scope="col">Development</th></tr></thead><tbody><tr><th scope="row">read_file</th><td class="allow">✓ Allow</td><td class="allow">✓ Allow</td></tr><tr><th scope="row">write_file</th><td class="deny">− Deny</td><td class="allow">✓ Allow</td></tr><tr><th scope="row">delete_file</th><td class="deny">− Deny</td><td class="deny">− Deny</td></tr></tbody></table><div class="panel-note"><span class="orange">●</span> Global deny rules always take precedence.</div></div></div>
+  <p class="permission-note">With compression enabled, clients see wrapper tools. Set permissions for the underlying tools in mcpmu.</p>
+</section>
+<section class="section wrap interface"><div class="section-top"><span class="number">BUILT FOR YOUR WORKFLOW</span></div><h2>See what you’re sharing.</h2><p>Manage servers, namespaces and permissions in your terminal or browser.</p><div class="screens"><figure><a href="assets/web-servers.png"><img src="assets/web-servers.png" alt="mcpmu web interface showing configured servers and management controls" loading="lazy" width="934" height="626"></a><figcaption><span>Browser UI</span><code>mcpmu web</code></figcaption></figure><figure><a href="assets/terminal-permissions.png"><img src="assets/terminal-permissions.png" alt="mcpmu terminal interface with the namespace tool permissions editor" loading="lazy" width="932" height="716"></a><figcaption><span>Terminal UI</span><code>mcpmu</code></figcaption></figure></div></section>
+<section class="install section" id="install"><div class="wrap install-inner"><div><div class="eyebrow">YOUR TOOLS. YOUR CONFIG. YOUR RULES.</div><h2>One small gateway.<br>A better MCP setup.</h2><p>Free and open source. No account or subscription required.</p><a class="text-link" href="https://github.com/Bigsy/mcpmu">View source on GitHub ↗</a></div><div><div class="panel-heading">INSTALL WITH HOMEBREW · MACOS / LINUX</div><div class="command install-command"><pre><code>brew tap Bigsy/tap
+brew install mcpmu</code></pre><button type="button" data-copy="brew tap Bigsy/tap&#10;brew install mcpmu" aria-label="Copy Homebrew installation commands">Copy</button></div><div class="install-links"><a href="https://github.com/Bigsy/mcpmu/releases">Download a release ↗</a><a href="https://github.com/Bigsy/mcpmu#quick-start">Quick start ↗</a></div></div></div></section>
+</main>
+<footer class="wrap"><a class="brand" href="#">mcp<span>μ</span></a><p>Made by <a href="https://github.com/Bigsy">Bill Hedworth</a> · <a href="https://github.com/Bigsy/mcpmu/blob/main/LICENSE">MIT License</a></p><a href="https://github.com/Bigsy/mcpmu/issues">Feedback ↗</a></footer>
+<div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+</body>
+</html>

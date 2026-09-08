@@ -51,6 +51,8 @@ other MCP clients can share the same servers without duplicating configuration.
   </tr>
 </table>
 
+[Website](https://mcpmu.bigsy.uk) · Free and open source under the MIT license.
+
 ## Installation
 
 ### Homebrew (macOS/Linux)

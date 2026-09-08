@@ -892,3 +892,12 @@ both transports; an omitted flag leaves `Shared` unset (shared by default).
 The TUI server form sizes huh's scrolling groups to the terminal's available
 height, reserving space for the overlay border and padding. Resizing updates
 the existing form without rebuilding fields or losing edits.
+
+## Product website
+
+The public product website lives in `site/` as static HTML, CSS and JavaScript.
+It describes shared configuration, tool-surface compression and gateway
+permissions, with screenshots sourced from the project README. It runs
+independently of the Go management web UI and has no backend or build dependencies.
+The `pages.yml` workflow publishes only `site/` to GitHub Pages when website
+files change on `main`; the custom domain is `mcpmu.bigsy.uk`.
