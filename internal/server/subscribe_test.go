@@ -24,7 +24,7 @@ type subscribeTestServer struct {
 	srv     *Session
 	pw      *io.PipeWriter
 	pr      *io.PipeReader
-	stdout  *bytes.Buffer
+	stdout  *lockedBuffer
 	runDone chan struct{}
 	cancel  context.CancelFunc
 }
@@ -39,6 +39,22 @@ func (h *subscribeTestServer) write(frames ...string) {
 }
 
 func (h *subscribeTestServer) settle(d time.Duration) { time.Sleep(d) }
+
+// Dependent reads and subscriptions must wait for the asynchronous catalog
+// response, just as an MCP client waits before using its returned URIs.
+func (h *subscribeTestServer) waitResponse(t *testing.T, id string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, ok := responsesByID(t, h.stdout.String())[id]; ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for response %s: %s", id, h.stdout.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
 
 func (h *subscribeTestServer) close(t *testing.T) {
 	t.Helper()
@@ -55,7 +71,7 @@ func (h *subscribeTestServer) close(t *testing.T) {
 func startSubscribeTestServer(t *testing.T, opts Options) *subscribeTestServer {
 	t.Helper()
 	pr, pw := io.Pipe()
-	var stdout bytes.Buffer
+	var stdout lockedBuffer
 
 	opts.Stdin = pr
 	opts.Stdout = &stdout
@@ -76,6 +92,11 @@ func startSubscribeTestServer(t *testing.T, opts Options) *subscribeTestServer {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		_ = pw.Close()
+		_ = pr.Close()
+	})
 	runDone := make(chan struct{})
 	go func() {
 		defer close(runDone)
@@ -228,6 +249,9 @@ func TestServer_ResourcesSubscribe_HappyPath(t *testing.T) {
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
+	)
+	h.waitResponse(t, "2")
+	h.write(
 		`{"jsonrpc":"2.0","id":3,"method":"resources/subscribe","params":{"uri":"file:///a.txt"}}`,
 	)
 	h.settle(500 * time.Millisecond)
@@ -347,6 +371,9 @@ func TestServer_ResourcesSubscribe_UpstreamWithoutCapability(t *testing.T) {
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
+	)
+	h.waitResponse(t, "2")
+	h.write(
 		`{"jsonrpc":"2.0","id":3,"method":"resources/subscribe","params":{"uri":"file:///a.txt"}}`,
 	)
 	h.settle(300 * time.Millisecond)
@@ -398,6 +425,9 @@ func TestServer_ResourcesSubscribe_MixedCapability(t *testing.T) {
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
+	)
+	h.waitResponse(t, "2")
+	h.write(
 		`{"jsonrpc":"2.0","id":3,"method":"resources/subscribe","params":{"uri":"file:///good.txt"}}`,
 		`{"jsonrpc":"2.0","id":4,"method":"resources/subscribe","params":{"uri":"file:///bad.txt"}}`,
 	)
@@ -504,6 +534,9 @@ func TestServer_ResourcesSubscribe_PostUnsubscribeUpdateDropped(t *testing.T) {
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
+	)
+	h.waitResponse(t, "2")
+	h.write(
 		`{"jsonrpc":"2.0","id":3,"method":"resources/subscribe","params":{"uri":"file:///a.txt"}}`,
 		`{"jsonrpc":"2.0","id":4,"method":"resources/unsubscribe","params":{"uri":"file:///a.txt"}}`,
 	)
@@ -549,6 +582,9 @@ func TestServer_ResourcesSubscribe_ReloadClearsSubs(t *testing.T) {
 	h.write(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
+	)
+	h.waitResponse(t, "2")
+	h.write(
 		`{"jsonrpc":"2.0","id":3,"method":"resources/subscribe","params":{"uri":"file:///a.txt"}}`,
 	)
 	h.settle(300 * time.Millisecond)

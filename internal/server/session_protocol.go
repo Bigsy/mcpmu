@@ -106,7 +106,8 @@ func (s *Session) Run(ctx context.Context) error {
 func isUpstreamMethod(method string) bool {
 	switch method {
 	case "tools/call", "resources/read", "prompts/get",
-		"resources/subscribe", "resources/unsubscribe":
+		"resources/subscribe", "resources/unsubscribe",
+		"resources/list", "prompts/list":
 		return true
 	}
 	return false

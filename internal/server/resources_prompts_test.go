@@ -588,33 +588,17 @@ func TestServer_ResourcesList_EndToEnd(t *testing.T) {
 		},
 	}
 
-	var stdout bytes.Buffer
-	stdin := strings.NewReader(
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}` + "\n" +
-			`{"jsonrpc":"2.0","id":2,"method":"resources/list"}` + "\n" +
-			`{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"file:///readme.md"}}` + "\n" +
-			`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"exa://tools/list"}}` + "\n",
-	)
-
-	srv, err := New(Options{
-		SessionOptions: SessionOptions{
-			ExposeResources: true,
-		},
-		Config:        cfg,
-		PIDTrackerDir: t.TempDir(),
-		Stdin:         stdin,
-		Stdout:        &stdout,
-		ServerName:    "mcpmu-test",
-		ServerVersion: "1.0.0",
-		LogLevel:      "error",
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	_ = srv.Run(ctx)
+	h := startSubscribeTestServer(t, Options{SessionOptions: SessionOptions{ExposeResources: true}, Config: cfg})
+	h.write(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`)
+	h.waitResponse(t, "1")
+	h.write(`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`)
+	h.waitResponse(t, "2")
+	h.write(`{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"file:///readme.md"}}`)
+	h.waitResponse(t, "3")
+	h.write(`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"exa://tools/list"}}`)
+	h.waitResponse(t, "4")
+	h.close(t)
+	stdout := h.stdout
 
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	if len(lines) < 4 {
@@ -759,33 +743,17 @@ func TestServer_PromptsList_EndToEnd(t *testing.T) {
 		},
 	}
 
-	var stdout bytes.Buffer
-	stdin := strings.NewReader(
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}` + "\n" +
-			`{"jsonrpc":"2.0","id":2,"method":"prompts/list"}` + "\n" +
-			`{"jsonrpc":"2.0","id":3,"method":"prompts/get","params":{"name":"srv1.summarize","arguments":{"text":"hello"}}}` + "\n" +
-			`{"jsonrpc":"2.0","id":4,"method":"prompts/get","params":{"name":"srv2.greet"}}` + "\n",
-	)
-
-	srv, err := New(Options{
-		SessionOptions: SessionOptions{
-			ExposePrompts: true,
-		},
-		Config:        cfg,
-		PIDTrackerDir: t.TempDir(),
-		Stdin:         stdin,
-		Stdout:        &stdout,
-		ServerName:    "mcpmu-test",
-		ServerVersion: "1.0.0",
-		LogLevel:      "error",
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	_ = srv.Run(ctx)
+	h := startSubscribeTestServer(t, Options{SessionOptions: SessionOptions{ExposePrompts: true}, Config: cfg})
+	h.write(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}`)
+	h.waitResponse(t, "1")
+	h.write(`{"jsonrpc":"2.0","id":2,"method":"prompts/list"}`)
+	h.waitResponse(t, "2")
+	h.write(`{"jsonrpc":"2.0","id":3,"method":"prompts/get","params":{"name":"srv1.summarize","arguments":{"text":"hello"}}}`)
+	h.waitResponse(t, "3")
+	h.write(`{"jsonrpc":"2.0","id":4,"method":"prompts/get","params":{"name":"srv2.greet"}}`)
+	h.waitResponse(t, "4")
+	h.close(t)
+	stdout := h.stdout
 
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	if len(lines) < 4 {
