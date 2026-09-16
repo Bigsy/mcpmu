@@ -795,7 +795,7 @@ func TestServer_PromptsList_EndToEnd(t *testing.T) {
 			continue
 		}
 		// Description should be prefixed with [serverName]
-		serverName := strings.SplitN(expected, ".", 2)[0]
+		serverName, _, _ := strings.Cut(expected, ".")
 		if !strings.HasPrefix(desc, "["+serverName+"]") {
 			t.Errorf("Expected description to start with [%s], got: %q", serverName, desc)
 		}

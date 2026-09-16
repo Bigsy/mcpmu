@@ -61,8 +61,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	_ = rc.SetReadDeadline(time.Time{})
 	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}

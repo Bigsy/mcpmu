@@ -124,8 +124,7 @@ func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, generation ui
 
 	if err := client.Initialize(initCtx); err != nil {
 		// Check if it's an auth error - we can handle this gracefully
-		var unauthErr *mcp.UnauthorizedError
-		if errors.As(err, &unauthErr) {
+		if unauthErr, ok := errors.AsType[*mcp.UnauthorizedError](err); ok {
 			log.Printf("Server %s returned 401, checking for OAuth support", name)
 
 			// Try to discover OAuth via the challenge

@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -331,7 +332,7 @@ func truncateString(s string, maxLen int) string {
 	}
 	// Truncate rune by rune until we fit
 	runes := []rune(s)
-	for i := len(runes) - 1; i >= 0; i-- {
+	for i := range slices.Backward(runes) {
 		truncated := string(runes[:i]) + "…"
 		if lipgloss.Width(truncated) <= maxLen {
 			return truncated

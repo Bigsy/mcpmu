@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -69,8 +70,8 @@ func CanonicalConfigPath(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve config path ancestor %q: %w", ancestor, err)
 	}
-	for i := len(suffix) - 1; i >= 0; i-- {
-		resolved = filepath.Join(resolved, suffix[i])
+	for _, s := range slices.Backward(suffix) {
+		resolved = filepath.Join(resolved, s)
 	}
 	return filepath.Clean(resolved), nil
 }
