@@ -126,6 +126,16 @@ func (h *Handle) Capabilities() mcp.ServerCapabilities {
 	return client.Capabilities()
 }
 
+// Instructions returns the upstream server's initialize `instructions`, or the
+// empty string if it sent none or the handle has no client yet.
+func (h *Handle) Instructions() string {
+	client := h.Client()
+	if client == nil {
+		return ""
+	}
+	return client.Instructions()
+}
+
 // Tools returns the discovered tools.
 func (h *Handle) Tools() []mcp.Tool {
 	h.toolsMu.RLock()

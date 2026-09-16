@@ -244,7 +244,9 @@ Global settings such as metrics and OAuth still use a full reload.
 - Share upstream processes across concurrent stdio clients while allowing
   private instances per server.
 - Negotiate MCP protocol revisions through 2025-11-25 and relay cancellation
-  and progress in both directions.
+  and progress in both directions. Upstream pings are answered, other
+  server-to-client requests get a clean method-not-found error, and the
+  `instructions` of running upstreams are surfaced in the initialize result.
 
 ## Documentation
 

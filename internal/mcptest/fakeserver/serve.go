@@ -141,6 +141,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				ProtocolVersion: negotiatedVersion(cfg, req.Params),
 				ServerInfo:      ServerInfo{Name: "fake-server", Version: "1.0.0"},
 				Capabilities:    caps,
+				Instructions:    cfg.Instructions,
 			}, cfg)
 
 		case "tools/list":

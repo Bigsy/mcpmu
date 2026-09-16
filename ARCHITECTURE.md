@@ -650,6 +650,38 @@ Only `annotations` is interpreted rather than merely carried: `readOnlyHint` and
 name-substring heuristic. The heuristic remains as the fallback for servers that
 declare nothing.
 
+### Server-to-client requests and `instructions`
+
+`mcpmu` declares no client capabilities upstream, so a well-behaved upstream
+never sends `sampling/createMessage`, `elicitation/create` or `roots/list`;
+those features are simply unavailable through the proxy. A request an upstream
+sends anyway is answered, never dropped (`Client.answerServerRequest`): `ping`
+gets an empty result — a server that pings its client for liveness would
+otherwise declare the connection dead — and any other method gets JSON-RPC
+`-32601` so the server fails the operation cleanly instead of waiting on its
+own timeout. The reply is written from its own goroutine because the dispatch
+runs on the transport's single reader, and a blocked write there would stall
+every response behind it.
+
+Relaying these requests downstream is deliberately not attempted yet. A shared
+upstream instance serves several sessions, and JSON-RPC carries nothing that
+ties a server-to-client request back to the `tools/call` that provoked it, so
+routing would be a guess; roots are per-client and cannot be reconciled for a
+shared instance at all. The unambiguous cases — `shared: false`, or exactly one
+in-flight caller on the instance — are where a relay would start.
+
+`instructions` from each upstream's initialize result are retained on the
+client (`Client.Instructions`) and composed into the downstream initialize
+result by `Session.aggregateInstructions`: a one-line preamble, then one
+`## server` section per upstream that returned a non-empty string, in namespace
+order, headed by the same name that prefixes its qualified tool names. Only
+shared upstreams already running at initialize contribute, because initialize
+is non-blocking and starts nothing: a cold first session sees none, later
+daemon sessions see whatever earlier ones started, and `--eager` converges
+quickly. The spec has no notification for a changed instructions string, so the
+snapshot is not refreshed. Persisting instructions in `toolcache.json` alongside
+tools would close the cold-start gap.
+
 ## Request Lifecycle: Cancellation and Progress
 
 Both are tracked per **Session**, keyed so that several sessions sharing one

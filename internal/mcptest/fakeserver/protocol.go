@@ -16,6 +16,8 @@ type Config struct {
 	// ProtocolVersion pins the revision reported from initialize. Empty echoes
 	// whatever the client requested.
 	ProtocolVersion string `json:"protocolVersion,omitempty"`
+	// Instructions is returned verbatim in the initialize result when set.
+	Instructions string `json:"instructions,omitempty"`
 
 	// Tools to return from tools/list
 	Tools []Tool `json:"tools"`
@@ -202,6 +204,7 @@ type InitializeResult struct {
 	ProtocolVersion string       `json:"protocolVersion"`
 	ServerInfo      ServerInfo   `json:"serverInfo"`
 	Capabilities    Capabilities `json:"capabilities"`
+	Instructions    string       `json:"instructions,omitempty"`
 }
 
 // ServerInfo describes the server.

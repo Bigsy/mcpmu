@@ -21,6 +21,15 @@ const (
 	// that follows an abandoned request. The request's own context is already
 	// done by then, so this needs a deadline of its own.
 	cancelNotifyTimeout = 5 * time.Second
+	// serverReplyTimeout bounds the answer to a server-to-client request. The
+	// reply is sent off the reader goroutine so a slow or wedged write can
+	// never stall frame demultiplexing, and it needs a deadline of its own
+	// because no downstream request is waiting on it.
+	serverReplyTimeout = 5 * time.Second
+
+	// rpcCodeMethodNotFound is the JSON-RPC 2.0 "Method not found" code, the
+	// answer to every server-to-client request mcpmu does not implement.
+	rpcCodeMethodNotFound = -32601
 )
 
 // NotificationHandler is invoked for each JSON-RPC notification received from
@@ -69,6 +78,7 @@ type negotiated struct {
 	serverVersion   string
 	protocolVersion string
 	capabilities    ServerCapabilities
+	instructions    string
 }
 
 // rpcRequest is a JSON-RPC 2.0 request.
@@ -84,6 +94,16 @@ type rpcResponse struct {
 	ID     int64
 	Result json.RawMessage
 	Error  *rpcError
+}
+
+// rpcReply is an outgoing JSON-RPC 2.0 response to a server-to-client
+// request. The id is echoed as raw bytes because the server chose it and may
+// have used a string.
+type rpcReply struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 // rpcError is a JSON-RPC 2.0 error.
@@ -128,6 +148,9 @@ type initializeResult struct {
 	ProtocolVersion string             `json:"protocolVersion"`
 	Capabilities    ServerCapabilities `json:"capabilities"`
 	ServerInfo      serverInfo         `json:"serverInfo"`
+	// Instructions is the server's optional guidance to the model on how to
+	// use it. Serve mode surfaces it downstream; see Session.aggregateInstructions.
+	Instructions string `json:"instructions,omitempty"`
 }
 
 type serverInfo struct {
@@ -234,10 +257,7 @@ func (c *Client) readLoop() {
 			}
 
 		case hasID && hasMethod:
-			if DebugLogging {
-				log.Printf("MCP Recv: server->client request dropped: method=%s id=%s",
-					*env.Method, string(*env.ID))
-			}
+			c.answerServerRequest(*env.ID, *env.Method)
 
 		default:
 			if DebugLogging {
@@ -282,6 +302,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 			serverVersion:   result.ServerInfo.Version,
 			protocolVersion: version,
 			capabilities:    result.Capabilities,
+			instructions:    result.Instructions,
 		})
 
 		// Send initialized notification
@@ -306,12 +327,10 @@ func isProtocolVersionError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var pve *ProtocolVersionError
-	if errors.As(err, &pve) {
+	if _, ok := errors.AsType[*ProtocolVersionError](err); ok {
 		return true
 	}
-	var rpcErr *rpcError
-	if errors.As(err, &rpcErr) {
+	if rpcErr, ok := errors.AsType[*rpcError](err); ok {
 		return mentionsVersion(rpcErr.Message) || strings.Contains(rpcErr.Message, "protocol")
 	}
 	errStr := err.Error()
@@ -413,6 +432,69 @@ func (c *Client) ServerInfo() (name, version string) {
 		return n.serverName, n.serverVersion
 	}
 	return "", ""
+}
+
+// Instructions returns the server's `instructions` from initialize, or the
+// empty string if it sent none or Initialize has not completed.
+func (c *Client) Instructions() string {
+	if n := c.negotiated.Load(); n != nil {
+		return n.instructions
+	}
+	return ""
+}
+
+// answerServerRequest replies to a request the server sent to mcpmu.
+//
+// mcpmu declares no client capabilities upstream, so a well-behaved server
+// never asks for sampling, elicitation or roots. `ping`, however, needs no
+// capability, and a server that pings its client as a liveness check would
+// otherwise conclude the connection is dead. Everything else is answered with
+// "Method not found" rather than silence: a JSON-RPC request that never gets a
+// response leaves the server blocked until its own timeout, and an explicit
+// error is what lets it fail the operation cleanly instead.
+//
+// The reply is sent from its own goroutine. This runs on the reader goroutine,
+// and a transport write may block (a full stdin pipe, an HTTP POST round
+// trip); blocking here would stop every response and notification behind it.
+func (c *Client) answerServerRequest(id json.RawMessage, method string) {
+	reply := rpcReply{JSONRPC: "2.0", ID: append(json.RawMessage(nil), id...)}
+	if method == "ping" {
+		reply.Result = json.RawMessage(`{}`)
+	} else {
+		reply.Error = &rpcError{
+			Code:    rpcCodeMethodNotFound,
+			Message: fmt.Sprintf("Method not found: %s (mcpmu does not relay server-to-client requests)", method),
+		}
+		if DebugLogging {
+			log.Printf("MCP Recv: server->client request %s (id=%s) answered with method not found", method, string(id))
+		}
+	}
+
+	data, err := json.Marshal(reply)
+	if err != nil {
+		if DebugLogging {
+			log.Printf("MCP Recv: marshal reply to %s: %v", method, err)
+		}
+		return
+	}
+
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), serverReplyTimeout)
+		defer cancel()
+		// Plain Send, not sendWithSessionRecovery: a reply to a dead HTTP
+		// session is worthless, and reinitializing on its account would be a
+		// side effect the server never asked for.
+		if err := c.transport.Send(ctx, data); err != nil && DebugLogging {
+			log.Printf("MCP Send: reply to server request %s not delivered: %v", method, err)
+		}
+	}()
 }
 
 // CallTool invokes a tool on the MCP server.

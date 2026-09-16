@@ -373,6 +373,7 @@ func (s *Session) handleInitialize(ctx context.Context, params json.RawMessage) 
 			Version: s.opts.ServerVersion,
 		},
 		Capabilities: caps,
+		Instructions: s.aggregateInstructions(),
 	}, nil
 }
 
@@ -465,6 +466,9 @@ type initializeResult struct {
 	ProtocolVersion string       `json:"protocolVersion"`
 	ServerInfo      serverInfo   `json:"serverInfo"`
 	Capabilities    capabilities `json:"capabilities"`
+	// Instructions aggregates the running upstreams' own instructions; see
+	// Session.aggregateInstructions. Omitted when there are none.
+	Instructions string `json:"instructions,omitempty"`
 }
 
 type serverInfo struct {
