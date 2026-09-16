@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -67,24 +66,21 @@ type CachedTool struct {
 	TokenCount   int                        `json:"tokenCount"`
 }
 
-// ToolCachePath returns the cache file path co-located with the active config.
+// ToolCachePath returns the cache file path beside the resolved active config,
+// so managers and serve processes share it even when the config is a symlink.
 func ToolCachePath(configPath string) (string, error) {
-	if configPath != "" {
-		expanded := configPath
-		if strings.HasPrefix(expanded, "~/") {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", fmt.Errorf("get home dir: %w", err)
-			}
-			expanded = filepath.Join(home, expanded[2:])
+	if configPath == "" {
+		var err error
+		configPath, err = ConfigPath()
+		if err != nil {
+			return "", err
 		}
-		return filepath.Join(filepath.Dir(expanded), "toolcache.json"), nil
 	}
-	home, err := os.UserHomeDir()
+	resolved, err := ResolvePath(configPath)
 	if err != nil {
-		return "", fmt.Errorf("get home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".config", "mcpmu", "toolcache.json"), nil
+	return filepath.Join(filepath.Dir(resolved), "toolcache.json"), nil
 }
 
 // NewToolCache creates or loads a tool cache for the given config path.

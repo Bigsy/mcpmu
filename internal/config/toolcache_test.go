@@ -343,6 +343,7 @@ func TestToolCache_CorruptFile(t *testing.T) {
 }
 
 func TestToolCachePath_Default(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	path, err := ToolCachePath("")
 	if err != nil {
 		t.Fatalf("ToolCachePath: %v", err)
@@ -351,6 +352,52 @@ func TestToolCachePath_Default(t *testing.T) {
 	expected := filepath.Join(home, ".config", "mcpmu", "toolcache.json")
 	if path != expected {
 		t.Errorf("expected %q, got %q", expected, path)
+	}
+}
+
+func TestToolCache_SymlinkedConfigSharesDiscovery(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	realDir := t.TempDir()
+	realConfig := filepath.Join(realDir, "config.json")
+	if err := os.WriteFile(realConfig, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	linkConfig := filepath.Join(home, ".config", "mcpmu", "config.json")
+	if err := os.MkdirAll(filepath.Dir(linkConfig), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realConfig, linkConfig); err != nil {
+		t.Fatal(err)
+	}
+	// The daemon writes beside the real config. A manager may use any of
+	// these spellings and must see both existing and subsequent discovery.
+	writer, err := NewToolCache(realConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Update("first", []CachedToolInput{{Name: "query"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{linkConfig, "~/.config/mcpmu/config.json", ""} {
+		t.Run(path, func(t *testing.T) {
+			reader, err := NewToolCache(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reader.path != writer.path {
+				t.Fatalf("cache paths differ: %q != %q", reader.path, writer.path)
+			}
+			if tools, ok := reader.Get("first"); !ok || len(tools) != 1 || tools[0].Name != "query" {
+				t.Fatalf("missing existing discovery: %v, %v", tools, ok)
+			}
+			if err := writer.Update("second", []CachedToolInput{{Name: "search"}}); err != nil {
+				t.Fatal(err)
+			}
+			if tools, ok := reader.Get("second"); !ok || len(tools) != 1 || tools[0].Name != "search" {
+				t.Fatalf("missing new discovery: %v, %v", tools, ok)
+			}
+		})
 	}
 }
 
