@@ -161,13 +161,13 @@ func (s *Session) handleResourcesRead(ctx context.Context, params json.RawMessag
 
 	// Owned and budgeted like a tool call: the upstream may ask the client
 	// something (elicitation) while reading.
-	callCtx, _, endCall := s.beginUpstreamCall(ctx, sc.handle.InstanceID(), sc.timeout)
+	callCtx, _, endCall := s.beginUpstreamCall(ctx, sc.handle.InstanceID().Server, sc.timeout)
 	defer endCall()
 
 	contents, err := sc.client.ReadResource(callCtx, req.URI)
 	if err != nil {
 		if upstream := upstreamRPCError(err); upstream != nil {
-			return nil, upstream
+			return nil, s.rewriteURLElicitationError(upstream, sc.handle.InstanceID(), sc.handle.Generation())
 		}
 		if cause := context.Cause(callCtx); isCallTimeout(cause) {
 			err = cause

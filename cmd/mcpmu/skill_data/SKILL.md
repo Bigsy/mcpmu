@@ -212,6 +212,7 @@ General flags (stdio and HTTP):
 - `--shared=<bool>` — share between agent connections (default: true); use `--shared=false` for a private instance per connection
 - `--startup-timeout` — startup timeout in seconds (default: 10)
 - `--tool-timeout` — tool call timeout in seconds (default: 60)
+- `--elicitation` — relay the server's elicitation requests (forms, sign-in URLs) to the agent's client in serve mode; best with `--shared=false`. Toggle later with `mcpmu server set-client-feature <server> elicitation on|off`
 
 Note: `--bearer-env` and OAuth flags (`--oauth-client-id`, `--scopes`, `--oauth-callback-port`) are mutually exclusive.
 Note: `--header` / `--env-header` are orthogonal to auth mode — they stack on top of bearer or OAuth, useful for gateways like Cloudflare Access. A header name cannot appear in both flags.
@@ -371,9 +372,18 @@ Flags:
   upstreams that are *already running* at initialize contribute (initialize
   starts nothing), so a cold first session sees none — use `--eager` or
   `autostart` if an agent should always get a server's instructions.
-- **Server-to-client requests:** mcpmu answers upstream `ping`, and replies
-  method-not-found to anything else (sampling, elicitation, roots). Servers
-  that require those client features will not work behind mcpmu.
+- **Server-to-client requests:** mcpmu answers upstream `ping`. Elicitation
+  (`elicitation/create`) is relayed to the client for servers opted in with
+  `--elicitation` / `"clientFeatures": {"elicitation": true}`, prefixed with
+  `[server] ` so the user sees who is asking. Routing is certain for
+  `shared: false` servers; a request that cannot be routed, or that needs a
+  mode the client did not declare, is answered `{"action":"cancel"}`. A tool's
+  timeout pauses while it waits on the user (bounded by
+  `interaction_timeout_sec`, default 600, and `interaction_budget_sec`,
+  default 1800). Other server requests get method-not-found.
+- **Upstream errors** pass through with their code and data intact, so a
+  `URLElicitationRequiredError` (`-32042`) reaches the client with its
+  sign-in URLs.
 - Cancellation and progress notifications are relayed in both directions.
 
 ### HTTP serve mode

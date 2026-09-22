@@ -23,6 +23,16 @@ type diagnosticCheck struct {
 	Name   string `json:"name,omitempty"`
 	OK     bool   `json:"ok"`
 }
+
+// diagnosticClientFeatures lists the client features one server opted in to
+// and how its requests can be routed: a private (shared: false) instance has
+// one owning session, a shared one relies on weaker evidence.
+type diagnosticClientFeatures struct {
+	Server   string   `json:"server"`
+	Features []string `json:"features"`
+	Shared   bool     `json:"shared"`
+}
+
 type diagnosticReport struct {
 	ConfigPath      string                 `json:"configPath"`
 	DefaultsUsed    bool                   `json:"defaultsUsed"`
@@ -33,6 +43,8 @@ type diagnosticReport struct {
 	BuildCompatible *bool                  `json:"buildCompatible,omitempty"`
 	Daemon          *daemon.StatusResponse `json:"daemon,omitempty"`
 	Checks          []diagnosticCheck      `json:"checks"`
+	// ClientFeatures lists servers opted in to relayed client features.
+	ClientFeatures []diagnosticClientFeatures `json:"clientFeatures,omitempty"`
 }
 
 func init() {
@@ -50,6 +62,13 @@ func init() {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Config: %s (valid: %t, defaults used: %t)\nDaemon: %s (enabled: %t)\nScope: %s\n", report.ConfigPath, report.ConfigValid, report.DefaultsUsed, report.DaemonState, report.DaemonEnabled, report.Scope)
 				if report.Daemon != nil {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "PID: %d; sessions: %d; running instances: %s\n", report.Daemon.PID, report.Daemon.Sessions, strings.Join(report.Daemon.RunningUpstreams, ", "))
+				}
+				for _, f := range report.ClientFeatures {
+					routing := "private instance: routed to its session"
+					if f.Shared {
+						routing = "shared instance: routed only when a request can be tied to one session"
+					}
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Client features: %s: %s (%s)\n", f.Server, strings.Join(f.Features, ", "), routing)
 				}
 				for _, c := range report.Checks {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s %s (ok: %t)\n", c.Server, c.Kind, c.Name, c.OK)
@@ -76,6 +95,13 @@ func collectDiagnostics(ctx context.Context, doctor bool) (diagnosticReport, err
 	}
 	r.ConfigValid = true
 	r.DaemonEnabled = cfg.IsDaemonModeEnabled()
+	for _, entry := range cfg.ServerEntries() {
+		if features := entry.Config.EnabledClientFeatures(); len(features) > 0 {
+			r.ClientFeatures = append(r.ClientFeatures, diagnosticClientFeatures{
+				Server: entry.Name, Features: features, Shared: entry.Config.IsShared(),
+			})
+		}
+	}
 	if runtime.GOOS == "windows" {
 		r.DaemonState = "unsupported"
 	} else {

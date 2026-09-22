@@ -567,3 +567,27 @@ func TestServerFormSmallTerminal(t *testing.T) {
 		t.Fatalf("private setting was not saved: %+v", result)
 	}
 }
+
+func TestServerFormElicitation(t *testing.T) {
+	form := NewServerForm(theme.New())
+	form.ShowAdd()
+	if form.elicitation {
+		t.Fatal("new form must default to elicitation off")
+	}
+	original := config.ServerConfig{Command: "fixture", ClientFeatures: &config.ClientFeatures{Elicitation: true}}
+	form.ShowEdit("browser", original)
+	if !form.elicitation || form.isDirty() {
+		t.Fatal("edit did not load the elicitation setting")
+	}
+	form.args = "changed"
+	if got, err := form.buildServerConfig(); err != nil || !got.ElicitationEnabled() {
+		t.Fatalf("unrelated edit dropped elicitation: %+v %v", got, err)
+	}
+	form.elicitation = false
+	if !form.isDirty() {
+		t.Fatal("toggling elicitation did not mark the form dirty")
+	}
+	if got, err := form.buildServerConfig(); err != nil || got.ElicitationEnabled() || got.ClientFeatures != nil {
+		t.Fatalf("elicitation toggle not saved: %+v %v", got, err)
+	}
+}

@@ -128,6 +128,57 @@ type Config struct {
 	// server processes a subscribe/unsubscribe request (post-response).
 	OnSubscribe   func(uri string) `json:"-"`
 	OnUnsubscribe func(uri string) `json:"-"`
+
+	// ToolServerRequests makes the named tools send a server-to-client
+	// request (elicitation/create, sampling/createMessage, roots/list, ...)
+	// mid-call and answer with a ServerRequestOutcome as JSON text. Scripted
+	// calls run concurrently with the request loop, which keeps reading so
+	// the answer can arrive.
+	ToolServerRequests map[string]ServerRequestScript `json:"toolServerRequests,omitempty"`
+
+	// ToolURLElicitations makes the named tools fail with
+	// URLElicitationRequiredError (-32042) carrying one URL-mode elicitation,
+	// optionally followed by notifications/elicitation/complete.
+	ToolURLElicitations map[string]URLElicitationScript `json:"toolURLElicitations,omitempty"`
+
+	// ClientCapabilitiesLogPath, when set, receives the capabilities object
+	// from each initialize request, one JSON line per initialize.
+	ClientCapabilitiesLogPath string `json:"clientCapabilitiesLogPath,omitempty"`
+}
+
+// ServerRequestScript is one server-to-client request a tool sends.
+type ServerRequestScript struct {
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params,omitempty"`
+	// AfterResponse answers the call first and only then sends the request —
+	// a server request left over from a finished call. Its outcome goes to
+	// RequestLogPath as "outcome <method> <json>".
+	AfterResponse bool `json:"afterResponse,omitempty"`
+	// CancelAfterMs withdraws the request with notifications/cancelled after
+	// this long, then keeps listening for WaitAfterCancelMs (default 300) so
+	// the outcome shows whether an answer arrived anyway.
+	CancelAfterMs     int `json:"cancelAfterMs,omitempty"`
+	WaitAfterCancelMs int `json:"waitAfterCancelMs,omitempty"`
+	// ReplyTimeoutMs bounds the wait for an answer (default 10000).
+	ReplyTimeoutMs int `json:"replyTimeoutMs,omitempty"`
+}
+
+// ServerRequestOutcome is what a scripted tool reports about its request.
+type ServerRequestOutcome struct {
+	Answered  bool            `json:"answered"`
+	Cancelled bool            `json:"cancelled,omitempty"` // the fake withdrew it
+	Result    json.RawMessage `json:"result,omitempty"`
+	Error     *JSONRPCError   `json:"error,omitempty"`
+}
+
+// URLElicitationScript is the -32042 a tool fails with.
+type URLElicitationScript struct {
+	ElicitationID string `json:"elicitationId"`
+	URL           string `json:"url"`
+	Message       string `json:"message"`
+	// CompleteAfterMs sends notifications/elicitation/complete for the
+	// elicitation this long after the error (0 = never).
+	CompleteAfterMs int `json:"completeAfterMs,omitempty"`
 }
 
 // Tool represents an MCP tool definition. It carries the full 2025-11-25 field

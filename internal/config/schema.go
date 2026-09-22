@@ -60,6 +60,11 @@ type ServerConfig struct {
 
 	RecordErrorInputs bool `json:"recordErrorInputs,omitempty"` // Opt in to redacted arguments on failed calls.
 
+	// ClientFeatures opts this server in to client features mcpmu relays
+	// from a downstream client (serve mode only). Changing it changes what
+	// mcpmu declares upstream at initialize, so it restarts the instance.
+	ClientFeatures *ClientFeatures `json:"clientFeatures,omitempty"`
+
 	// Global deny list — tools listed here are denied regardless of namespace permissions
 	DeniedTools []string `json:"deniedTools,omitempty"`
 }
@@ -97,6 +102,61 @@ func (s *ServerConfig) UnmarshalJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+// ClientFeatures are the client capabilities mcpmu may declare to an upstream
+// server on a downstream client's behalf. Each is off unless set: declaring
+// one lets the server send requests (an elicitation, a sampling request) that
+// mcpmu relays to whichever client it can prove the request belongs to.
+type ClientFeatures struct {
+	// Elicitation declares elicitation (form and URL mode) upstream and
+	// relays elicitation/create to the downstream client.
+	Elicitation bool `json:"elicitation,omitempty"`
+}
+
+// ElicitationEnabled reports whether the server opted in to elicitation.
+func (s ServerConfig) ElicitationEnabled() bool {
+	return s.ClientFeatures != nil && s.ClientFeatures.Elicitation
+}
+
+// Client feature names, as the CLI and forms spell them.
+const (
+	ClientFeatureElicitation = "elicitation"
+)
+
+// ClientFeatureNames lists the names SetClientFeature accepts.
+var ClientFeatureNames = []string{ClientFeatureElicitation}
+
+// SetClientFeature turns one client feature on or off. The block is dropped
+// entirely once every feature is off, so an opted-out server's config reads
+// as if it had never been opted in.
+func (s *ServerConfig) SetClientFeature(name string, on bool) error {
+	var features ClientFeatures
+	if s.ClientFeatures != nil {
+		features = *s.ClientFeatures
+	}
+	switch name {
+	case ClientFeatureElicitation:
+		features.Elicitation = on
+	default:
+		return fmt.Errorf("unknown client feature %q (want one of: %s)", name, strings.Join(ClientFeatureNames, ", "))
+	}
+	if features == (ClientFeatures{}) {
+		s.ClientFeatures = nil
+	} else {
+		s.ClientFeatures = &features
+	}
+	return nil
+}
+
+// EnabledClientFeatures returns the names of the features the server opted
+// in to, in ClientFeatureNames order.
+func (s ServerConfig) EnabledClientFeatures() []string {
+	var names []string
+	if s.ElicitationEnabled() {
+		names = append(names, ClientFeatureElicitation)
+	}
+	return names
 }
 
 // ServerEntry pairs a server name with its configuration.

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -64,6 +65,8 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		cfg.SetUpdateHook(emitUpdate)
 	}
 
+	requester := &serverRequester{out: syncedOut, pending: make(map[string]chan rpcResponse)}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -83,6 +86,14 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		var req rpcRequest
 		if err := json.Unmarshal(bytes.TrimSpace(line), &req); err != nil {
 			return err
+		}
+		if req.Method == "" && req.ID != nil {
+			// The client's answer to one of our server-to-client requests.
+			var resp rpcResponse
+			_ = json.Unmarshal(bytes.TrimSpace(line), &resp)
+			logRequest(cfg.RequestLogPath, "reply "+string(req.ID))
+			requester.deliver(resp)
+			continue
 		}
 
 		requestCount++
@@ -127,6 +138,13 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 		// Handle methods
 		switch req.Method {
 		case "initialize":
+			if cfg.ClientCapabilitiesLogPath != "" {
+				var p struct {
+					Capabilities json.RawMessage `json:"capabilities"`
+				}
+				_ = json.Unmarshal(req.Params, &p)
+				logRequest(cfg.ClientCapabilitiesLogPath, string(p.Capabilities))
+			}
 			caps := Capabilities{}
 			if cfg.AdvertiseTools == nil || *cfg.AdvertiseTools {
 				caps.Tools = &ToolsCapability{}
@@ -167,6 +185,34 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 			}
 
 			emitProgress(syncedOut, cfg, params.Meta)
+
+			if script, ok := cfg.ToolServerRequests[params.Name]; ok {
+				// Runs off the loop: the loop must keep reading for the
+				// answer to arrive.
+				go runScriptedCall(out, requester, cfg, req.ID, script)
+				continue
+			}
+			if script, ok := cfg.ToolURLElicitations[params.Name]; ok {
+				_ = writeErrorResponse(out, req.ID, JSONRPCError{
+					Code:    -32042,
+					Message: "This request requires more information.",
+					Data: map[string]any{"elicitations": []map[string]string{{
+						"mode": "url", "elicitationId": script.ElicitationID,
+						"url": script.URL, "message": script.Message,
+					}}},
+				}, cfg)
+				if script.CompleteAfterMs > 0 {
+					go func() {
+						time.Sleep(time.Duration(script.CompleteAfterMs) * time.Millisecond)
+						_ = writeFrame(syncedOut, rpcNotification{
+							JSONRPC: "2.0",
+							Method:  "notifications/elicitation/complete",
+							Params:  map[string]string{"elicitationId": script.ElicitationID},
+						})
+					}()
+				}
+				continue
+			}
 
 			// Check if we have a custom handler
 			if cfg.ToolHandler != nil {
@@ -336,6 +382,89 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 				Code: -32601, Message: "Method not found",
 			}, cfg)
 		}
+	}
+}
+
+// runScriptedCall answers one tools/call whose tool sends a server-to-client
+// request (see Config.ToolServerRequests).
+func runScriptedCall(out io.Writer, requester *serverRequester, cfg Config, id json.RawMessage, script ServerRequestScript) {
+	if script.AfterResponse {
+		_ = writeResponse(out, id, ToolCallResult{Content: []ContentBlock{{Type: "text", Text: "done"}}}, cfg)
+		outcome := requester.request(script)
+		encoded, _ := json.Marshal(outcome)
+		logRequest(cfg.RequestLogPath, "outcome "+script.Method+" "+string(encoded))
+		return
+	}
+	outcome := requester.request(script)
+	encoded, _ := json.Marshal(outcome)
+	_ = writeResponse(out, id, ToolCallResult{Content: []ContentBlock{{Type: "text", Text: string(encoded)}}}, cfg)
+}
+
+// serverRequester sends the fake's own requests to its client and matches the
+// answers the request loop hands back.
+type serverRequester struct {
+	out     io.Writer
+	mu      sync.Mutex
+	next    int
+	pending map[string]chan rpcResponse
+}
+
+func (r *serverRequester) deliver(resp rpcResponse) {
+	r.mu.Lock()
+	ch := r.pending[string(resp.ID)]
+	delete(r.pending, string(resp.ID))
+	r.mu.Unlock()
+	if ch != nil {
+		ch <- resp
+	}
+}
+
+func (r *serverRequester) request(script ServerRequestScript) ServerRequestOutcome {
+	r.mu.Lock()
+	r.next++
+	id := json.RawMessage(fmt.Sprintf(`"srv-%d"`, r.next))
+	ch := make(chan rpcResponse, 1)
+	r.pending[string(id)] = ch
+	r.mu.Unlock()
+
+	_ = writeFrame(r.out, rpcRequest{JSONRPC: "2.0", ID: id, Method: script.Method, Params: script.Params})
+
+	answered := func(resp rpcResponse) ServerRequestOutcome {
+		return ServerRequestOutcome{Answered: true, Result: resp.Result, Error: resp.Error}
+	}
+	if script.CancelAfterMs > 0 {
+		select {
+		case resp := <-ch:
+			return answered(resp)
+		case <-time.After(time.Duration(script.CancelAfterMs) * time.Millisecond):
+		}
+		_ = writeFrame(r.out, rpcNotification{
+			JSONRPC: "2.0",
+			Method:  "notifications/cancelled",
+			Params:  map[string]any{"requestId": id, "reason": "fake server withdrew its request"},
+		})
+		wait := script.WaitAfterCancelMs
+		if wait <= 0 {
+			wait = 300
+		}
+		select {
+		case resp := <-ch:
+			outcome := answered(resp)
+			outcome.Cancelled = true
+			return outcome
+		case <-time.After(time.Duration(wait) * time.Millisecond):
+			return ServerRequestOutcome{Cancelled: true}
+		}
+	}
+	timeout := script.ReplyTimeoutMs
+	if timeout <= 0 {
+		timeout = 10000
+	}
+	select {
+	case resp := <-ch:
+		return answered(resp)
+	case <-time.After(time.Duration(timeout) * time.Millisecond):
+		return ServerRequestOutcome{}
 	}
 }
 

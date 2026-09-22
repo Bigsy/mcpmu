@@ -112,3 +112,38 @@ func TestDoctorEnvironmentAndRedaction(t *testing.T) {
 		t.Fatalf("invalid config diagnosis: %+v %v", report, err)
 	}
 }
+
+func TestStatusListsClientFeatures(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "md-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	old := configPath
+	configPath = filepath.Join(dir, "config.json")
+	defer func() { configPath = old }()
+
+	cfg := config.NewConfig()
+	cfg.Servers["browser"] = config.ServerConfig{Command: "browser-mcp", Shared: new(false),
+		ClientFeatures: &config.ClientFeatures{Elicitation: true}}
+	cfg.Servers["plain"] = config.ServerConfig{Command: "plain-mcp"}
+	if err := config.SaveTo(cfg, configPath); err != nil {
+		t.Fatal(err)
+	}
+	r, err := collectDiagnostics(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.ClientFeatures) != 1 {
+		t.Fatalf("client features = %+v, want only the opted-in server", r.ClientFeatures)
+	}
+	got := r.ClientFeatures[0]
+	if got.Server != "browser" || got.Shared || len(got.Features) != 1 || got.Features[0] != "elicitation" {
+		t.Errorf("client features = %+v", got)
+	}
+	encoded, _ := json.Marshal(r)
+	if !strings.Contains(string(encoded), `"clientFeatures":[{"server":"browser","features":["elicitation"],"shared":false}]`) {
+		t.Errorf("JSON report = %s", encoded)
+	}
+}

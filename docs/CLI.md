@@ -22,7 +22,9 @@ queries credentials or performs OAuth. The daemon may have inherited a different
 environment. TUI/web statuses refer only to their own management session.
 
 JSON contains `configPath`, `defaultsUsed`, `configValid`, `scope`, `daemonEnabled`,
-`daemonState`, `checks`, and optional `buildCompatible`/`daemon`. Each check has
+`daemonState`, `checks`, and optional `buildCompatible`/`daemon`/`clientFeatures`
+(servers opted in to relayed client features, with the feature names and whether
+the server is shared — see [Client features](#client-features-elicitation)). Each check has
 `server`, `kind`, optional environment-variable `name`, and boolean `ok`.
 Values of environment variables and headers are never printed. Exit 0 includes
 an absent daemon and contextual availability warnings; invalid/unreadable config
@@ -76,6 +78,7 @@ Note: `--bearer-env` and OAuth flags are mutually exclusive. `--header` and `--e
 - `--shared=<bool>` — share between agent connections (default: true); use `--shared=false` for a private instance per connection
 - `--startup-timeout` — connection, initialization, and initial-discovery timeout in seconds (default: 10)
 - `--tool-timeout` — tool call timeout in seconds (default: 60)
+- `--elicitation` — relay the server's elicitation requests to the client in serve mode (see [Client features](#client-features-elicitation)); best with `--shared=false`
 
 ## OAuth authentication
 
@@ -280,6 +283,48 @@ mcpmu server denied-tools <server> [--json]
 
 Permission resolution order: **server global deny > explicit tool permission > server default > namespace default > allow**.
 
+## Client features (elicitation)
+
+An upstream server can ask the client something mid-call — an
+`elicitation/create` form ("Proceed?"), or a URL to open for sign-in. mcpmu
+relays these only for servers that opt in, and only to the client it can prove
+the request belongs to:
+
+```bash
+mcpmu add browser --shared=false --elicitation -- browser-mcp
+mcpmu server set-client-feature <server> elicitation <on|off>
+```
+
+- **Opt in per server** (`clientFeatures.elicitation`, the `--elicitation` add
+  flag, or the TUI/web server form). mcpmu then declares `elicitation`
+  (form and URL mode) to that server at initialize. Changing it restarts the
+  instance.
+- **Routing.** A private instance (`"shared": false`) has exactly one owning
+  session, so its requests are always routed there. A request that cannot be
+  routed, or whose client did not declare the mode it needs (URL mode for a
+  client that only declared form), is answered `{"action": "cancel"}` — a normal
+  result every server must handle.
+- **Identification.** The client only knows it is talking to mcpmu, so the
+  request's `message` is prefixed with `[server] `. URL-mode elicitation ids are
+  rewritten into mcpmu's own id space (the URL itself is untouched), and the
+  server's later `notifications/elicitation/complete` reaches only the client
+  that was shown the elicitation, under the rewritten id. The same applies to
+  the elicitations listed in a `URLElicitationRequiredError` (`-32042`), which
+  passes through with its code and data intact.
+- **Timeouts.** A call's tool timeout pauses while it waits on the user. Each
+  interaction is bounded by `interaction_timeout_sec` (default 600), the total
+  time one call may spend paused by `interaction_budget_sec` (default 1800),
+  and a call can never outlive its tool timeout plus that budget. Both are
+  global and overridable per server; editing them restarts nothing.
+- **Cancellation.** If the server withdraws its request, the client's copy is
+  withdrawn with `notifications/cancelled`. If the client cancels its
+  `tools/call`, the elicitation is withdrawn and the server gets `cancel`. To
+  refuse an elicitation, the client answers `action: "cancel"`.
+
+Outcomes (accepted, declined, cancelled, or why the fallback was sent) are
+counted per server in the usage metrics; the request's content and the user's
+answer are never recorded.
+
 ## Permission commands
 
 ```bash
@@ -390,11 +435,16 @@ With bearer token auth:
 | Field | Description |
 |-------|-------------|
 | `shared` | Share one daemon upstream across serve sessions; absent/true is shared, false creates a private per-session instance |
+| `clientFeatures` | Relayed client features the server opts in to, e.g. `{"elicitation": true}`; see [Client features](#client-features-elicitation) |
+| `interaction_timeout_sec` | Per-server override of the global relayed-interaction timeout |
+| `interaction_budget_sec` | Per-server override of the global per-call interaction budget |
 
 ### Global config fields
 
 | Field | Description |
 |-------|-------------|
 | `daemonMode` | Unix shared-daemon serve mode; absent/true enables it, false is the global embedded-mode kill switch |
+| `interaction_timeout_sec` | How long one relayed interaction (an elicitation waiting on the user) may take (default: 600) |
+| `interaction_budget_sec` | Total time one call may spend paused on relayed interactions; its hard lifetime is the tool timeout plus this (default: 1800) |
 | `mcp_oauth_credentials_store` | Where to store OAuth tokens: `"auto"`, `"keyring"`, or `"file"` (default: auto) |
 | `mcp_oauth_callback_port` | Port for the OAuth callback server (default: auto-assigned) |

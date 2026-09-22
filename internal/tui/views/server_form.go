@@ -50,6 +50,7 @@ type ServerFormModel struct {
 	oauthClientID     string // Only used for HTTP
 	oauthCallbackPort string // Only used for HTTP (string for form input)
 	shared            bool
+	elicitation       bool
 	autostart         bool
 	oauthScopes       string // comma-separated, HTTP only
 	startupTimeout    string // parsed to int
@@ -67,6 +68,7 @@ type ServerFormModel struct {
 	initialOAuthClientID     string
 	initialOAuthCallbackPort string
 	initialShared            bool
+	initialElicitation       bool
 	initialAutostart         bool
 	initialOAuthScopes       string
 	initialStartupTimeout    string
@@ -109,6 +111,7 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.oauthClientID = ""
 	m.oauthCallbackPort = ""
 	m.shared = true
+	m.elicitation = false
 	m.autostart = false
 	m.oauthScopes = ""
 	m.startupTimeout = ""
@@ -125,6 +128,7 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.initialOAuthClientID = ""
 	m.initialOAuthCallbackPort = ""
 	m.initialShared = true
+	m.initialElicitation = false
 	m.initialAutostart = false
 	m.initialOAuthScopes = ""
 	m.initialStartupTimeout = ""
@@ -153,6 +157,7 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.oauthClientID = oauthClientID
 	m.oauthCallbackPort = oauthCallbackPort
 	m.shared = true
+	m.elicitation = false
 	m.autostart = false
 	m.oauthScopes = oauthScopes
 	m.startupTimeout = ""
@@ -169,6 +174,7 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.initialOAuthClientID = oauthClientID
 	m.initialOAuthCallbackPort = oauthCallbackPort
 	m.initialShared = true
+	m.initialElicitation = false
 	m.initialAutostart = false
 	m.initialOAuthScopes = oauthScopes
 	m.initialStartupTimeout = ""
@@ -220,6 +226,7 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	m.cwd = srv.Cwd
 	m.env = formatEnvVars(srv.Env)
 	m.shared = srv.IsShared()
+	m.elicitation = srv.ElicitationEnabled()
 	m.autostart = srv.Autostart
 	if srv.StartupTimeoutSec > 0 {
 		m.startupTimeout = strconv.Itoa(srv.StartupTimeoutSec)
@@ -244,6 +251,7 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	m.initialOAuthClientID = m.oauthClientID
 	m.initialOAuthCallbackPort = m.oauthCallbackPort
 	m.initialShared = m.shared
+	m.initialElicitation = m.elicitation
 	m.initialAutostart = m.autostart
 	m.initialOAuthScopes = m.oauthScopes
 	m.initialStartupTimeout = m.startupTimeout
@@ -354,6 +362,11 @@ func (m *ServerFormModel) buildForm() {
 				Value(&m.shared),
 
 			huh.NewConfirm().
+				Title("Relay elicitation requests").
+				Description("Let the server ask the agent's user for input (serve mode). Routing is certain only when not shared.").
+				Value(&m.elicitation),
+
+			huh.NewConfirm().
 				Title("Autostart").
 				Description("Start server automatically on app launch").
 				Value(&m.autostart),
@@ -419,6 +432,7 @@ func (m *ServerFormModel) isDirty() bool {
 		m.oauthClientID != m.initialOAuthClientID ||
 		m.oauthCallbackPort != m.initialOAuthCallbackPort ||
 		m.shared != m.initialShared ||
+		m.elicitation != m.initialElicitation ||
 		m.autostart != m.initialAutostart ||
 		m.oauthScopes != m.initialOAuthScopes ||
 		m.startupTimeout != m.initialStartupTimeout ||
@@ -609,6 +623,7 @@ func (m ServerFormModel) buildServerConfig() (config.ServerConfig, error) {
 		OAuthScopes:       m.oauthScopes,
 		Env:               parseEnvVars(m.env),
 		Shared:            &m.shared,
+		Elicitation:       &m.elicitation,
 		Autostart:         m.autostart,
 	}
 	if s := strings.TrimSpace(m.startupTimeout); s != "" {

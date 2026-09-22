@@ -90,5 +90,8 @@ func runtimeServerConfig(s config.ServerConfig) config.ServerConfig {
 	if len(s.EnvHTTPHeaders) == 0 {
 		s.EnvHTTPHeaders = nil
 	}
+	if s.ClientFeatures != nil && *s.ClientFeatures == (config.ClientFeatures{}) {
+		s.ClientFeatures = nil
+	}
 	return s
 }

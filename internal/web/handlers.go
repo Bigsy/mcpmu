@@ -105,15 +105,16 @@ func (s *Server) handleAPICreateServer(w http.ResponseWriter, r *http.Request) {
 // Only included fields are applied (partial update). Uses json.RawMessage
 // to distinguish absent fields from zero values.
 type apiUpdateServerRequest struct {
-	Name              *string   `json:"name,omitempty"`    // rename
-	Enabled           *bool     `json:"enabled,omitempty"` // enable/disable
-	RecordErrorInputs *bool     `json:"recordErrorInputs,omitempty"`
-	DeniedTools       *[]string `json:"deniedTools,omitempty"` // replace denied tools
-	Autostart         *bool     `json:"autostart,omitempty"`
-	Command           *string   `json:"command,omitempty"`
-	Args              *[]string `json:"args,omitempty"`
-	Cwd               *string   `json:"cwd,omitempty"`
-	URL               *string   `json:"url,omitempty"`
+	Name              *string                `json:"name,omitempty"`    // rename
+	Enabled           *bool                  `json:"enabled,omitempty"` // enable/disable
+	RecordErrorInputs *bool                  `json:"recordErrorInputs,omitempty"`
+	ClientFeatures    *config.ClientFeatures `json:"clientFeatures,omitempty"` // replace client features
+	DeniedTools       *[]string              `json:"deniedTools,omitempty"`    // replace denied tools
+	Autostart         *bool                  `json:"autostart,omitempty"`
+	Command           *string                `json:"command,omitempty"`
+	Args              *[]string              `json:"args,omitempty"`
+	Cwd               *string                `json:"cwd,omitempty"`
+	URL               *string                `json:"url,omitempty"`
 }
 
 func (s *Server) handleAPIUpdateServer(w http.ResponseWriter, r *http.Request) {
@@ -137,6 +138,13 @@ func (s *Server) handleAPIUpdateServer(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.RecordErrorInputs != nil {
 			srv.RecordErrorInputs = *req.RecordErrorInputs
+		}
+		if req.ClientFeatures != nil {
+			features := *req.ClientFeatures
+			srv.ClientFeatures = &features
+			if features == (config.ClientFeatures{}) {
+				srv.ClientFeatures = nil
+			}
 		}
 		if req.DeniedTools != nil {
 			srv.DeniedTools = *req.DeniedTools

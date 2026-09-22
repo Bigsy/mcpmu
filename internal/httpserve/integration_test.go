@@ -12,6 +12,7 @@ import (
 
 	"github.com/Bigsy/mcpmu/internal/mcp"
 	"github.com/Bigsy/mcpmu/internal/mcptest"
+	"github.com/Bigsy/mcpmu/internal/mcptest/fakeserver"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -195,5 +196,56 @@ func TestGoSDKInterop(t *testing.T) {
 	case <-listChanged:
 	case <-time.After(10 * time.Second):
 		t.Fatal("go-sdk client never received tools/list_changed on the GET stream")
+	}
+}
+
+// TestGoSDKElicitationInterop relays an upstream elicitation to the official
+// Go SDK client: the SDK validates the request (mode, schema) and answers it
+// through its ElicitationHandler, and the answer reaches the upstream tool.
+func TestGoSDKElicitationInterop(t *testing.T) {
+	fake := mcptest.DefaultConfig()
+	fake.Tools = append(fake.Tools, fakeserver.Tool{Name: "confirm"})
+	fake.ToolServerRequests = map[string]fakeserver.ServerRequestScript{"confirm": {
+		Method: "elicitation/create",
+		Params: json.RawMessage(`{"mode":"form","message":"Proceed?","requestedSchema":{"type":"object","properties":{"ok":{"type":"boolean"}}}}`),
+	}}
+	_, base := startServer(t, privateElicitConfig(t, fake), nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	asked := make(chan string, 1)
+	client := sdkmcp.NewClient(
+		&sdkmcp.Implementation{Name: "go-sdk-interop", Version: "0"},
+		&sdkmcp.ClientOptions{
+			ElicitationHandler: func(_ context.Context, req *sdkmcp.ElicitRequest) (*sdkmcp.ElicitResult, error) {
+				asked <- req.Params.Message
+				return &sdkmcp.ElicitResult{Action: "accept", Content: map[string]any{"ok": true}}, nil
+			},
+		},
+	)
+	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{Endpoint: base + "/mcp"}, nil)
+	if err != nil {
+		t.Fatalf("go-sdk connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	result, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: "fake.confirm", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("go-sdk tools/call: %v", err)
+	}
+	if message := <-asked; message != "[fake] Proceed?" {
+		t.Errorf("SDK was asked %q", message)
+	}
+	text, ok := result.Content[0].(*sdkmcp.TextContent)
+	if !ok {
+		t.Fatalf("result content = %+v", result.Content)
+	}
+	var outcome fakeserver.ServerRequestOutcome
+	if err := json.Unmarshal([]byte(text.Text), &outcome); err != nil {
+		t.Fatalf("tool text: %s", text.Text)
+	}
+	if !outcome.Answered || !strings.Contains(string(outcome.Result), `"accept"`) || !strings.Contains(string(outcome.Result), `"ok":true`) {
+		t.Errorf("upstream saw %+v", outcome)
 	}
 }

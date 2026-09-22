@@ -22,6 +22,7 @@ var (
 	addOAuthCallbackPort int
 	addStartupTimeout    int
 	addToolTimeout       int
+	addElicitation       bool
 )
 
 var addCmd = &cobra.Command{
@@ -71,6 +72,8 @@ func init() {
 	addCmd.Flags().IntVar(&addOAuthCallbackPort, "oauth-callback-port", 0, "OAuth callback port (1-65535)")
 	addCmd.Flags().IntVar(&addStartupTimeout, "startup-timeout", 0, "Startup timeout in seconds (default: 10)")
 	addCmd.Flags().IntVar(&addToolTimeout, "tool-timeout", 0, "Tool call timeout in seconds (default: 60)")
+	addCmd.Flags().BoolVar(&addElicitation, "elicitation", false,
+		"Relay the server's elicitation requests to the client (serve mode; best with --shared=false)")
 	addCmd.Flags().StringArrayVar(&addHeaders, "header", nil,
 		`Custom HTTP header in "Name: Value" form (HTTP only, repeatable). Use --env-header for secrets.`)
 	addCmd.Flags().StringArrayVar(&addEnvHeaders, "env-header", nil,
@@ -167,6 +170,9 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 		if cmd.Flags().Changed("shared") {
 			srv.Shared = new(addShared)
 		}
+		if addElicitation {
+			_ = srv.SetClientFeature(config.ClientFeatureElicitation, true)
+		}
 
 		// Add server (this enforces name uniqueness)
 		return cfg.AddServer(name, srv)
@@ -244,6 +250,9 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 
 		if cmd.Flags().Changed("shared") {
 			srv.Shared = new(addShared)
+		}
+		if addElicitation {
+			_ = srv.SetClientFeature(config.ClientFeatureElicitation, true)
 		}
 
 		// Add server (this enforces name uniqueness)

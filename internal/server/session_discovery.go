@@ -73,6 +73,18 @@ func (s *Session) OnUpstreamNotification(notification process.UpstreamNotificati
 			s.sendNotificationWithParams("notifications/resources/updated", map[string]string{"uri": p.URI})
 			return nil
 		})
+	case "notifications/elicitation/complete":
+		// Only the session that was shown the elicitation holds its id, so
+		// the fan-out still lands in exactly one place — and the id goes
+		// down in that session's space, which is what its client knows.
+		params, ok := s.elicitationCompleteForSession(notification)
+		if !ok {
+			return
+		}
+		s.spawn("relay elicitation/complete", func(context.Context) error {
+			s.sendNotificationWithParams("notifications/elicitation/complete", params)
+			return nil
+		})
 	case "notifications/progress":
 		// Filtered at the sink rather than routed by the broadcaster: only the
 		// session that minted the token has it, so a fan-out to every session

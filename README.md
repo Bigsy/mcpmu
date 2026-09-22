@@ -244,9 +244,14 @@ Global settings such as metrics and OAuth still use a full reload.
 - Share upstream processes across concurrent stdio clients while allowing
   private instances per server.
 - Negotiate MCP protocol revisions through 2025-11-25 and relay cancellation
-  and progress in both directions. Upstream pings are answered, other
-  server-to-client requests get a clean method-not-found error, and the
+  and progress in both directions. Upstream pings are answered, and the
   `instructions` of running upstreams are surfaced in the initialize result.
+- Relay an upstream's elicitation requests (forms and sign-in URLs) to the
+  client that caused them, for servers that opt in (`--elicitation`). Routing
+  is certain for `"shared": false` servers; anything that cannot be routed is
+  answered `cancel`, and a tool's timeout pauses while it waits on the user.
+  Upstream JSON-RPC errors such as `URLElicitationRequiredError` pass through
+  intact. See [Client features](docs/CLI.md#client-features-elicitation).
 
 ## Documentation
 

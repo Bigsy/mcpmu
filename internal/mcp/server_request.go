@@ -61,6 +61,11 @@ type ServerRequest struct {
 	// Origin is the owner registered for OriginRequestID, when that request
 	// is still in flight and was made on a client's behalf.
 	Origin *CallOwner
+	// InFlight are the distinct owners of this client's requests that were
+	// awaiting a response when this request was read. It is taken on the
+	// reader goroutine, so it is exact with respect to message order: a call
+	// whose response arrived before this request is not in it.
+	InFlight []*CallOwner
 }
 
 // ServerRequestHandler answers one server-to-client request. It runs on its
@@ -135,11 +140,15 @@ func (c *Client) clientCapabilities() map[string]any {
 }
 
 // InFlightOwners returns the distinct owners of this client's upstream
-// requests that are in flight right now. Requests made on nobody's behalf
-// (discovery, subscription replay) are not included.
+// requests that are awaiting a response right now. Requests made on nobody's
+// behalf (discovery, subscription replay) are not included.
 func (c *Client) InFlightOwners() []*CallOwner {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.inFlightOwnersLocked()
+}
+
+func (c *Client) inFlightOwnersLocked() []*CallOwner {
 	seen := make(map[*CallOwner]struct{}, len(c.owners))
 	owners := make([]*CallOwner, 0, len(c.owners))
 	for _, owner := range c.owners {
@@ -181,6 +190,7 @@ func (c *Client) handleServerRequest(id json.RawMessage, method string, params j
 	if origin != 0 {
 		req.Origin = c.owners[origin]
 	}
+	req.InFlight = c.inFlightOwnersLocked()
 	ctx, cancel := context.WithCancelCause(c.lifetime)
 	entry := &serverRequestEntry{cancel: cancel}
 	if key != "" {

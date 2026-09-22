@@ -123,14 +123,15 @@ type Session struct {
 	inflight *inflightCalls
 	progress *progressRoutes
 
-	// calls are this session's upstream calls in flight, by instance (see
-	// upstreamCall); outbound are the requests mcpmu sent to this session's
-	// client and is waiting on. Each direction has its own table: a client
+	// outbound are the requests mcpmu sent to this session's client and is
+	// waiting on. It is a table of its own, apart from inflight: a client
 	// response is matched only against outbound, a client cancellation only
 	// against inflight, so a client that happens to pick "mcpmu-1" for its
 	// own request id cannot confuse the two.
-	calls    *activeCalls
 	outbound *outboundRequests
+	// elicitations maps the URL-mode elicitation ids shown to this client
+	// back to upstream ids, for notifications/elicitation/complete.
+	elicitations *elicitationRoutes
 	// deliverer delivers server→client requests when the writer needs more
 	// than a plain write (HTTP: POST stream upgrade); nil means write them
 	// like any other frame.
@@ -184,8 +185,8 @@ func NewSession(core *Core, opts Options) (*Session, error) {
 		resourceMap:    make(map[string]process.InstanceID),
 		inflight:       newInflightCalls(),
 		progress:       newProgressRoutes(),
-		calls:          newActiveCalls(),
 		outbound:       newOutboundRequests(),
+		elicitations:   newElicitationRoutes(),
 	}
 	s.privateAggregator = s.newPrivateAggregator()
 	s.router = NewRouter(s)
@@ -213,6 +214,7 @@ func (s *Session) Close() {
 		// fail them so each relay answers its upstream with the fallback.
 		s.outbound.failAll(errSessionClosed)
 		s.progress.clear()
+		s.elicitations.clear()
 		// Unsubscribe RPCs run without resourceStateMu: the subscription table
 		// is internally synchronized and epoch-invalidated by the writers that
 		// used to exclude this path, and holding a global read lock across

@@ -44,6 +44,7 @@ type ServerFormData struct {
 	Shared            *bool // nil → preserve existing; new servers default to shared
 	Enabled           *bool // nil → keep existing (true for a new server)
 	RecordErrorInputs *bool // nil preserves the setting when a form does not expose it
+	Elicitation       *bool // nil preserves the client feature when a form does not expose it
 	Autostart         bool
 	// Timeouts in seconds; 0 means "use the default".
 	StartupTimeoutSec int
@@ -74,6 +75,9 @@ func BuildServerConfig(form ServerFormData, existing *ServerConfig) (ServerConfi
 	}
 	if form.RecordErrorInputs != nil {
 		srv.RecordErrorInputs = *form.RecordErrorInputs
+	}
+	if form.Elicitation != nil {
+		_ = srv.SetClientFeature(ClientFeatureElicitation, *form.Elicitation)
 	}
 	srv.Autostart = form.Autostart
 	srv.StartupTimeoutSec = form.StartupTimeoutSec

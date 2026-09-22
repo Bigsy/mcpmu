@@ -141,7 +141,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	// routed back to it.
 	timeout := time.Duration(srv.ToolTimeout()) * time.Second
 	instance := sc.handle.InstanceID()
-	callCtx, _, endCall := r.session.beginUpstreamCall(ctx, instance, timeout)
+	callCtx, _, endCall := r.session.beginUpstreamCall(ctx, serverName, timeout)
 	defer func() { waited += endCall() }()
 
 	result, err := client.CallToolWithMeta(callCtx, toolName, arguments, meta)
@@ -179,7 +179,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 			// naming the same downstream request: a server request the
 			// restarted instance makes still routes back to this call.
 			waited += endCall()
-			retryCtx, _, endRetry := r.session.beginUpstreamCall(ctx, reinitialized.handle.InstanceID(), timeout)
+			retryCtx, _, endRetry := r.session.beginUpstreamCall(ctx, serverName, timeout)
 			defer func() { waited += endRetry() }()
 
 			result, err = client.CallToolWithMeta(retryCtx, toolName, arguments, meta)
@@ -190,7 +190,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 				}
 				record(failureOutcome(), time.Since(start), err)
 				if upstream := upstreamRPCError(err); upstream != nil {
-					return nil, upstream
+					return nil, r.session.rewriteURLElicitationError(upstream, reinitialized.handle.InstanceID(), reinitialized.handle.Generation())
 				}
 				return nil, ErrInternalError(fmt.Sprintf("tool call failed after reinit: %v", err))
 			}
@@ -199,7 +199,7 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 		} else {
 			record(failureOutcome(), time.Since(start), err)
 			if upstream := upstreamRPCError(err); upstream != nil {
-				return nil, upstream
+				return nil, r.session.rewriteURLElicitationError(upstream, instance, sc.handle.Generation())
 			}
 			return nil, ErrInternalError(fmt.Sprintf("tool call failed: %v", err))
 		}

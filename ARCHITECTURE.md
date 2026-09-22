@@ -662,23 +662,68 @@ declare nothing.
 
 ### Server-to-client requests and `instructions`
 
-`mcpmu` declares no client capabilities upstream, so a well-behaved upstream
-never sends `sampling/createMessage`, `elicitation/create` or `roots/list`;
-those features are simply unavailable through the proxy. A request an upstream
-sends anyway is answered, never dropped (`Client.answerServerRequest`): `ping`
-gets an empty result — a server that pings its client for liveness would
-otherwise declare the connection dead — and any other method gets JSON-RPC
-`-32601` so the server fails the operation cleanly instead of waiting on its
-own timeout. The reply is written from its own goroutine because the dispatch
-runs on the transport's single reader, and a blocked write there would stall
-every response behind it.
+An upstream may send mcpmu requests of its own: `ping`, `elicitation/create`,
+`sampling/createMessage`, `roots/list`. Each is answered, never dropped — a
+request that never gets a response leaves the server blocked until its own
+timeout. The client hands every one to a pluggable `mcp.ServerRequestHandler`
+on a goroutine of its own, off the transport's single reader (a handler may
+block on a human, and responses behind it must keep flowing). Serve mode's
+`Core.OnServerRequest` answers them; the TUI and web managers keep
+`mcp.DefaultServerRequestHandler`, which answers `ping` with `{}` and
+everything else with `-32601`, and declare no client capabilities.
 
-Relaying these requests downstream is deliberately not attempted yet. A shared
-upstream instance serves several sessions, and JSON-RPC carries nothing that
-ties a server-to-client request back to the `tools/call` that provoked it, so
-routing would be a guess; roots are per-client and cannot be reconciled for a
-shared instance at all. The unambiguous cases — `shared: false`, or exactly one
-in-flight caller on the instance — are where a relay would start.
+What serve mode declares upstream is decided per instance at initialize
+(`Core.ClientCapabilities`), and only for features the server opted in to
+(`clientFeatures`): nothing is declared that mcpmu could not route.
+
+**Routing.** The hard part is deciding which downstream session a request
+belongs to, because a shared instance serves several and JSON-RPC carries
+nothing that ties a server request back to the call that provoked it. Every
+rule below uses evidence mcpmu actually has; none guesses:
+
+| Rule | Evidence | Confidence |
+|---|---|---|
+| **Private instance** (`shared: false`) | The instance has exactly one owning session | Certain for the session |
+
+The exact *call* matters too — for pausing its execution budget, for ending
+the interaction when the call ends, and on `serve --http` for choosing which
+POST's response stream carries the request. A request is attributed to the
+calls its session had awaiting a response on that instance when the request
+was read (`ServerRequest.InFlight`, snapshotted on the reader goroutine so it
+is exact with respect to message order: a call whose response arrived first is
+never included), and tied to one only if there was exactly one.
+
+**Fallbacks.** Once a feature is declared, nothing gets `-32601`:
+elicitation that cannot be routed, or that needs a mode the client did not
+declare (URL mode for a form-only client), gets `{"action": "cancel"}`, a
+normal result every server must handle. The same answer goes back when the
+interaction times out, the owning call ends, or delivery fails. When the
+server itself withdraws the request, nothing goes back at all.
+
+**Elicitation relay** (`Core.relayElicitation`). The params are forwarded
+unchanged except that `message` is prefixed with `[server] ` — the client only
+knows it is talking to mcpmu, and the spec wants the requester identified. A
+URL-mode `elicitationId` is rewritten to a minted `mcpmu/{session}/e{n}`, keyed
+by `(instance, generation, upstream id)`, so two servers picking the same id
+cannot collide and a restarted instance's completion cannot match an old
+incarnation's entry; the URL belongs to the upstream and is left alone. The
+same rewrite applies to the elicitations in a `URLElicitationRequiredError`
+(`-32042`) on its way down. `notifications/elicitation/complete` is filtered at
+the session sink like progress: only the session holding the id forwards it,
+rewritten back to the id its client knows. Entries expire after the
+interaction timeout plus a grace window. Outcomes are counted per server in
+`metrics.json` (`interactions`) — names and outcomes only, never content.
+
+**Delivery.** On stdio and the daemon, a relayed request is just another frame
+on the session's stream, and the client's response comes back on it. On
+`serve --http`, a request tied to a call rides that call's POST: the POST
+handler starts "undecided" and switches its response to `text/event-stream`
+when a request for it arrives before the final response, which then follows on
+the same stream (`postStream`). Clients may never open the GET stream, so this
+is the one channel certain to reach them. A request tied to no POST uses the
+GET stream (`sseHub.Deliver`) only if one is attached, and fails otherwise;
+delivery that fails gets the fallback at once instead of waiting out the
+interaction timeout.
 
 `instructions` from each upstream's initialize result are retained on the
 client (`Client.Instructions`) and composed into the downstream initialize

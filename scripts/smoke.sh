@@ -1376,6 +1376,21 @@ smoke_selective_reload() (
   python3 scripts/smoke_reload.py ./mcpmu "$tmp/upstream.test"
 )
 
+# Real-binary elicitation relay over stdio and serve --http (POST SSE upgrade),
+# configured through the real CLI; reuses the mcptest helper process as the
+# upstream, so it needs no network or credentials.
+smoke_elicitation_relay() (
+  if ! command -v python3 >/dev/null; then
+    echo "SKIP: python3 is required"
+    return 0
+  fi
+  local tmp
+  tmp=$(mktemp -d /tmp/mu-elicit-bin.XXXXXX)
+  trap 'rm -rf "$tmp"' EXIT
+  go test -c -o "$tmp/upstream.test" ./internal/server || return 1
+  python3 scripts/smoke_elicitation.py ./mcpmu "$tmp/upstream.test"
+)
+
 # Register new smoke checks here.
 # Verify flag presence and explicit booleans survive real CLI/config persistence.
 smoke_add_sharing() (
@@ -1431,6 +1446,7 @@ SMOKE_CHECKS=(
   smoke_daemon_control
   smoke_daemon_shim_fallback
   smoke_daemon_private_instances
+  smoke_elicitation_relay
 )
 
 # --- Runner ---------------------------------------------------------------

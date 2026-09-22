@@ -42,6 +42,9 @@ type serverFormData struct {
 
 	RecordErrorInputs         bool
 	RecordErrorInputsProvided bool
+
+	Elicitation         bool
+	ElicitationProvided bool
 }
 
 // serverFormPageData is the template data for the server add/edit form page.
@@ -88,6 +91,9 @@ func serverFormDataFromConfig(name string, srv config.ServerConfig) serverFormDa
 
 		RecordErrorInputs:         srv.RecordErrorInputs,
 		RecordErrorInputsProvided: true,
+
+		Elicitation:         srv.ElicitationEnabled(),
+		ElicitationProvided: true,
 	}
 
 	// Auth mode
@@ -142,6 +148,9 @@ func parseServerForm(r *http.Request) serverFormData {
 
 		RecordErrorInputs:         formChecked(r, "record_error_inputs"),
 		RecordErrorInputsProvided: r.Form.Has("record_error_inputs"),
+
+		Elicitation:         formChecked(r, "elicitation"),
+		ElicitationProvided: r.Form.Has("elicitation"),
 	}
 }
 
@@ -190,6 +199,10 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config
 	if fd.RecordErrorInputsProvided {
 		recordErrorInputs = &fd.RecordErrorInputs
 	}
+	var elicitation *bool
+	if fd.ElicitationProvided {
+		elicitation = &fd.Elicitation
+	}
 	form := config.ServerFormData{
 		Shared:            shared,
 		IsHTTP:            fd.IsHTTP,
@@ -210,6 +223,7 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config
 		ToolTimeoutSec:    fd.ToolTimeout,
 
 		RecordErrorInputs: recordErrorInputs,
+		Elicitation:       elicitation,
 	}
 	if form.AuthMode == "" {
 		form.AuthMode = config.AuthModeNone

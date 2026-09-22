@@ -358,3 +358,44 @@ func TestClient_OwnerSurvivesSessionRecovery(t *testing.T) {
 		}
 	}
 }
+
+// TestClient_InFlightSnapshotFollowsMessageOrder: a server request read
+// before a call's response lists that call as in flight; one read after the
+// response does not, however long the caller takes to return.
+func TestClient_InFlightSnapshotFollowsMessageOrder(t *testing.T) {
+	tp := newSyntheticTransport()
+	client := NewClient(tp)
+	defer func() { _ = client.Close() }()
+
+	seen := make(chan ServerRequest, 2)
+	client.SetServerRequestHandler(func(_ context.Context, req ServerRequest) (json.RawMessage, *RPCError) {
+		seen <- req
+		return json.RawMessage(`{}`), nil
+	})
+
+	owner := &CallOwner{Session: "session-1"}
+	ctx, cancel := context.WithTimeout(WithCallOwner(context.Background(), owner), 5*time.Second)
+	defer cancel()
+	id, done := startCall(t, ctx, client, tp, "tools/call")
+
+	tp.inject([]byte(`{"jsonrpc":"2.0","id":"before","method":"elicitation/create"}`))
+	tp.inject([]byte(`{"jsonrpc":"2.0","id":` + strconv.FormatInt(id, 10) + `,"result":{}}`))
+	tp.inject([]byte(`{"jsonrpc":"2.0","id":"after","method":"elicitation/create"}`))
+
+	for range 2 {
+		req := <-seen
+		switch string(req.ID) {
+		case `"before"`:
+			if len(req.InFlight) != 1 || req.InFlight[0] != owner {
+				t.Errorf("request read before the response: InFlight = %v, want [owner]", req.InFlight)
+			}
+		case `"after"`:
+			if len(req.InFlight) != 0 {
+				t.Errorf("request read after the response: InFlight = %v, want none", req.InFlight)
+			}
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("call: %v", err)
+	}
+}

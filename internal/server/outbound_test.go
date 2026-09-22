@@ -11,10 +11,7 @@ import (
 
 	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/mcp"
-	"github.com/Bigsy/mcpmu/internal/process"
 )
-
-var mcpOwner = mcp.CallOwnerFromContext
 
 // frameSink is a session writer that hands each written frame to the test.
 type frameSink struct {
@@ -277,7 +274,7 @@ func TestInteract_EndsWithOwningCall(t *testing.T) {
 	t.Parallel()
 	s, sink := newBareSession(t)
 	parent, cancelCall := context.WithCancel(withDownstreamRequestID(context.Background(), json.RawMessage(`7`)))
-	_, call, end := s.beginUpstreamCall(parent, process.SharedInstanceID("srv"), time.Minute)
+	_, call, end := s.beginUpstreamCall(parent, "srv", time.Minute)
 	defer end()
 
 	done := make(chan error, 1)
@@ -301,7 +298,7 @@ func TestInteract_EndsWithOwningCall(t *testing.T) {
 func TestInteract_TimeoutResumesBudget(t *testing.T) {
 	t.Parallel()
 	s, sink := newBareSession(t)
-	ctx, call, end := s.beginUpstreamCall(context.Background(), process.SharedInstanceID("srv"), 200*time.Millisecond)
+	ctx, call, end := s.beginUpstreamCall(context.Background(), "srv", 200*time.Millisecond)
 	defer end()
 
 	_, _, err := interactionTarget{session: s, exact: call, calls: []*upstreamCall{call}}.
@@ -323,7 +320,7 @@ func TestInteract_TimeoutResumesBudget(t *testing.T) {
 func TestInteract_BudgetSpentFailsAtOnce(t *testing.T) {
 	t.Parallel()
 	s, sink := newBareSession(t)
-	_, call, end := s.beginUpstreamCall(context.Background(), process.SharedInstanceID("srv"), time.Minute)
+	_, call, end := s.beginUpstreamCall(context.Background(), "srv", time.Minute)
 	defer end()
 	call.budget.mu.Lock()
 	call.budget.interactionLeft = 0
@@ -343,10 +340,9 @@ func TestInteract_BudgetSpentFailsAtOnce(t *testing.T) {
 func TestInteract_PausesEverySiblingCall(t *testing.T) {
 	t.Parallel()
 	s, sink := newBareSession(t)
-	instance := process.PrivateInstanceID("srv", s.id)
-	ctxA, callA, endA := s.beginUpstreamCall(context.Background(), instance, 100*time.Millisecond)
+	ctxA, callA, endA := s.beginUpstreamCall(context.Background(), "srv", 100*time.Millisecond)
 	defer endA()
-	ctxB, callB, endB := s.beginUpstreamCall(context.Background(), instance, 100*time.Millisecond)
+	ctxB, callB, endB := s.beginUpstreamCall(context.Background(), "srv", 100*time.Millisecond)
 	defer endB()
 
 	done := make(chan error, 1)
@@ -374,34 +370,24 @@ func TestInteract_PausesEverySiblingCall(t *testing.T) {
 	}
 }
 
-// TestActiveCalls_TracksCallsPerInstance: a session's call table answers which
-// calls are in flight on an instance, and each call's owner leads back to it.
-func TestActiveCalls_TracksCallsPerInstance(t *testing.T) {
+// TestUpstreamCall_CarriesOwner: a call's context carries its owner, which
+// names the session and the client's request id and leads back to the call.
+func TestUpstreamCall_CarriesOwner(t *testing.T) {
 	t.Parallel()
 	s, _ := newBareSession(t)
-	private := process.PrivateInstanceID("srv", s.id)
-	ctx, call, end := s.beginUpstreamCall(withDownstreamRequestID(context.Background(), json.RawMessage(`"req-1"`)), private, time.Minute)
-	_, other, endOther := s.beginUpstreamCall(context.Background(), process.SharedInstanceID("other"), time.Minute)
-	defer endOther()
+	ctx, call, end := s.beginUpstreamCall(withDownstreamRequestID(context.Background(), json.RawMessage(`"req-1"`)), "srv", time.Minute)
 
-	if calls := s.calls.forInstance(private); len(calls) != 1 || calls[0] != call {
-		t.Fatalf("forInstance = %v, want the one call", calls)
-	}
 	if string(call.requestID) != `"req-1"` || call.owner.Session != s.id || string(call.owner.RequestID) != `"req-1"` {
 		t.Errorf("call attribution = %s / %+v", call.requestID, call.owner)
 	}
-	if callFromOwner(call.owner) != call || callFromOwner(other.owner) != other || callFromOwner(nil) != nil {
+	if callFromOwner(call.owner) != call || callFromOwner(nil) != nil {
 		t.Error("callFromOwner does not lead back to the call")
 	}
-	if owner := mcpOwner(ctx); owner != call.owner {
+	if owner := mcp.CallOwnerFromContext(ctx); owner != call.owner {
 		t.Error("the call context does not carry the call's owner")
 	}
-
 	end()
 	if ctx.Err() == nil {
 		t.Error("the call context outlived end")
-	}
-	if calls := s.calls.forInstance(private); len(calls) != 0 {
-		t.Fatalf("forInstance after end = %v, want none", calls)
 	}
 }

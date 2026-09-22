@@ -181,6 +181,13 @@
           </div>
           <p class="text-muted">Keep failed-call inputs for 60 days alongside error responses. Common secret fields are redacted; other content, including free text, is retained.</p>
 
+          <div class="toggle-row">
+            <label for="elicitation">Relay elicitation requests</label>
+            <input type="hidden" name="elicitation" value="false">
+            <input type="checkbox" name="elicitation" value="true" id="elicitation"{{if .Form.Elicitation}} checked{{end}} style="width:auto">
+          </div>
+          <p class="text-muted">Let the server ask the agent's user for input while serving. A request is relayed only to the connection it can be tied to — with certainty when the server is not shared — and otherwise answered with "cancel". Changing this restarts the server.</p>
+
           <div class="form-row mt-2">
             <div class="form-group">
               <label for="startup_timeout">Startup Timeout (seconds)</label>

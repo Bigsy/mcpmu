@@ -55,14 +55,15 @@ func MetricsPath(configPath string) (string, error) {
 
 // Store is the in-memory form of metrics.json.
 type Store struct {
-	Rows        map[BucketKey]*Counters
-	RecentCalls []RecentCall
-	ErrorCalls  []ErrorCall
+	Rows         map[BucketKey]*Counters
+	Interactions map[InteractionKey]uint64
+	RecentCalls  []RecentCall
+	ErrorCalls   []ErrorCall
 }
 
 // NewStore returns an empty store.
 func NewStore() *Store {
-	return &Store{Rows: make(map[BucketKey]*Counters)}
+	return &Store{Rows: make(map[BucketKey]*Counters), Interactions: make(map[InteractionKey]uint64)}
 }
 
 // storeFile is the on-disk schema. Rows are a flat array of objects, not
@@ -73,6 +74,9 @@ type storeFile struct {
 	Version int          `json:"version"`
 	Rows    []storeRow   `json:"rows"`
 	Recent  []RecentCall `json:"recent,omitempty"`
+	// Interactions was added after StoreVersion 1 shipped; older files omit
+	// it and older readers ignore it.
+	Interactions []interactionRow `json:"interactions,omitempty"`
 }
 
 type storeRow struct {
@@ -131,6 +135,10 @@ func parseStore(data []byte) (*Store, error) {
 			store.Rows[key] = c
 		}
 	}
+	for _, row := range file.Interactions {
+		key := InteractionKey{Date: row.Date, Namespace: row.Namespace, Server: row.Server, Method: row.Method, Outcome: row.Outcome}
+		store.Interactions[key] += row.Count
+	}
 	store.RecentCalls = file.Recent
 	store.ErrorCalls = file.Errors
 	return store, nil
@@ -141,6 +149,11 @@ func parseStore(data []byte) (*Store, error) {
 // concurrent writers (daemon + embedded serves) never clobber each other's
 // counts.
 func mergeAndSave(path string, delta map[BucketKey]*Counters, recent []RecentCall, retentionDays int, errors ...ErrorCall) error {
+	return mergeAndSaveAll(path, delta, recent, nil, retentionDays, errors...)
+}
+
+// mergeAndSaveAll is mergeAndSave plus interaction counters.
+func mergeAndSaveAll(path string, delta map[BucketKey]*Counters, recent []RecentCall, interactions map[InteractionKey]uint64, retentionDays int, errors ...ErrorCall) error {
 	release, err := process.LockFileBlocking(path+".lock", lockTimeout)
 	if err != nil {
 		return fmt.Errorf("acquire metrics lock: %w", err)
@@ -155,6 +168,10 @@ func mergeAndSave(path string, delta map[BucketKey]*Counters, recent []RecentCal
 		} else {
 			store.Rows[key] = c
 		}
+	}
+
+	for key, n := range interactions {
+		store.Interactions[key] += n
 	}
 
 	store.ErrorCalls = append(store.ErrorCalls, errors...)
@@ -205,6 +222,11 @@ func (s *Store) prune(retentionDays int, now time.Time) {
 			delete(s.Rows, key)
 		}
 	}
+	for key := range s.Interactions {
+		if key.Date < cutoff {
+			delete(s.Interactions, key)
+		}
+	}
 	s.RecentCalls = slices.DeleteFunc(s.RecentCalls, func(rc RecentCall) bool {
 		return rc.Time.Before(cutoffTime)
 	})
@@ -229,6 +251,18 @@ func (s *Store) saveAtomic(path string) error {
 			InteractionWaitMsSum: c.InteractionWaitMsSum,
 		})
 	}
+	for key, n := range s.Interactions {
+		file.Interactions = append(file.Interactions, interactionRow{
+			Date: key.Date, Namespace: key.Namespace, Server: key.Server,
+			Method: key.Method, Outcome: key.Outcome, Count: n,
+		})
+	}
+	slices.SortFunc(file.Interactions, func(a, b interactionRow) int {
+		return strings.Compare(
+			strings.Join([]string{a.Date, a.Namespace, a.Server, a.Method, a.Outcome}, "\x00"),
+			strings.Join([]string{b.Date, b.Namespace, b.Server, b.Method, b.Outcome}, "\x00"),
+		)
+	})
 	// Stable output ordering keeps diffs and tests sane.
 	slices.SortFunc(file.Rows, func(a, b storeRow) int {
 		if v := strings.Compare(a.Date, b.Date); v != 0 {

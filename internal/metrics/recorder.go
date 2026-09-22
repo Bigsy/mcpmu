@@ -26,6 +26,7 @@ type Recorder struct {
 	delta         map[BucketKey]*Counters // since last successful flush
 	recent        []RecentCall            // since last successful flush, oldest first
 	errors        []ErrorCall
+	interactions  map[InteractionKey]uint64 // since last successful flush
 	capWarned     bool
 
 	stopOnce sync.Once
@@ -123,13 +124,21 @@ func (r *Recorder) Flush() error {
 	r.mu.Lock()
 	// Flush even without new calls so idle servers prune expired responses.
 	delta, recent, retention, errors := r.delta, r.recent, r.retentionDays, r.errors
+	interactions := r.interactions
 	r.errors = nil
 	r.delta = make(map[BucketKey]*Counters)
 	r.recent = nil
+	r.interactions = nil
 	r.mu.Unlock()
 
-	if err := mergeAndSave(r.path, delta, recent, retention, errors...); err != nil {
+	if err := mergeAndSaveAll(r.path, delta, recent, interactions, retention, errors...); err != nil {
 		r.mu.Lock()
+		for key, n := range interactions {
+			if r.interactions == nil {
+				r.interactions = make(map[InteractionKey]uint64)
+			}
+			r.interactions[key] += n
+		}
 		for key, c := range delta {
 			if existing, ok := r.delta[key]; ok {
 				existing.merge(c)

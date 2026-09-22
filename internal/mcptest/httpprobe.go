@@ -131,9 +131,16 @@ func (p *HTTPProbe) Call(t *testing.T, id int, method string, params any) RPCRes
 // protocol version. The session ID lands in p.SessionID.
 func (p *HTTPProbe) Initialize(t *testing.T) string {
 	t.Helper()
+	return p.InitializeWith(t, "2025-06-18", map[string]any{})
+}
+
+// InitializeWith is Initialize with an explicit protocol version and client
+// capabilities.
+func (p *HTTPProbe) InitializeWith(t *testing.T, protocolVersion string, capabilities map[string]any) string {
+	t.Helper()
 	res := p.Call(t, 1, "initialize", map[string]any{
-		"protocolVersion": "2025-06-18",
-		"capabilities":    map[string]any{},
+		"protocolVersion": protocolVersion,
+		"capabilities":    capabilities,
 		"clientInfo":      map[string]any{"name": "httpprobe", "version": "0"},
 	})
 	if res.Error != nil {

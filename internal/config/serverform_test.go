@@ -202,3 +202,32 @@ func TestBuildServerConfigErrorInputSetting(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildServerConfigElicitation(t *testing.T) {
+	existing := ServerConfig{Command: "fixture", ClientFeatures: &ClientFeatures{Elicitation: true}}
+	for _, tc := range []struct {
+		value *bool
+		want  bool
+	}{{nil, true}, {new(false), false}, {new(true), true}} {
+		got, err := BuildServerConfig(ServerFormData{Command: "fixture", Elicitation: tc.value}, &existing)
+		if err != nil || got.ElicitationEnabled() != tc.want {
+			t.Fatalf("Elicitation=%v: %+v %v", tc.value, got, err)
+		}
+	}
+}
+
+func TestSetClientFeature(t *testing.T) {
+	var srv ServerConfig
+	if err := srv.SetClientFeature(ClientFeatureElicitation, true); err != nil || !srv.ElicitationEnabled() {
+		t.Fatalf("on: %+v %v", srv, err)
+	}
+	if got := srv.EnabledClientFeatures(); len(got) != 1 || got[0] != ClientFeatureElicitation {
+		t.Errorf("EnabledClientFeatures = %v", got)
+	}
+	if err := srv.SetClientFeature(ClientFeatureElicitation, false); err != nil || srv.ClientFeatures != nil {
+		t.Fatalf("off: %+v %v", srv, err)
+	}
+	if err := srv.SetClientFeature("telepathy", true); err == nil {
+		t.Fatal("unknown feature accepted")
+	}
+}

@@ -275,6 +275,10 @@ func (c *Client) readLoop() {
 			c.mu.Lock()
 			ch := c.pending[id]
 			delete(c.pending, id)
+			// The request is answered: from here on it is no longer in
+			// flight, so a server request read after this response is never
+			// attributed to it — however long call() takes to return.
+			delete(c.owners, id)
 			c.mu.Unlock()
 			if ch == nil {
 				if DebugLogging {

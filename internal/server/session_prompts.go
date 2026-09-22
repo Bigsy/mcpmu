@@ -121,13 +121,13 @@ func (s *Session) handlePromptsGet(ctx context.Context, params json.RawMessage) 
 
 	// Owned and budgeted like a tool call: the upstream may ask the client
 	// something (elicitation) while producing the prompt.
-	callCtx, _, endCall := s.beginUpstreamCall(ctx, sc.handle.InstanceID(), sc.timeout)
+	callCtx, _, endCall := s.beginUpstreamCall(ctx, sc.handle.InstanceID().Server, sc.timeout)
 	defer endCall()
 
 	messages, err := sc.client.GetPrompt(callCtx, originalName, req.Arguments)
 	if err != nil {
 		if upstream := upstreamRPCError(err); upstream != nil {
-			return nil, upstream
+			return nil, s.rewriteURLElicitationError(upstream, sc.handle.InstanceID(), sc.handle.Generation())
 		}
 		if cause := context.Cause(callCtx); isCallTimeout(cause) {
 			err = cause

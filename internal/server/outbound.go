@@ -163,6 +163,12 @@ func (s *Session) Request(ctx context.Context, method string, params any, relate
 	select {
 	case res := <-entry.done:
 		return res.result, res.rpcErr, res.err
+	case <-s.lifetime.Done():
+		// The connection is going away (EOF, SIGTERM): nobody is left to
+		// answer. Run waits for in-flight handlers before it closes the
+		// session, so this must not wait for Close to fail the entry.
+		s.outbound.withdraw(key, entry)
+		return nil, nil, errSessionClosed
 	case <-ctx.Done():
 		cause := context.Cause(ctx)
 		if s.outbound.withdraw(key, entry) && !s.closed.Load() {
