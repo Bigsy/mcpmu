@@ -79,6 +79,7 @@ Note: `--bearer-env` and OAuth flags are mutually exclusive. `--header` and `--e
 - `--startup-timeout` — connection, initialization, and initial-discovery timeout in seconds (default: 10)
 - `--tool-timeout` — tool call timeout in seconds (default: 60)
 - `--elicitation` — relay the server's elicitation requests to the client in serve mode (see [Client features](#client-features-elicitation)); best with `--shared=false`
+- `--root <path|uri>` — root reported to the server as its client's roots (absolute path or `file://` URI, repeatable; see [Roots](#roots))
 
 ## OAuth authentication
 
@@ -343,6 +344,31 @@ Outcomes (accepted, declined, cancelled, or why the fallback was sent) are
 counted per server in the usage metrics; the request's content and the user's
 answer are never recorded.
 
+## Roots
+
+Roots tell a server which directories it may work in. They are per-client
+state, so mcpmu does not relay one client's roots to an instance several
+clients share; instead a server's roots are configured on the server and mcpmu
+answers its `roots/list` itself:
+
+```bash
+mcpmu add filesystem --root ~/src/app --root /srv/data -- npx -y @modelcontextprotocol/server-filesystem
+mcpmu server set-roots filesystem ~/src/app       # replace the list
+mcpmu server set-roots filesystem                 # clear it
+```
+
+- With roots set, mcpmu declares `roots: {listChanged: true}` to every
+  instance of the server, shared or private.
+- Editing a non-empty list sends `notifications/roots/list_changed` to running
+  instances, which ask again; nothing restarts. Adding or clearing the list
+  changes the declared capability, so running instances restart.
+- Roots are server-level only: shared instances serve every namespace, so a
+  namespace-level list could not be authoritative for them.
+- For a private (`"shared": false`) server with no configured roots, opting in
+  to `clientFeatures.roots` (`mcpmu server set-client-feature <server> roots on`)
+  relays `roots/list` to the instance's owning client instead, and forwards
+  that client's `notifications/roots/list_changed`. Configured roots always win.
+
 ## Permission commands
 
 ```bash
@@ -453,7 +479,8 @@ With bearer token auth:
 | Field | Description |
 |-------|-------------|
 | `shared` | Share one daemon upstream across serve sessions; absent/true is shared, false creates a private per-session instance |
-| `clientFeatures` | Relayed client features the server opts in to, e.g. `{"elicitation": true}`; see [Client features](#client-features-elicitation) |
+| `clientFeatures` | Relayed client features the server opts in to: `elicitation` (see [Client features](#client-features-elicitation)) and `roots` (relay a private instance's owning client's roots; see [Roots](#roots)) |
+| `roots` | `file://` URIs reported to the server as its roots; mcpmu answers `roots/list` (see [Roots](#roots)) |
 | `interaction_timeout_sec` | Per-server override of the global relayed-interaction timeout |
 | `interaction_budget_sec` | Per-server override of the global per-call interaction budget |
 

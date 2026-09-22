@@ -109,6 +109,7 @@ type apiUpdateServerRequest struct {
 	Enabled           *bool                  `json:"enabled,omitempty"` // enable/disable
 	RecordErrorInputs *bool                  `json:"recordErrorInputs,omitempty"`
 	ClientFeatures    *config.ClientFeatures `json:"clientFeatures,omitempty"` // replace client features
+	Roots             *[]string              `json:"roots,omitempty"`          // replace roots (file:// URIs)
 	DeniedTools       *[]string              `json:"deniedTools,omitempty"`    // replace denied tools
 	Autostart         *bool                  `json:"autostart,omitempty"`
 	Command           *string                `json:"command,omitempty"`
@@ -138,6 +139,12 @@ func (s *Server) handleAPIUpdateServer(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.RecordErrorInputs != nil {
 			srv.RecordErrorInputs = *req.RecordErrorInputs
+		}
+		if req.Roots != nil {
+			srv.Roots = *req.Roots
+			if len(srv.Roots) == 0 {
+				srv.Roots = nil
+			}
 		}
 		if req.ClientFeatures != nil {
 			features := *req.ClientFeatures

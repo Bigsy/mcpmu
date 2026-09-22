@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -39,5 +40,28 @@ func TestElicitationFormSetting(t *testing.T) {
 	}
 	if newServerFormData().Elicitation {
 		t.Fatal("elicitation must default to off")
+	}
+}
+
+func TestRootsFormSetting(t *testing.T) {
+	req := httptest.NewRequest("POST", "/servers", strings.NewReader("command=fixture&roots="+url.QueryEscape("/a\nfile:///b")))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := req.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	existing := config.ServerConfig{Command: "fixture", Roots: []string{"file:///old"}}
+	got, err := buildServerConfig(parseServerForm(req), &existing)
+	if err != nil || len(got.Roots) != 2 || got.Roots[0] != "file:///a" || got.Roots[1] != "file:///b" {
+		t.Fatalf("roots = %v, %v", got.Roots, err)
+	}
+	if serverFormDataFromConfig("fixture", got).Roots != "file:///a\nfile:///b" {
+		t.Error("edit form lost the roots")
+	}
+
+	absent := httptest.NewRequest("POST", "/servers", strings.NewReader("command=fixture"))
+	absent.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_ = absent.ParseForm()
+	if got, err := buildServerConfig(parseServerForm(absent), &existing); err != nil || len(got.Roots) != 1 {
+		t.Fatalf("an absent roots field did not preserve them: %v, %v", got.Roots, err)
 	}
 }

@@ -9,7 +9,8 @@ then drives it through `serve --stdio` and `serve --http`:
     response stream (SSE upgrade) and the final response follows on it;
   - a URLElicitationRequiredError (-32042) passes through with its
     elicitation id rewritten, and notifications/elicitation/complete arrives
-    under the rewritten id.
+    under the rewritten id;
+  - roots added with --root are declared upstream and answer roots/list.
 """
 import json
 import os
@@ -27,11 +28,13 @@ binary, fake = map(os.path.abspath, sys.argv[1:])
 
 FAKE = {
     "tools": [{"name": "confirm", "inputSchema": {"type": "object"}},
-              {"name": "files", "inputSchema": {"type": "object"}}],
+              {"name": "files", "inputSchema": {"type": "object"}},
+              {"name": "roots", "inputSchema": {"type": "object"}}],
     "toolServerRequests": {"confirm": {
         "method": "elicitation/create",
         "params": {"mode": "form", "message": "Proceed?",
-                   "requestedSchema": {"type": "object", "properties": {"ok": {"type": "boolean"}}}}}},
+                   "requestedSchema": {"type": "object", "properties": {"ok": {"type": "boolean"}}}}},
+        "roots": {"method": "roots/list"}},
     "toolURLElicitations": {"files": {
         "elicitationId": "upstream-7", "url": "https://auth.example.invalid/x",
         "message": "Authorize", "completeAfterMs": 300}},
@@ -117,6 +120,12 @@ def check_stdio(binary, path, env, root):
                         "notifications/elicitation/complete")
             if done["params"]["elicitationId"] != minted:
                 fail("completion names %r, want %r" % (done["params"]["elicitationId"], minted))
+
+            send({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                  "params": {"name": "confirmer.roots", "arguments": {}}})
+            outcome = tool_outcome(wait(lambda m: m.get("id") == 4, "roots response")["result"])
+            if outcome.get("result") != {"roots": [{"uri": "file:///smoke/workspace", "name": "workspace"}]}:
+                fail("roots/list answered %r" % outcome)
         finally:
             proc.stdin.close()
             proc.wait(timeout=10)
@@ -196,11 +205,13 @@ with tempfile.TemporaryDirectory(prefix="mu-elicit-", dir="/tmp") as directory:
                                 "metrics": {"enabled": False}, "servers": {}}))
     env = dict(os.environ, XDG_RUNTIME_DIR=directory)
     subprocess.run([binary, "--config", str(path), "add", "confirmer", "--shared=false", "--elicitation",
+                    "--root", "/smoke/workspace",
                     "--env", "GO_WANT_HELPER_PROCESS=1", "--env", "FAKE_MCP_CFG=" + json.dumps(FAKE),
                     "--", fake, "-test.run=TestHelperProcess", "--"],
                    env=env, check=True, capture_output=True, timeout=10)
     server = json.loads(path.read_text())["servers"]["confirmer"]
-    if server.get("clientFeatures") != {"elicitation": True} or server.get("shared") is not False:
+    if (server.get("clientFeatures") != {"elicitation": True} or server.get("shared") is not False
+            or server.get("roots") != ["file:///smoke/workspace"]):
         fail("CLI wrote %r" % server)
     check_stdio(binary, path, env, root)
     check_http(binary, path, env, root)

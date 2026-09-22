@@ -21,6 +21,9 @@ func (c *Core) ClientCapabilities(id process.InstanceID, srv config.ServerConfig
 	if srv.ElicitationEnabled() {
 		caps[featureElicitation] = map[string]any{modeForm: map[string]any{}, modeURL: map[string]any{}}
 	}
+	if roots := c.rootsDeclaration(id, srv); roots != nil {
+		caps[featureRoots] = roots
+	}
 	return caps
 }
 
@@ -34,6 +37,8 @@ func (c *Core) OnServerRequest(ctx context.Context, req process.UpstreamRequest)
 		if srv, ok := c.currentConfig().GetServer(req.Instance.Server); ok && srv.ElicitationEnabled() {
 			return c.relayElicitation(ctx, req)
 		}
+	case "roots/list":
+		return c.answerRoots(ctx, req)
 	}
 	return mcp.DefaultServerRequestHandler(ctx, req.ServerRequest)
 }

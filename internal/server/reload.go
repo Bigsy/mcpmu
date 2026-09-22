@@ -31,6 +31,7 @@ func (s *Session) applyReload(ctx context.Context, newCfg *config.Config) {
 }
 
 func (c *Core) applyReload(ctx context.Context, newCfg *config.Config, initiator *Session) {
+	rootsEdits := rootsListEdits(c.currentConfig(), newCfg)
 	if metadataOnlyReload(c.currentConfig(), newCfg) {
 		// Authorization and compression read Core's immutable config per request.
 		// Runtime settings and namespace membership are identical: catalogs,
@@ -45,11 +46,14 @@ func (c *Core) applyReload(ctx context.Context, newCfg *config.Config, initiator
 		for _, session := range sessions {
 			session.sendNotification("notifications/tools/list_changed")
 		}
+		c.notifyRootsChanged(rootsEdits)
 		return
 	}
 
 	if changed, ok := selectiveReload(c.currentConfig(), newCfg); ok {
 		c.applySelectiveReload(ctx, newCfg, initiator, changed)
+		// Restarted servers ask for their roots afresh; the rest are told.
+		c.notifyRootsChanged(slices.DeleteFunc(rootsEdits, func(name string) bool { return changed[name] }))
 		return
 	}
 	// resourceStateMu excludes only the other writer (Core.Close): handlers

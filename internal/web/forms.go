@@ -45,6 +45,9 @@ type serverFormData struct {
 
 	Elicitation         bool
 	ElicitationProvided bool
+
+	Roots         string // textarea, one root per line
+	RootsProvided bool
 }
 
 // serverFormPageData is the template data for the server add/edit form page.
@@ -94,6 +97,9 @@ func serverFormDataFromConfig(name string, srv config.ServerConfig) serverFormDa
 
 		Elicitation:         srv.ElicitationEnabled(),
 		ElicitationProvided: true,
+
+		Roots:         config.FormatRootLines(srv.Roots),
+		RootsProvided: true,
 	}
 
 	// Auth mode
@@ -151,6 +157,9 @@ func parseServerForm(r *http.Request) serverFormData {
 
 		Elicitation:         formChecked(r, "elicitation"),
 		ElicitationProvided: r.Form.Has("elicitation"),
+
+		Roots:         r.FormValue("roots"),
+		RootsProvided: r.Form.Has("roots"),
 	}
 }
 
@@ -203,6 +212,10 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config
 	if fd.ElicitationProvided {
 		elicitation = &fd.Elicitation
 	}
+	var roots *string
+	if fd.RootsProvided {
+		roots = &fd.Roots
+	}
 	form := config.ServerFormData{
 		Shared:            shared,
 		IsHTTP:            fd.IsHTTP,
@@ -224,6 +237,7 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config
 
 		RecordErrorInputs: recordErrorInputs,
 		Elicitation:       elicitation,
+		Roots:             roots,
 	}
 	if form.AuthMode == "" {
 		form.AuthMode = config.AuthModeNone

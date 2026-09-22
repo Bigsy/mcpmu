@@ -698,6 +698,12 @@ func (c *Client) cancelUpstream(id int64, ctx context.Context) {
 	}
 }
 
+// Notify sends a JSON-RPC notification to the server, e.g.
+// notifications/roots/list_changed.
+func (c *Client) Notify(ctx context.Context, method string, params any) error {
+	return c.notify(ctx, method, params)
+}
+
 // notify sends a JSON-RPC notification (no response expected).
 func (c *Client) notify(ctx context.Context, method string, params any) error {
 	c.mu.Lock()

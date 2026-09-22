@@ -186,6 +186,12 @@
             <input type="hidden" name="elicitation" value="false">
             <input type="checkbox" name="elicitation" value="true" id="elicitation"{{if .Form.Elicitation}} checked{{end}} style="width:auto">
           </div>
+          <div class="form-group mt-2">
+            <label for="roots">Roots</label>
+            <textarea id="roots" name="roots" rows="2" class="mono" placeholder="/home/me/project">{{.Form.Roots}}</textarea>
+            <p class="text-muted">Reported to the server as its client's roots, one absolute path or file:// URI per line. Editing the list notifies running servers; adding or clearing it restarts them.</p>
+          </div>
+
           <p class="text-muted">Let the server ask the agent's user for input while serving. A request is relayed only to the connection it can be tied to — with certainty when the server is not shared — and otherwise answered with "cancel". Changing this restarts the server.</p>
 
           <div class="form-row mt-2">

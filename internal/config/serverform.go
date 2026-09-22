@@ -41,10 +41,11 @@ type ServerFormData struct {
 
 	// Common
 	Env               map[string]string
-	Shared            *bool // nil → preserve existing; new servers default to shared
-	Enabled           *bool // nil → keep existing (true for a new server)
-	RecordErrorInputs *bool // nil preserves the setting when a form does not expose it
-	Elicitation       *bool // nil preserves the client feature when a form does not expose it
+	Shared            *bool   // nil → preserve existing; new servers default to shared
+	Enabled           *bool   // nil → keep existing (true for a new server)
+	RecordErrorInputs *bool   // nil preserves the setting when a form does not expose it
+	Elicitation       *bool   // nil preserves the client feature when a form does not expose it
+	Roots             *string // one root per line (paths or file:// URIs); nil preserves the list
 	Autostart         bool
 	// Timeouts in seconds; 0 means "use the default".
 	StartupTimeoutSec int
@@ -78,6 +79,13 @@ func BuildServerConfig(form ServerFormData, existing *ServerConfig) (ServerConfi
 	}
 	if form.Elicitation != nil {
 		_ = srv.SetClientFeature(ClientFeatureElicitation, *form.Elicitation)
+	}
+	if form.Roots != nil {
+		roots, err := ParseRootLines(*form.Roots)
+		if err != nil {
+			return srv, fmt.Errorf("roots: %w", err)
+		}
+		srv.Roots = roots
 	}
 	srv.Autostart = form.Autostart
 	srv.StartupTimeoutSec = form.StartupTimeoutSec

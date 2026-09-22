@@ -280,6 +280,8 @@ func (s *Session) handleNotification(ctx context.Context, method string, params 
 		}
 	case "notifications/cancelled":
 		s.handleCancelled(params)
+	case "notifications/roots/list_changed":
+		s.forwardRootsChanged()
 	default:
 		log.Printf("Unknown notification: %s", method)
 	}

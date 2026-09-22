@@ -731,6 +731,22 @@ rewritten back to the id its client knows. Entries expire after the
 interaction timeout plus a grace window. Outcomes are counted per server in
 `metrics.json` (`interactions`) — names and outcomes only, never content.
 
+**Roots** (`Core.answerRoots`). Roots are per-client state, so relaying them
+to an instance several sessions share makes no sense; mcpmu answers
+`roots/list` itself from the server's configured `roots`, for shared and
+private instances alike, and declares `roots: {listChanged: true}` whenever
+the list is non-empty. Roots are server-level only: shared instances are keyed
+by server and serve every namespace, so a namespace-level list could not be
+authoritative for them. The reload classifier treats the list's *presence* as
+structural (`runtimeServerConfig` reduces it to set/unset — adding or clearing
+it changes the declared capability and restarts the instance) and its content
+as metadata: an edit sends `notifications/roots/list_changed` to every running
+instance of the server (`Core.notifyRootsChanged`). A private instance with no
+configured roots that opted in to `clientFeatures.roots` instead has
+`roots/list` relayed to its owning session (declared only when that client
+declared roots itself), and the client's own `notifications/roots/list_changed`
+is forwarded to it.
+
 **Delivery.** On stdio and the daemon, a relayed request is just another frame
 on the session's stream, and the client's response comes back on it. On
 `serve --http`, a request tied to a call rides that call's POST: the POST

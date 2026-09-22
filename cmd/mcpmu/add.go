@@ -23,6 +23,7 @@ var (
 	addStartupTimeout    int
 	addToolTimeout       int
 	addElicitation       bool
+	addRoots             []string
 )
 
 var addCmd = &cobra.Command{
@@ -74,6 +75,8 @@ func init() {
 	addCmd.Flags().IntVar(&addToolTimeout, "tool-timeout", 0, "Tool call timeout in seconds (default: 60)")
 	addCmd.Flags().BoolVar(&addElicitation, "elicitation", false,
 		"Relay the server's elicitation requests to the client (serve mode; best with --shared=false)")
+	addCmd.Flags().StringArrayVar(&addRoots, "root", nil,
+		"Root reported to the server as its client's roots (absolute path or file:// URI, repeatable)")
 	addCmd.Flags().StringArrayVar(&addHeaders, "header", nil,
 		`Custom HTTP header in "Name: Value" form (HTTP only, repeatable). Use --env-header for secrets.`)
 	addCmd.Flags().StringArrayVar(&addEnvHeaders, "env-header", nil,
@@ -153,6 +156,10 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	roots, err := normalizeRoots(addRoots)
+	if err != nil {
+		return err
+	}
 
 	// Load config
 	if err := mutateConfig(configPath, func(cfg *config.Config) error {
@@ -173,6 +180,7 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 		if addElicitation {
 			_ = srv.SetClientFeature(config.ClientFeatureElicitation, true)
 		}
+		srv.Roots = roots
 
 		// Add server (this enforces name uniqueness)
 		return cfg.AddServer(name, srv)
@@ -202,6 +210,10 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 
 	// Parse environment variables
 	env, err := parseEnvFlags(addEnvFlags)
+	if err != nil {
+		return err
+	}
+	roots, err := normalizeRoots(addRoots)
 	if err != nil {
 		return err
 	}
@@ -254,6 +266,7 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 		if addElicitation {
 			_ = srv.SetClientFeature(config.ClientFeatureElicitation, true)
 		}
+		srv.Roots = roots
 
 		// Add server (this enforces name uniqueness)
 		return cfg.AddServer(name, srv)

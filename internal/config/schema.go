@@ -65,6 +65,13 @@ type ServerConfig struct {
 	// mcpmu declares upstream at initialize, so it restarts the instance.
 	ClientFeatures *ClientFeatures `json:"clientFeatures,omitempty"`
 
+	// Roots are file:// URIs mcpmu reports to the server as its client's
+	// roots (roots/list), answered locally for shared and private instances
+	// alike. Adding or removing the list restarts the instance (it changes
+	// the declared capability); editing it sends
+	// notifications/roots/list_changed instead.
+	Roots []string `json:"roots,omitempty"`
+
 	// Global deny list — tools listed here are denied regardless of namespace permissions
 	DeniedTools []string `json:"deniedTools,omitempty"`
 }
@@ -112,6 +119,11 @@ type ClientFeatures struct {
 	// Elicitation declares elicitation (form and URL mode) upstream and
 	// relays elicitation/create to the downstream client.
 	Elicitation bool `json:"elicitation,omitempty"`
+	// Roots relays the owning client's own roots to a private (shared:
+	// false) instance when the server has no configured roots: roots/list
+	// goes to that client, and its notifications/roots/list_changed is
+	// forwarded. Configured roots always win.
+	Roots bool `json:"roots,omitempty"`
 }
 
 // ElicitationEnabled reports whether the server opted in to elicitation.
@@ -122,10 +134,17 @@ func (s ServerConfig) ElicitationEnabled() bool {
 // Client feature names, as the CLI and forms spell them.
 const (
 	ClientFeatureElicitation = "elicitation"
+	ClientFeatureRoots       = "roots"
 )
 
 // ClientFeatureNames lists the names SetClientFeature accepts.
-var ClientFeatureNames = []string{ClientFeatureElicitation}
+var ClientFeatureNames = []string{ClientFeatureElicitation, ClientFeatureRoots}
+
+// RootsRelayEnabled reports whether the server opted in to relaying its
+// owning client's roots (private instances without configured roots).
+func (s ServerConfig) RootsRelayEnabled() bool {
+	return s.ClientFeatures != nil && s.ClientFeatures.Roots
+}
 
 // SetClientFeature turns one client feature on or off. The block is dropped
 // entirely once every feature is off, so an opted-out server's config reads
@@ -138,6 +157,8 @@ func (s *ServerConfig) SetClientFeature(name string, on bool) error {
 	switch name {
 	case ClientFeatureElicitation:
 		features.Elicitation = on
+	case ClientFeatureRoots:
+		features.Roots = on
 	default:
 		return fmt.Errorf("unknown client feature %q (want one of: %s)", name, strings.Join(ClientFeatureNames, ", "))
 	}
@@ -155,6 +176,9 @@ func (s ServerConfig) EnabledClientFeatures() []string {
 	var names []string
 	if s.ElicitationEnabled() {
 		names = append(names, ClientFeatureElicitation)
+	}
+	if s.RootsRelayEnabled() {
+		names = append(names, ClientFeatureRoots)
 	}
 	return names
 }
@@ -438,6 +462,13 @@ func (s ServerConfig) Validate() error {
 		if err := ValidateHeaderMap(s.EnvHTTPHeaders); err != nil {
 			return fmt.Errorf("env_http_headers: %w", err)
 		}
+	}
+
+	if err := ValidateRoots(s.Roots); err != nil {
+		return fmt.Errorf("roots: %w", err)
+	}
+	if s.InteractionTimeoutSec < 0 || s.InteractionBudgetSec < 0 {
+		return errors.New("interaction_timeout_sec and interaction_budget_sec must not be negative")
 	}
 
 	return nil

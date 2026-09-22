@@ -24,6 +24,9 @@ func metadataOnlyReload(old, next *config.Config) bool {
 			srv.DeniedTools = nil
 			srv.InteractionTimeoutSec = 0
 			srv.InteractionBudgetSec = 0
+			// An edit to a non-empty roots list is announced with
+			// notifications/roots/list_changed; only presence is structural.
+			srv.Roots = rootsPresence(srv.Roots)
 			c.Servers[name] = srv
 		}
 		c.Namespaces = maps.Clone(c.Namespaces)
@@ -94,5 +97,18 @@ func runtimeServerConfig(s config.ServerConfig) config.ServerConfig {
 	if s.ClientFeatures != nil && *s.ClientFeatures == (config.ClientFeatures{}) {
 		s.ClientFeatures = nil
 	}
+	// Whether a server has roots decides the capability declared at
+	// initialize, so adding or removing them restarts the instance. Editing a
+	// non-empty list does not: the instance is sent
+	// notifications/roots/list_changed and asks again.
+	s.Roots = rootsPresence(s.Roots)
 	return s
+}
+
+// rootsPresence reduces a roots list to whether it is set.
+func rootsPresence(roots []string) []string {
+	if len(roots) == 0 {
+		return nil
+	}
+	return []string{"(set)"}
 }

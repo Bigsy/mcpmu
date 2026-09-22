@@ -591,3 +591,20 @@ func TestServerFormElicitation(t *testing.T) {
 		t.Fatalf("elicitation toggle not saved: %+v %v", got, err)
 	}
 }
+
+func TestServerFormRoots(t *testing.T) {
+	form := NewServerForm(theme.New())
+	form.ShowEdit("fs", config.ServerConfig{Command: "fixture", Roots: []string{"file:///a", "file:///b"}})
+	if form.roots != "file:///a\nfile:///b" || form.isDirty() {
+		t.Fatalf("edit loaded roots %q", form.roots)
+	}
+	form.roots = "/c\n\nfile:///d"
+	got, err := form.buildServerConfig()
+	if err != nil || len(got.Roots) != 2 || got.Roots[0] != "file:///c" || got.Roots[1] != "file:///d" {
+		t.Fatalf("roots = %v, %v", got.Roots, err)
+	}
+	form.roots = "not/absolute"
+	if _, err := form.buildServerConfig(); err == nil {
+		t.Fatal("a relative root was accepted")
+	}
+}

@@ -459,6 +459,20 @@ func (s *Supervisor) GetInstance(id InstanceID) *Handle {
 	return s.handles[id]
 }
 
+// InstancesOf returns the running instances of one server: its shared
+// instance and every session's private one.
+func (s *Supervisor) InstancesOf(server string) []*Handle {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var handles []*Handle
+	for id, h := range s.handles {
+		if id.Server == server && h.IsRunning() {
+			handles = append(handles, h)
+		}
+	}
+	return handles
+}
+
 // StopAll stops all running servers gracefully.
 // Logs any errors that occur during shutdown but does not return them,
 // as this is typically called during application shutdown where we want

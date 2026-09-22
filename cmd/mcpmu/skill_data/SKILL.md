@@ -213,6 +213,7 @@ General flags (stdio and HTTP):
 - `--startup-timeout` — startup timeout in seconds (default: 10)
 - `--tool-timeout` — tool call timeout in seconds (default: 60)
 - `--elicitation` — relay the server's elicitation requests (forms, sign-in URLs) to the agent's client in serve mode; best with `--shared=false`. Toggle later with `mcpmu server set-client-feature <server> elicitation on|off`
+- `--root <path|uri>` — root reported to the server (repeatable); mcpmu answers the server's `roots/list` itself. Change later with `mcpmu server set-roots <server> [<root>...]` (no roots clears)
 
 Note: `--bearer-env` and OAuth flags (`--oauth-client-id`, `--scopes`, `--oauth-callback-port`) are mutually exclusive.
 Note: `--header` / `--env-header` are orthogonal to auth mode — they stack on top of bearer or OAuth, useful for gateways like Cloudflare Access. A header name cannot appear in both flags.

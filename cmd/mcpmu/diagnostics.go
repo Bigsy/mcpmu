@@ -31,6 +31,8 @@ type diagnosticClientFeatures struct {
 	Server   string   `json:"server"`
 	Features []string `json:"features"`
 	Shared   bool     `json:"shared"`
+	// Roots are the server's configured roots, answered by mcpmu.
+	Roots []string `json:"roots,omitempty"`
 }
 
 type diagnosticReport struct {
@@ -68,7 +70,12 @@ func init() {
 					if f.Shared {
 						routing = "shared instance: routed only when a request can be tied to one session"
 					}
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Client features: %s: %s (%s)\n", f.Server, strings.Join(f.Features, ", "), routing)
+					if len(f.Features) > 0 {
+						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Client features: %s: %s (%s)\n", f.Server, strings.Join(f.Features, ", "), routing)
+					}
+					if len(f.Roots) > 0 {
+						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Roots: %s: %s\n", f.Server, strings.Join(f.Roots, ", "))
+					}
 				}
 				for _, c := range report.Checks {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s %s (ok: %t)\n", c.Server, c.Kind, c.Name, c.OK)
@@ -96,9 +103,11 @@ func collectDiagnostics(ctx context.Context, doctor bool) (diagnosticReport, err
 	r.ConfigValid = true
 	r.DaemonEnabled = cfg.IsDaemonModeEnabled()
 	for _, entry := range cfg.ServerEntries() {
-		if features := entry.Config.EnabledClientFeatures(); len(features) > 0 {
+		features := entry.Config.EnabledClientFeatures()
+		if len(features) > 0 || len(entry.Config.Roots) > 0 {
 			r.ClientFeatures = append(r.ClientFeatures, diagnosticClientFeatures{
 				Server: entry.Name, Features: features, Shared: entry.Config.IsShared(),
+				Roots: entry.Config.Roots,
 			})
 		}
 	}

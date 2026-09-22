@@ -64,3 +64,36 @@ func TestCLI_SetClientFeature(t *testing.T) {
 		t.Error("setting a feature on a missing server succeeded")
 	}
 }
+
+func TestCLI_Roots(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+	if stdout, stderr, err := runCLI(testBinary, configPath, "add", "fs", "--root", "/work/app", "--root", "file:///work/lib", "--", "fs-mcp"); err != nil {
+		t.Fatalf("add: %v\n%s%s", err, stdout, stderr)
+	}
+	if got := loadServer(t, configPath, "fs").Roots; len(got) != 2 || got[0] != "file:///work/app" || got[1] != "file:///work/lib" {
+		t.Fatalf("roots after add = %v", got)
+	}
+	if _, stderr, err := runCLI(testBinary, configPath, "server", "set-roots", "fs", "/other"); err != nil {
+		t.Fatalf("set-roots: %v %s", err, stderr)
+	}
+	if got := loadServer(t, configPath, "fs").Roots; len(got) != 1 || got[0] != "file:///other" {
+		t.Fatalf("roots after set-roots = %v", got)
+	}
+	if _, stderr, err := runCLI(testBinary, configPath, "server", "set-roots", "fs"); err != nil {
+		t.Fatalf("clear: %v %s", err, stderr)
+	}
+	if got := loadServer(t, configPath, "fs").Roots; got != nil {
+		t.Fatalf("roots after clearing = %v", got)
+	}
+	_, stderr, err := runCLI(testBinary, configPath, "server", "set-roots", "fs", "relative/dir")
+	if err == nil || !strings.Contains(stderr, "absolute path") {
+		t.Errorf("relative root: err %v stderr %q", err, stderr)
+	}
+	if _, stderr, err := runCLI(testBinary, configPath, "server", "set-client-feature", "fs", "roots", "on"); err != nil {
+		t.Fatalf("roots relay opt-in: %v %s", err, stderr)
+	}
+	if !loadServer(t, configPath, "fs").RootsRelayEnabled() {
+		t.Error("roots relay not enabled")
+	}
+}
