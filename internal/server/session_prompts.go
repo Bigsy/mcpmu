@@ -124,6 +124,9 @@ func (s *Session) handlePromptsGet(ctx context.Context, params json.RawMessage) 
 
 	messages, err := sc.client.GetPrompt(callCtx, originalName, req.Arguments)
 	if err != nil {
+		if upstream := upstreamRPCError(err); upstream != nil {
+			return nil, upstream
+		}
 		return nil, ErrInternalError(fmt.Sprintf("prompts/get from %s: %v", serverName, err))
 	}
 

@@ -171,12 +171,18 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 					return nil, ErrToolCallTimeout(serverName, toolName)
 				}
 				record(failureOutcome(), time.Since(start), err)
+				if upstream := upstreamRPCError(err); upstream != nil {
+					return nil, upstream
+				}
 				return nil, ErrInternalError(fmt.Sprintf("tool call failed after reinit: %v", err))
 			}
 
 			log.Printf("CallTool: retry succeeded for %s.%s after reinit", serverName, toolName)
 		} else {
 			record(failureOutcome(), time.Since(start), err)
+			if upstream := upstreamRPCError(err); upstream != nil {
+				return nil, upstream
+			}
 			return nil, ErrInternalError(fmt.Sprintf("tool call failed: %v", err))
 		}
 	}
@@ -495,6 +501,27 @@ func textResult(text string) *ToolCallResult {
 func isRetriableHTTPError(err error) bool {
 	var expired *mcp.SessionExpiredError
 	return errors.As(err, &expired)
+}
+
+// upstreamRPCError returns the JSON-RPC error an upstream server answered
+// with, converted for the downstream response unchanged — code, message and
+// data — or nil when err is anything else (a transport failure, a timeout, a
+// cancellation), which callers keep wrapping as an internal error.
+//
+// Rewrapping every upstream error as -32603 used to drop the code and data,
+// which breaks errors the client must act on: URLElicitationRequiredError
+// (-32042) carries the elicitations to show in its data, and a client that
+// sees -32603 instead has nothing to show and no reason to retry.
+func upstreamRPCError(err error) *RPCError {
+	upstream, ok := errors.AsType[*mcp.RPCError](err)
+	if !ok {
+		return nil
+	}
+	return &RPCError{
+		Code:    upstream.Code,
+		Message: upstream.Message,
+		Data:    append(json.RawMessage(nil), upstream.Data...),
+	}
 }
 
 // mustJSON marshals a value to JSON, panicking on error.

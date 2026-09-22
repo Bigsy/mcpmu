@@ -89,11 +89,15 @@ type rpcRequest struct {
 	Params  any    `json:"params,omitempty"`
 }
 
-// rpcResponse is a JSON-RPC 2.0 response as delivered from the reader.
+// rpcResponse is a JSON-RPC 2.0 response as delivered from the reader. err is
+// set instead of Error when the reader failed locally (the transport closed):
+// that is not something the server said, and must not be mistaken for an
+// upstream JSON-RPC error that callers forward verbatim.
 type rpcResponse struct {
 	ID     int64
 	Result json.RawMessage
-	Error  *rpcError
+	Error  *RPCError
+	err    error
 }
 
 // rpcReply is an outgoing JSON-RPC 2.0 response to a server-to-client
@@ -103,17 +107,21 @@ type rpcReply struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
 	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
+	Error   *RPCError       `json:"error,omitempty"`
 }
 
-// rpcError is a JSON-RPC 2.0 error.
-type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Data    any    `json:"data,omitempty"`
+// RPCError is a JSON-RPC 2.0 error object. When a call fails with one, it is
+// exactly what the upstream server answered — callers can pass it downstream
+// unchanged (errors.As), which matters for errors whose data the client must
+// act on, such as URLElicitationRequiredError (-32042). Data is kept raw so it
+// survives the hop byte-for-byte.
+type RPCError struct {
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
 
-func (e *rpcError) Error() string {
+func (e *RPCError) Error() string {
 	return fmt.Sprintf("rpc error %d: %s", e.Code, e.Message)
 }
 
@@ -128,7 +136,7 @@ type rawMessage struct {
 	Method *string          `json:"method,omitempty"`
 	Params json.RawMessage  `json:"params,omitempty"`
 	Result json.RawMessage  `json:"result,omitempty"`
-	Error  *rpcError        `json:"error,omitempty"`
+	Error  *RPCError        `json:"error,omitempty"`
 }
 
 // initializeParams is the params for the initialize request.
@@ -202,10 +210,7 @@ func (c *Client) readLoop() {
 			pending := c.pending
 			c.pending = make(map[int64]chan rpcResponse)
 			c.mu.Unlock()
-			errResp := rpcResponse{Error: &rpcError{
-				Code:    -32000,
-				Message: "transport closed: " + err.Error(),
-			}}
+			errResp := rpcResponse{err: fmt.Errorf("transport closed: %w", err)}
 			for _, ch := range pending {
 				select {
 				case ch <- errResp:
@@ -330,7 +335,7 @@ func isProtocolVersionError(err error) bool {
 	if _, ok := errors.AsType[*ProtocolVersionError](err); ok {
 		return true
 	}
-	if rpcErr, ok := errors.AsType[*rpcError](err); ok {
+	if rpcErr, ok := errors.AsType[*RPCError](err); ok {
 		return mentionsVersion(rpcErr.Message) || strings.Contains(rpcErr.Message, "protocol")
 	}
 	errStr := err.Error()
@@ -461,7 +466,7 @@ func (c *Client) answerServerRequest(id json.RawMessage, method string) {
 	if method == "ping" {
 		reply.Result = json.RawMessage(`{}`)
 	} else {
-		reply.Error = &rpcError{
+		reply.Error = &RPCError{
 			Code:    rpcCodeMethodNotFound,
 			Message: fmt.Sprintf("Method not found: %s (mcpmu does not relay server-to-client requests)", method),
 		}
@@ -652,6 +657,9 @@ func (c *Client) call(ctx context.Context, method string, params any, result any
 
 	select {
 	case resp := <-ch:
+		if resp.err != nil {
+			return resp.err
+		}
 		if resp.Error != nil {
 			return resp.Error
 		}

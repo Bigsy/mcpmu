@@ -164,6 +164,9 @@ func (s *Session) handleResourcesRead(ctx context.Context, params json.RawMessag
 
 	contents, err := sc.client.ReadResource(callCtx, req.URI)
 	if err != nil {
+		if upstream := upstreamRPCError(err); upstream != nil {
+			return nil, upstream
+		}
 		return nil, ErrInternalError(fmt.Sprintf("resources/read from %s: %v", instance, err))
 	}
 

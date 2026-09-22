@@ -10,14 +10,14 @@ import (
 
 // decodeReply parses one outgoing frame as a JSON-RPC response and fails the
 // test if it carries a method (i.e. is a request or notification instead).
-func decodeReply(t *testing.T, frame []byte) (id json.RawMessage, result json.RawMessage, rpcErr *rpcError) {
+func decodeReply(t *testing.T, frame []byte) (id json.RawMessage, result json.RawMessage, rpcErr *RPCError) {
 	t.Helper()
 	var env struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
 		Method  *string         `json:"method"`
 		Result  json.RawMessage `json:"result"`
-		Error   *rpcError       `json:"error"`
+		Error   *RPCError       `json:"error"`
 	}
 	if err := json.Unmarshal(frame, &env); err != nil {
 		t.Fatalf("unmarshal outgoing frame %s: %v", frame, err)

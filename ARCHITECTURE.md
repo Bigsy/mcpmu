@@ -635,7 +635,14 @@ Preserved verbatim on tools: `title`, `inputSchema` (as raw bytes, so large
 integers in a schema are not mangled by a float64 round trip), `outputSchema`,
 `annotations`, `icons`, `_meta`, and unknown members. On a `tools/call` result:
 content blocks, `structuredContent`, `isError`, and `_meta`. On the request:
-`_meta`, so a client that asks for progress actually gets it.
+`_meta`, so a client that asks for progress actually gets it. On failure: a
+JSON-RPC error the upstream answered with (`mcp.RPCError`) reaches the client
+with its `code`, `message` and `data` unchanged (`upstreamRPCError`, applied to
+`tools/call`, `resources/read` and `prompts/get`). Errors such as
+`URLElicitationRequiredError` (`-32042`) carry data the client must act on, so
+rewrapping them as `-32603` would break them. Transport failures, timeouts and
+cancellations are not upstream answers and are still reported as mcpmu's own
+errors. Metrics count a passed-through error as a failure either way.
 
 Stripped deliberately: **`execution`** (`execution.taskSupport`). It advertises
 that a tool supports task-augmented execution; forwarding it while `mcpmu`
