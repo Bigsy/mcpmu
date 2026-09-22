@@ -94,6 +94,42 @@
   </div>
 </div>
 
+{{if .Interactions.Rows}}
+<div class="card section">
+  <div class="card-header">
+    <h2>Client requests</h2>
+    {{if gt .Interactions.Fallbacks 0}}<span class="badge badge-warning" title="Requests answered with a fallback instead of reaching a client">{{.Interactions.Fallbacks}} not relayed</span>{{end}}
+  </div>
+  <div class="card-body no-pad">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Server</th>
+            <th>Request</th>
+            <th>Total</th>
+            <th>Outcomes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Interactions.Rows}}
+          <tr>
+            <td class="td-name"><a href="/servers/{{.Server}}" class="mono">{{.Server}}</a></td>
+            <td><span class="mono text-sm">{{.Method}}</span></td>
+            <td><span class="mono text-sm">{{.Total}}</span></td>
+            <td class="interaction-outcomes">
+              {{range .Outcomes}}<span class="pill {{.PillClass}}"{{if .Title}} title="{{.Title}}"{{end}}>{{.Label}} &times;{{.Count}}</span> {{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-xs text-faint" style="margin: 8px 16px;">Server-to-client requests (elicitation, sampling) from servers opted in to relaying them. Only names and outcomes are recorded — never the request or the answer.</p>
+  </div>
+</div>
+{{end}}
+
 <div class="card section">
   <div class="card-header">
     <h2>Never called in this window</h2>

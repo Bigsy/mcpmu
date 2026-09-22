@@ -16,7 +16,7 @@
       <td><span class="mono text-sm text-faint">{{.Time}}</span></td>
       <td><span class="badge badge-ns">{{.Namespace}}</span></td>
       <td><span class="mono text-sm">{{.Qualified}}</span></td>
-      <td><span class="mono text-sm">{{.Duration}}</span></td>
+      <td><span class="mono text-sm">{{.Duration}}</span>{{if .Waited}} <span class="text-xs text-faint" style="white-space: nowrap" title="Time spent waiting on relayed elicitation or sampling requests, not included in the duration">+{{.Waited}} waiting</span>{{end}}</td>
       <td><span class="pill {{.PillClass}}">{{.Outcome}}</span></td>
     </tr>
     {{end}}

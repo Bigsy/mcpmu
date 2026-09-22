@@ -26,6 +26,9 @@
       </td>
       <td><span class="mono text-sm">{{.P50}}</span></td>
       <td><span class="mono text-sm">{{.P95}}</span></td>
+      {{if $.ShowWait}}
+      <td>{{if .Waited}}<span class="mono text-sm" title="Time spent waiting on relayed elicitation or sampling requests, not included in p50/p95">{{.Waited}}</span>{{else}}<span class="text-faint">&mdash;</span>{{end}}</td>
+      {{end}}
       <td>
         {{if .LastCalled}}<span class="mono text-sm text-faint">{{.LastCalled}}</span>{{else}}<span class="text-faint">&mdash;</span>{{end}}
       </td>

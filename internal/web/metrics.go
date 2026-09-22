@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -61,7 +62,7 @@ func (s *Server) loadMetricsStore() *metrics.Store {
 type metricsQuery struct {
 	NS   string // "" = all, nsNoneParam = no-namespace, else a namespace name
 	Days int    // 7, 30, or 60
-	Sort string // tool | calls | errors | p50 | p95 | last
+	Sort string // tool | calls | errors | p50 | p95 | waited | last
 	Dir  string // asc | desc
 }
 
@@ -74,7 +75,7 @@ func parseMetricsQuery(r *http.Request) metricsQuery {
 		q.Days = 60
 	}
 	switch v := r.URL.Query().Get("sort"); v {
-	case "tool", "calls", "errors", "p50", "p95", "last":
+	case "tool", "calls", "errors", "p50", "p95", "waited", "last":
 		q.Sort = v
 	}
 	if r.URL.Query().Get("dir") == "asc" {
@@ -132,7 +133,10 @@ type metricsPageData struct {
 	Table       metricsTableVM
 	Unused      []unusedNamespaceVM
 	UnusedTotal int
-	Recent      metricsRecentVM
+	// Interactions summarizes the server-to-client requests (elicitation,
+	// sampling) serve mode relayed or answered with a fallback.
+	Interactions interactionsVM
+	Recent       metricsRecentVM
 	// RecentFragURL is polled by htmx to refresh the recent-calls panel.
 	RecentFragURL string
 }
@@ -174,6 +178,10 @@ type chartBar struct {
 type metricsTableVM struct {
 	Rows    []metricsRowVM
 	Headers []tableHeader
+	// ShowWait adds the "Waited" column: shown only when some call in the
+	// window spent time paused on a relayed interaction, so the table stays
+	// as it was for everyone not using elicitation or sampling.
+	ShowWait bool
 }
 
 type tableHeader struct {
@@ -191,6 +199,7 @@ type metricsRowVM struct {
 	Errors       uint64
 	Denied       uint64
 	P50, P95     string
+	Waited       string // total interaction wait; "" when none
 	LastCalled   string
 	Spark        *chartVM
 }
@@ -216,8 +225,32 @@ type recentRowVM struct {
 	Namespace string
 	Qualified string
 	Duration  string
+	Waited    string // time paused on relayed interactions; "" when none
 	Outcome   string
 	PillClass string
+}
+
+type interactionsVM struct {
+	Rows      []interactionRowVM
+	Total     uint64
+	Fallbacks uint64
+}
+
+// interactionRowVM is one server's requests of one kind, with a pill per
+// outcome: the client's answers first, then withdrawals and fallbacks.
+type interactionRowVM struct {
+	Server    string
+	Method    string
+	Total     uint64
+	Fallbacks uint64
+	Outcomes  []interactionPillVM
+}
+
+type interactionPillVM struct {
+	Label     string
+	Count     uint64
+	PillClass string
+	Title     string
 }
 
 // --- Builders ---
@@ -268,12 +301,13 @@ func (s *Server) buildMetricsPageData(cfg *config.Config, q metricsQuery) metric
 		Page:          "metrics",
 		ConfigPath:    s.configPathDisplay(),
 		Enabled:       cfg.MetricsEnabled(),
-		HasData:       len(store.Rows) > 0 || len(store.RecentCalls) > 0,
+		HasData:       len(store.Rows) > 0 || len(store.RecentCalls) > 0 || len(store.Interactions) > 0,
 		Query:         q,
 		Namespaces:    s.buildNSOptions(cfg, q, store.HasNoNamespaceCalls(f)),
 		DayChoices:    buildDayChoices(q),
 		Chart:         buildChart(store.DailyTotals(f)),
 		Table:         s.buildMetricsTable(store, q),
+		Interactions:  buildInteractionsVM(store.InteractionTotals(f)),
 		Recent:        buildRecentVM(store.Recent(f, 50)),
 		RecentFragURL: "/fragments/metrics/recent?" + q.values().Encode(),
 	}
@@ -413,9 +447,18 @@ func (s *Server) buildMetricsTable(store *metrics.Store, q metricsQuery) metrics
 	rows := store.ToolTable(q.filter())
 	sortToolStats(rows, q.Sort, q.Dir)
 
-	vm := metricsTableVM{Headers: buildTableHeaders(q)}
+	vm := metricsTableVM{ShowWait: q.Sort == "waited"}
 	for _, row := range rows {
+		vm.ShowWait = vm.ShowWait || row.InteractionWaitMs > 0
+	}
+	vm.Headers = buildTableHeaders(q, vm.ShowWait)
+	for _, row := range rows {
+		waited := ""
+		if row.InteractionWaitMs > 0 {
+			waited = formatMs(row.InteractionWaitMs)
+		}
 		vm.Rows = append(vm.Rows, metricsRowVM{
+			Waited:     waited,
 			Server:     row.Server,
 			Tool:       row.Tool,
 			Calls:      row.Calls,
@@ -431,15 +474,18 @@ func (s *Server) buildMetricsTable(store *metrics.Store, q metricsQuery) metrics
 	return vm
 }
 
-func buildTableHeaders(q metricsQuery) []tableHeader {
+func buildTableHeaders(q metricsQuery, withWait bool) []tableHeader {
 	columns := []struct{ key, label string }{
 		{"tool", "Tool"},
 		{"calls", "Calls"},
 		{"errors", "Errors"},
 		{"p50", "p50"},
 		{"p95", "p95"},
-		{"last", "Last called"},
 	}
+	if withWait {
+		columns = append(columns, struct{ key, label string }{"waited", "Waited"})
+	}
+	columns = append(columns, struct{ key, label string }{"last", "Last called"})
 	headers := make([]tableHeader, 0, len(columns))
 	for _, col := range columns {
 		alt := q
@@ -499,6 +545,8 @@ func sortToolStats(rows []metrics.ToolStats, sortKey, dir string) {
 			return cmpU64(a.P50Ms, b.P50Ms)
 		case "p95":
 			return cmpU64(a.P95Ms, b.P95Ms)
+		case "waited":
+			return cmpU64(a.InteractionWaitMs, b.InteractionWaitMs)
 		case "last":
 			return strings.Compare(a.LastCalled, b.LastCalled)
 		default: // calls
@@ -529,7 +577,12 @@ func buildRecentVM(calls []metrics.RecentCall) metricsRecentVM {
 		if ns == "" {
 			ns = nsNoneLabel
 		}
+		waited := ""
+		if rc.InteractionWaitMs > 0 {
+			waited = formatMs(rc.InteractionWaitMs)
+		}
 		vm.Rows = append(vm.Rows, recentRowVM{
+			Waited:    waited,
 			Time:      timeFmt,
 			Namespace: ns,
 			Qualified: rc.Server + "." + rc.Tool,
@@ -538,6 +591,82 @@ func buildRecentVM(calls []metrics.RecentCall) metricsRecentVM {
 			PillClass: outcomePillClass(rc.Outcome),
 		})
 	}
+	return vm
+}
+
+// interactionOutcomes describes the outcomes serve mode records for relayed
+// server-to-client requests (see internal/server): how to label and colour
+// each, and in what order they are listed. Unknown outcomes — a newer serve
+// writing the file — are shown verbatim after these.
+var interactionOutcomes = []struct {
+	outcome, label, class, title string
+}{
+	{"accept", "accepted", "pill-outcome-ok", "The user accepted the elicitation"},
+	{"completed", "completed", "pill-outcome-ok", "The client completed the sampling request"},
+	{"decline", "declined", "pill-outcome-cancelled", "The user declined the elicitation"},
+	{"cancel", "cancelled", "pill-outcome-cancelled", "The user dismissed the elicitation"},
+	{"unknown-action", "unknown action", "pill-outcome-cancelled", "The client answered with an action mcpmu does not know"},
+	{"client-error", "client error", "pill-outcome-error", "The client answered with a JSON-RPC error"},
+	{"withdrawn-by-server", "withdrawn", "pill-outcome-denied", "The server cancelled its own request, or stopped, before an answer"},
+	{"fallback:unroutable", "unroutable", "pill-outcome-timeout", "Could not be tied to a single client session; answered with the fallback"},
+	{"fallback:unsupported", "unsupported", "pill-outcome-timeout", "The client did not declare the capability or mode it needed; answered with the fallback"},
+	{"fallback:timeout", "timed out", "pill-outcome-timeout", "Nobody answered within the interaction timeout; answered with the fallback"},
+	{"fallback:call-ended", "call ended", "pill-outcome-timeout", "The call that asked for it ended first; answered with the fallback"},
+	{"fallback:budget-spent", "budget spent", "pill-outcome-timeout", "The call's interaction budget was already spent; answered with the fallback"},
+	{"fallback:undeliverable", "undeliverable", "pill-outcome-timeout", "Could not be delivered to the client; answered with the fallback"},
+	{"fallback:session-closed", "session closed", "pill-outcome-timeout", "The client session closed; answered with the fallback"},
+	{"fallback:malformed", "malformed", "pill-outcome-error", "The request's params were malformed; answered with the fallback"},
+}
+
+// buildInteractionsVM groups interaction totals by server and request kind.
+func buildInteractionsVM(stats []metrics.InteractionStats) interactionsVM {
+	type key struct{ server, method string }
+	counts := make(map[key]map[string]uint64)
+	var order []key
+	vm := interactionsVM{}
+	for _, st := range stats {
+		k := key{st.Server, st.Method}
+		if counts[k] == nil {
+			counts[k] = make(map[string]uint64)
+			order = append(order, k)
+		}
+		counts[k][st.Outcome] += st.Count
+	}
+	for _, k := range order {
+		row := interactionRowVM{Server: k.server, Method: k.method}
+		byOutcome := counts[k]
+		for outcome, n := range byOutcome {
+			row.Total += n
+			if strings.HasPrefix(outcome, "fallback:") {
+				row.Fallbacks += n
+			}
+		}
+		for _, known := range interactionOutcomes {
+			if n := byOutcome[known.outcome]; n > 0 {
+				row.Outcomes = append(row.Outcomes, interactionPillVM{Label: known.label, Count: n, PillClass: known.class, Title: known.title})
+				delete(byOutcome, known.outcome)
+			}
+		}
+		unknown := slices.Sorted(maps.Keys(byOutcome))
+		for _, outcome := range unknown {
+			row.Outcomes = append(row.Outcomes, interactionPillVM{Label: outcome, Count: byOutcome[outcome], PillClass: "pill-outcome-cancelled"})
+		}
+		vm.Total += row.Total
+		vm.Fallbacks += row.Fallbacks
+		vm.Rows = append(vm.Rows, row)
+	}
+	slices.SortStableFunc(vm.Rows, func(a, b interactionRowVM) int {
+		if a.Total != b.Total {
+			if a.Total > b.Total {
+				return -1
+			}
+			return 1
+		}
+		if v := strings.Compare(a.Server, b.Server); v != 0 {
+			return v
+		}
+		return strings.Compare(a.Method, b.Method)
+	})
 	return vm
 }
 
@@ -785,6 +914,15 @@ func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
 		MaxMs      uint64   `json:"maxMs"`
 		LastCalled string   `json:"lastCalled,omitempty"`
 		Daily      []uint64 `json:"daily"`
+		// InteractionWaitMs is time spent paused on relayed interactions,
+		// kept out of the latency figures.
+		InteractionWaitMs uint64 `json:"interactionWaitMs,omitempty"`
+	}
+	type apiInteraction struct {
+		Server  string `json:"server"`
+		Method  string `json:"method"`
+		Outcome string `json:"outcome"`
+		Count   uint64 `json:"count"`
 	}
 
 	resp := struct {
@@ -802,13 +940,17 @@ func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
 		Tools        []apiTool            `json:"tools"`
 		UnusedCount  int                  `json:"unusedCount"`
 		Unused       []apiUnusedNamespace `json:"unused"`
+		// Interactions counts relayed server-to-client requests by server,
+		// method and outcome (the client's action, or the fallback reason).
+		Interactions []apiInteraction `json:"interactions"`
 	}{
-		Enabled: cfg.MetricsEnabled(),
-		Since:   f.Since,
-		Until:   f.Until,
-		Daily:   store.DailyTotals(f),
-		Tools:   []apiTool{},
-		Unused:  []apiUnusedNamespace{},
+		Enabled:      cfg.MetricsEnabled(),
+		Since:        f.Since,
+		Until:        f.Until,
+		Daily:        store.DailyTotals(f),
+		Tools:        []apiTool{},
+		Unused:       []apiUnusedNamespace{},
+		Interactions: []apiInteraction{},
 	}
 
 	sum := store.Summary(f)
@@ -831,7 +973,11 @@ func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
 			TimedCalls: row.TimedCalls,
 			AvgMs:      row.AvgMs, P50Ms: row.P50Ms, P95Ms: row.P95Ms, MaxMs: row.MaxMs,
 			LastCalled: row.LastCalled, Daily: row.Daily,
+			InteractionWaitMs: row.InteractionWaitMs,
 		})
+	}
+	for _, st := range store.InteractionTotals(f) {
+		resp.Interactions = append(resp.Interactions, apiInteraction(st))
 	}
 	for _, group := range coverage.Groups {
 		apiGroup := apiUnusedNamespace{Namespace: group.Namespace, Count: group.Count}

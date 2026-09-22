@@ -342,8 +342,9 @@ mcpmu server set-client-feature <server> elicitation <on|off>
   refuse an elicitation, the client answers `action: "cancel"`.
 
 Outcomes (accepted, declined, cancelled, or why the fallback was sent) are
-counted per server in the usage metrics; the request's content and the user's
-answer are never recorded.
+counted per server in the usage metrics and shown in the web UI's Metrics page
+(**Client requests**, plus a **Waited** column for time calls spent waiting on
+the user); the request's content and the user's answer are never recorded.
 
 ## Sampling
 

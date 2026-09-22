@@ -1033,6 +1033,10 @@ textarea { min-height: 80px; resize: vertical; }
 /* cancelled is a caller hanging up, not a failure — neutral, like denied. */
 .pill-outcome-cancelled { background: var(--bg-hover); color: var(--text-faint); }
 
+/* Client requests card: one pill per outcome, wrapping on narrow screens. */
+.interaction-outcomes { white-space: normal; }
+.interaction-outcomes .pill { margin: 2px 4px 2px 0; }
+
 /* Keep long configuration values from determining the page or table width. */
 .topbar { min-width: 0; }
 .topbar-right { min-width: 0; }
