@@ -127,6 +127,10 @@ mcpmu serve --stdio --compress medium
   explicit `--compress off` forces compression off. With no flag, the session
   follows its active namespace's configured level, including across hot config
   reloads.
+- `--elicitation-heuristic on|off` — for this session, override the config's
+  `elicitationSingleCallerHeuristic` switch for its transport (see
+  [Client features](#client-features-elicitation)). Travels to the shared
+  daemon in the session handshake.
 
 Resource URIs are passed through unmodified from upstream servers. Prompt names are qualified as `serverName.promptName`.
 
@@ -299,11 +303,25 @@ mcpmu server set-client-feature <server> elicitation <on|off>
   flag, or the TUI/web server form). mcpmu then declares `elicitation`
   (form and URL mode) to that server at initialize. Changing it restarts the
   instance.
-- **Routing.** A private instance (`"shared": false`) has exactly one owning
-  session, so its requests are always routed there. A request that cannot be
-  routed, or whose client did not declare the mode it needs (URL mode for a
-  client that only declared form), is answered `{"action": "cancel"}` — a normal
-  result every server must handle.
+- **Routing.** mcpmu relays a request only to a session it has evidence for,
+  tried in this order:
+  1. **Private instance** (`"shared": false`): exactly one owning session.
+     Certain — set `"shared": false` when you need determinism.
+  2. **HTTP upstream, request on a POST response stream**: the request that
+     opened the stream is the cause. Strong evidence (the spec says such
+     messages *should* relate to that request).
+  3. **Single caller** (opt-in): a shared instance with exactly one call in
+     flight. Only a heuristic — a request left over from an earlier call looks
+     the same, and a wrong route hands one agent's question (and its user's
+     answer) to another. Off by default, with separate switches for
+     stdio/daemon sessions and for `serve --http` sessions (which may belong to
+     different people): `"elicitationSingleCallerHeuristic": {"stdio": true,
+     "http": false}`, or `--elicitation-heuristic on|off` per serve process.
+
+  Anything else — several callers on a shared stdio instance, no caller at all
+  — is not routed. A request that cannot be routed, or whose client did not
+  declare the mode it needs (URL mode for a client that only declared form), is
+  answered `{"action": "cancel"}` — a normal result every server must handle.
 - **Identification.** The client only knows it is talking to mcpmu, so the
   request's `message` is prefixed with `[server] `. URL-mode elicitation ids are
   rewritten into mcpmu's own id space (the URL itself is untouched), and the
@@ -446,5 +464,6 @@ With bearer token auth:
 | `daemonMode` | Unix shared-daemon serve mode; absent/true enables it, false is the global embedded-mode kill switch |
 | `interaction_timeout_sec` | How long one relayed interaction (an elicitation waiting on the user) may take (default: 600) |
 | `interaction_budget_sec` | Total time one call may spend paused on relayed interactions; its hard lifetime is the tool timeout plus this (default: 1800) |
+| `elicitationSingleCallerHeuristic` | `{"stdio": bool, "http": bool}` — route a shared server's elicitation to the session of its only in-flight call, per downstream transport (default: both off) |
 | `mcp_oauth_credentials_store` | Where to store OAuth tokens: `"auto"`, `"keyring"`, or `"file"` (default: auto) |
 | `mcp_oauth_callback_port` | Port for the OAuth callback server (default: auto-assigned) |

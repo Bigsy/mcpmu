@@ -392,6 +392,31 @@ func TestDaemonRejectsBadCompressionLevel(t *testing.T) {
 	}
 }
 
+func TestDaemonRejectsBadSingleCallerHeuristic(t *testing.T) {
+	d := startTestDaemon(t, nil)
+	conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: d.paths.Socket, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	line := fmt.Sprintf(`{"mcpmu_handshake":{"type":"session","protocol":%d,"build":%q,"configPath":%q,"singleCallerHeuristic":"maybe"}}`+"\n",
+		SessionProtocol, d.build, d.configPath)
+	if _, err := conn.Write([]byte(line)); err != nil {
+		t.Fatal(err)
+	}
+	responseLine, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response HandshakeResponse
+	if err := json.Unmarshal(responseLine, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.OK || !strings.Contains(response.Error, "malformed handshake") {
+		t.Fatalf("bad heuristic override should be rejected, got: %+v", response)
+	}
+}
+
 func TestDaemonRejectsSessionIdentityMismatches(t *testing.T) {
 	d := startTestDaemon(t, nil)
 	tests := []struct {

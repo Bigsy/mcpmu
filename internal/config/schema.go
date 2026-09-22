@@ -225,6 +225,11 @@ type Config struct {
 	InteractionTimeoutSec int `json:"interaction_timeout_sec,omitempty"`
 	InteractionBudgetSec  int `json:"interaction_budget_sec,omitempty"`
 
+	// ElicitationSingleCallerHeuristic opts in to routing a shared
+	// instance's elicitation to the session of its only in-flight call, per
+	// downstream transport. Off unless set; see SingleCallerHeuristic.
+	ElicitationSingleCallerHeuristic *SingleCallerHeuristic `json:"elicitationSingleCallerHeuristic,omitempty"`
+
 	// OAuth settings (Codex-compatible)
 	MCPOAuthCredentialStore string `json:"mcp_oauth_credentials_store,omitempty"` // "auto", "keyring", "file"
 	MCPOAuthCallbackPort    *int   `json:"mcp_oauth_callback_port,omitempty"`     // nil = random, 0 invalid

@@ -44,13 +44,18 @@ const (
 // Routing rules, in the order they are tried. Each carries a different level
 // of evidence; see ARCHITECTURE.md "Server-to-client requests".
 const (
-	rulePrivate = "private-instance" // certain for the session
+	rulePrivate      = "private-instance" // certain for the session
+	rulePostOrigin   = "post-origin"      // strong: the spec says such a message SHOULD relate to the POST's request
+	ruleSingleCaller = "single-caller"    // heuristic: nothing tells it from a request left over from an earlier call
 )
 
 // routeServerRequest resolves which session a server-to-client request goes
-// to. ok is false when no rule applies: the caller answers with the method's
-// fallback.
-func (c *Core) routeServerRequest(req process.UpstreamRequest) (target interactionTarget, rule string, ok bool) {
+// to, trying the rules in order of evidence. ok is false when none applies —
+// several callers on a shared stdio instance, no caller at all — and the
+// caller answers with the method's fallback. allowHeuristic admits the
+// single-caller rule, and even then only for a target session that enabled it;
+// sampling never passes it.
+func (c *Core) routeServerRequest(req process.UpstreamRequest, allowHeuristic bool) (target interactionTarget, rule string, ok bool) {
 	if !req.Instance.IsShared() {
 		// A private instance has exactly one owning session.
 		session := c.sessionForID(req.Instance.Session)
@@ -76,7 +81,29 @@ func (c *Core) routeServerRequest(req process.UpstreamRequest) (target interacti
 		}
 		return target, rulePrivate, true
 	}
+
+	// A shared instance serves several sessions. The request arrived on the
+	// response stream of one of mcpmu's POSTs to an HTTP upstream: route it
+	// to the call that made that POST.
+	if origin := callFromOwner(req.Origin); origin != nil && !origin.session.closed.Load() {
+		return interactionTarget{session: origin.session, exact: origin, calls: []*upstreamCall{origin}}, rulePostOrigin, true
+	}
+	// Exactly one call awaiting a response on the instance when the request
+	// was read. A request left over from an earlier call looks the same, so
+	// this is used only where the target session enabled it.
+	if allowHeuristic && len(req.InFlight) == 1 {
+		if call := callFromOwner(req.InFlight[0]); call != nil && !call.session.closed.Load() && call.session.singleCallerHeuristic() {
+			return interactionTarget{session: call.session, exact: call, calls: []*upstreamCall{call}}, ruleSingleCaller, true
+		}
+	}
 	return interactionTarget{}, "", false
+}
+
+// singleCallerHeuristic reports whether this session accepts requests routed
+// by the single-caller heuristic: its own override if set, else the config's
+// switch for its transport.
+func (s *Session) singleCallerHeuristic() bool {
+	return s.opts.SingleCallerHeuristic.Resolve(s.currentConfig().SingleCallerHeuristicEnabled(s.opts.HTTP))
 }
 
 // relayElicitation answers elicitation/create from an upstream: it routes the
@@ -103,9 +130,10 @@ func (c *Core) relayElicitation(ctx context.Context, req process.UpstreamRequest
 		}
 	}
 
-	target, rule, ok := c.routeServerRequest(req)
+	target, rule, ok := c.routeServerRequest(req, true)
 	if !ok {
-		log.Printf("elicitation from %s (id %s): no route, answering cancel", req.Instance, req.ID)
+		log.Printf("elicitation from %s (id %s): no route (%d calls in flight, origin hint: %t), answering cancel",
+			req.Instance, req.ID, len(req.InFlight), req.Origin != nil)
 		record("", fallbackUnroutable)
 		return elicitationFallback, nil
 	}

@@ -18,6 +18,7 @@ func metadataOnlyReload(old, next *config.Config) bool {
 		// Read per relayed interaction, never baked into a process.
 		c.InteractionTimeoutSec = 0
 		c.InteractionBudgetSec = 0
+		c.ElicitationSingleCallerHeuristic = nil
 		c.Servers = maps.Clone(c.Servers)
 		for name, srv := range c.Servers {
 			srv.DeniedTools = nil

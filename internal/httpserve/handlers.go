@@ -223,6 +223,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, routeN
 		Stderr:         io.Discard,
 		ServerName:     "mcpmu",
 		ServerVersion:  s.opts.ServerVersion,
+		HTTP:           true,
 	})
 	if err != nil {
 		cancel()

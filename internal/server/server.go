@@ -41,6 +41,10 @@ type SessionOptions struct {
 	// anyway: an unset override is sent as "", and an absent key decodes to
 	// unset too, so a shim that never sent the field reads correctly either way.
 	Compression config.CompressionOverride `json:"compression"`
+	// SingleCallerHeuristic overrides the config's
+	// elicitationSingleCallerHeuristic switch for this session's transport
+	// (see Session.singleCallerHeuristic). Unset defers to the config.
+	SingleCallerHeuristic config.Toggle `json:"singleCallerHeuristic,omitempty"`
 }
 
 // Options configures the MCP server.
@@ -56,6 +60,9 @@ type Options struct {
 	Stderr        io.Writer
 	ServerName    string
 	ServerVersion string
+	// HTTP marks a serve --http session. Only settings that differ by
+	// downstream transport read it (the single-caller heuristic switch).
+	HTTP bool
 }
 
 // SelectionMethod indicates how the active namespace was selected.

@@ -186,6 +186,13 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, cfg Config) error {
 
 			emitProgress(syncedOut, cfg, params.Meta)
 
+			if hold, ok := cfg.ToolHoldMs[params.Name]; ok {
+				go func(id json.RawMessage) {
+					time.Sleep(time.Duration(hold) * time.Millisecond)
+					_ = writeResponse(out, id, ToolCallResult{Content: []ContentBlock{{Type: "text", Text: "held"}}}, cfg)
+				}(req.ID)
+				continue
+			}
 			if script, ok := cfg.ToolServerRequests[params.Name]; ok {
 				// Runs off the loop: the loop must keep reading for the
 				// answer to arrive.

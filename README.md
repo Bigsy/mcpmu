@@ -248,8 +248,10 @@ Global settings such as metrics and OAuth still use a full reload.
   `instructions` of running upstreams are surfaced in the initialize result.
 - Relay an upstream's elicitation requests (forms and sign-in URLs) to the
   client that caused them, for servers that opt in (`--elicitation`). Routing
-  is certain for `"shared": false` servers; anything that cannot be routed is
-  answered `cancel`, and a tool's timeout pauses while it waits on the user.
+  is certain for `"shared": false` servers and strong for HTTP upstreams that
+  send the request on the call's own response stream; an opt-in single-caller
+  heuristic covers the rest. Anything that cannot be routed is answered
+  `cancel`, and a tool's timeout pauses while it waits on the user.
   Upstream JSON-RPC errors such as `URLElicitationRequiredError` pass through
   intact. See [Client features](docs/CLI.md#client-features-elicitation).
 

@@ -191,3 +191,54 @@ func TestElicitationDelayedRequestUsesGetStream(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// TestElicitationHeuristicUsesHTTPSwitch: serve --http sessions read the
+// heuristic's http switch, not the stdio one — HTTP sessions may belong to
+// different people, so enabling it for local agents must not enable it here.
+func TestElicitationHeuristicUsesHTTPSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		heuristic config.SingleCallerHeuristic
+		relayed   bool
+	}{
+		{"stdio switch only", config.SingleCallerHeuristic{Stdio: true}, false},
+		{"http switch", config.SingleCallerHeuristic{HTTP: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := privateElicitConfig(t, elicitingTool("confirm", fakeserver.ServerRequestScript{}))
+			srv := cfg.Servers["fake"]
+			srv.Shared = nil
+			cfg.Servers["fake"] = srv
+			heuristic := tc.heuristic
+			cfg.ElicitationSingleCallerHeuristic = &heuristic
+			_, base := startServer(t, cfg, nil)
+			probe := &mcptest.HTTPProbe{BaseURL: base + "/mcp"}
+			probe.InitializeWith(t, "2025-11-25", elicitCaps)
+
+			resp := <-postToolCall(t, probe, 2, "fake.confirm")
+			if !tc.relayed {
+				var body struct {
+					Result json.RawMessage `json:"result"`
+				}
+				if err := json.Unmarshal([]byte(mcptest.ReadBody(t, resp)), &body); err != nil {
+					t.Fatal(err)
+				}
+				if outcome := toolOutcome(t, body.Result); string(outcome.Result) != `{"action":"cancel"}` {
+					t.Errorf("upstream saw %+v, want the cancel fallback", outcome)
+				}
+				return
+			}
+			stream := mcptest.ResponseStream(t, resp)
+			req := decodeEvent(t, stream.NextMessage(t, 5*time.Second))
+			if req.Method != "elicitation/create" {
+				t.Fatalf("first event = %+v", req)
+			}
+			answer := probe.Post(t, `{"jsonrpc":"2.0","id":`+string(req.ID)+`,"result":{"action":"accept","content":{}}}`)
+			_ = answer.Body.Close()
+			final := decodeEvent(t, stream.NextMessage(t, 5*time.Second))
+			if outcome := toolOutcome(t, final.Result); string(outcome.Result) != `{"action":"accept","content":{}}` {
+				t.Errorf("upstream saw %+v", outcome)
+			}
+		})
+	}
+}

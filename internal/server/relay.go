@@ -13,12 +13,12 @@ import (
 
 // ClientCapabilities implements process.ServerRequestObserver: the
 // capabilities declared upstream for an instance about to initialize. Only
-// features the server opted in to are declared, and only where a request can
-// be routed with certainty: elicitation for private (shared: false)
-// instances, whose one owning session is known.
+// features the server opted in to are declared. Elicitation is declared for
+// shared instances too: a request that cannot be tied to one session is
+// answered "cancel", which every server must handle.
 func (c *Core) ClientCapabilities(id process.InstanceID, srv config.ServerConfig) map[string]any {
 	caps := map[string]any{}
-	if srv.ElicitationEnabled() && !id.IsShared() {
+	if srv.ElicitationEnabled() {
 		caps[featureElicitation] = map[string]any{modeForm: map[string]any{}, modeURL: map[string]any{}}
 	}
 	return caps

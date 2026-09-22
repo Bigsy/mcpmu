@@ -684,6 +684,23 @@ rule below uses evidence mcpmu actually has; none guesses:
 | Rule | Evidence | Confidence |
 |---|---|---|
 | **Private instance** (`shared: false`) | The instance has exactly one owning session | Certain for the session |
+| **HTTP upstream, request arrived on a POST response stream** | The spec says such messages "SHOULD relate to the originating client request", which is not a guarantee | Strong |
+| **Shared instance, exactly one in-flight call** | Nothing: a request left over from an earlier call looks the same | Heuristic, opt-in |
+| Anything else (several callers on shared stdio, no caller at all) | None | Fallback |
+
+A wrong route is harmful on every transport: on stdio or the daemon one agent's
+elicitation collects another agent's user input, which can drive the wrong
+action; on `serve --http` sessions may belong to different people, so it also
+shows one user's server content to another. So the POST-origin rule comes
+first (`ServerRequest.Origin`: the transport stamps every message read from a
+POST's response stream with that POST's request id, and the client resolves it
+to the call's owner), and the single-caller heuristic is used only where the
+*target* session enabled it — `elicitationSingleCallerHeuristic` has separate
+`stdio` and `http` switches, and `SessionOptions.SingleCallerHeuristic` (the
+`--elicitation-heuristic` flag, carried in the daemon handshake) overrides it
+per session. Sampling never uses it. Each routing decision is logged with its
+rule at debug level, so a misroute can be diagnosed. Users who need
+determinism set `"shared": false`.
 
 The exact *call* matters too — for pausing its execution budget, for ending
 the interaction when the call ends, and on `serve --http` for choosing which

@@ -141,6 +141,11 @@ type Config struct {
 	// optionally followed by notifications/elicitation/complete.
 	ToolURLElicitations map[string]URLElicitationScript `json:"toolURLElicitations,omitempty"`
 
+	// ToolHoldMs keeps the named tools' calls open this long before
+	// answering "held", without blocking the request loop, so several calls
+	// can be in flight at once (Delays sleeps in the loop and serializes).
+	ToolHoldMs map[string]int `json:"toolHoldMs,omitempty"`
+
 	// ClientCapabilitiesLogPath, when set, receives the capabilities object
 	// from each initialize request, one JSON line per initialize.
 	ClientCapabilitiesLogPath string `json:"clientCapabilitiesLogPath,omitempty"`

@@ -22,10 +22,11 @@ var (
 	// serveSession is the one binding for the per-session serve flags; every
 	// entry point (shim handshake, HTTP listener, embedded serve) takes it
 	// whole.
-	serveSession  server.SessionOptions
-	serveLogLevel string
-	serveIsolated bool
-	serveCompress string
+	serveSession   server.SessionOptions
+	serveLogLevel  string
+	serveIsolated  bool
+	serveCompress  string
+	serveHeuristic string
 
 	serveHTTP               bool
 	serveAddr               string
@@ -73,6 +74,8 @@ func init() {
 	serveCmd.Flags().BoolVar(&serveIsolated, "isolated", false, "Run embedded with private upstream server instances")
 	serveCmd.Flags().StringVar(&serveCompress, "compress", "", "Compress tools/list into list_tools/get_tool_schema/invoke_tool wrappers (levels: low, medium, high, max; medium recommended; overrides the namespace's configured level, \"off\" forces it off)")
 
+	serveCmd.Flags().StringVar(&serveHeuristic, "elicitation-heuristic", "", "Route a shared server's elicitation to the session of its only in-flight call (on|off; overrides the config's elicitationSingleCallerHeuristic for this transport)")
+
 	serveCmd.Flags().BoolVar(&serveHTTP, "http", false, "Expose the endpoint over MCP Streamable HTTP instead of stdio")
 	serveCmd.Flags().StringVar(&serveAddr, "addr", httpserve.DefaultAddr, "Listen address for --http")
 	serveCmd.Flags().StringVar(&serveToken, "token", "", "Bearer token for --http (or set MCPMU_SERVE_TOKEN); required off-loopback")
@@ -100,6 +103,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	serveSession.Compression = compression
+	heuristic, err := config.ParseToggle(serveHeuristic)
+	if err != nil {
+		return fmt.Errorf("--elicitation-heuristic: %w", err)
+	}
+	serveSession.SingleCallerHeuristic = heuristic
 
 	log.Printf("mcpmu serve starting (version=%s)", version)
 

@@ -612,11 +612,16 @@ func TestClient_ServerToClientRequest(t *testing.T) {
 		callDone <- err
 	}()
 
-	req := tp.nextSent(t, 2*time.Second)
+	// The server request's own reply is written asynchronously and may be
+	// sent before or after the call's frame; skip it.
 	var parsed struct {
-		ID int64 `json:"id"`
+		ID     int64  `json:"id"`
+		Method string `json:"method"`
 	}
-	_ = json.Unmarshal(req, &parsed)
+	for parsed.Method != "tools/list" {
+		parsed.Method = ""
+		_ = json.Unmarshal(tp.nextSent(t, 2*time.Second), &parsed)
+	}
 	tp.inject(fmt.Appendf(nil, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[]}}`, parsed.ID))
 
 	if err := <-callDone; err != nil {

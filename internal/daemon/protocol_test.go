@@ -18,7 +18,8 @@ func TestHandshakeWireShape(t *testing.T) {
 		SessionOptions: server.SessionOptions{
 			Namespace: "work", EagerStart: true, ExposeManagerTools: true,
 			ExposeResources: true, ExposePrompts: true,
-			Compression: config.CompressionForce(config.CompressionMedium),
+			Compression:           config.CompressionForce(config.CompressionMedium),
+			SingleCallerHeuristic: config.ToggleOn,
 		},
 		PID: 42,
 	}
@@ -34,7 +35,7 @@ func TestHandshakeWireShape(t *testing.T) {
 		"type": "session", "protocol": float64(SessionProtocol), "build": "b",
 		"configPath": "/c", "namespace": "work", "eager": true,
 		"exposeManagerTools": true, "resources": true, "prompts": true,
-		"compression": "medium", "pid": float64(42),
+		"compression": "medium", "singleCallerHeuristic": "on", "pid": float64(42),
 	}
 	got := keys["mcpmu_handshake"]
 	if len(got) != len(want) {

@@ -376,8 +376,13 @@ Flags:
   (`elicitation/create`) is relayed to the client for servers opted in with
   `--elicitation` / `"clientFeatures": {"elicitation": true}`, prefixed with
   `[server] ` so the user sees who is asking. Routing is certain for
-  `shared: false` servers; a request that cannot be routed, or that needs a
-  mode the client did not declare, is answered `{"action":"cancel"}`. A tool's
+  `shared: false` servers and strong for HTTP upstreams that send the request
+  on the call's own response stream. For other shared servers it is only
+  relayed when exactly one call is in flight *and* the opt-in
+  `elicitationSingleCallerHeuristic` (`{"stdio": true}` / `{"http": true}`, or
+  `mcpmu serve --elicitation-heuristic on`) allows it. A request that cannot be
+  routed, or that needs a mode the client did not declare, is answered
+  `{"action":"cancel"}`. A tool's
   timeout pauses while it waits on the user (bounded by
   `interaction_timeout_sec`, default 600, and `interaction_budget_sec`,
   default 1800). Other server requests get method-not-found.
