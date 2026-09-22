@@ -53,6 +53,9 @@ type ToolStats struct {
 	AvgMs, P50Ms, P95Ms, MaxMs uint64
 	LastCalled                 string   // max date with Calls > 0
 	Daily                      []uint64 // calls per day across the filter window, oldest first
+	// InteractionWaitMs is the total time calls spent paused on relayed
+	// interactions (not part of the latency figures).
+	InteractionWaitMs uint64
 }
 
 // DayTotal is one day of the overview chart.
@@ -179,6 +182,8 @@ func (s *Store) ToolTable(f Filter) []ToolStats {
 			MaxMs:      c.DurationMsMax,
 			LastCalled: a.lastCalled,
 			Daily:      a.daily,
+
+			InteractionWaitMs: c.InteractionWaitMsSum,
 		})
 	}
 

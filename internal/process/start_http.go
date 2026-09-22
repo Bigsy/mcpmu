@@ -118,6 +118,8 @@ func (s *Supervisor) startHTTP(ctx context.Context, id InstanceID, generation ui
 	s.handles[id] = handle
 	s.mu.Unlock()
 
+	s.installServerRequestHandler(handle, client, srv)
+
 	// Initialize MCP connection
 	initCtx, cancel := context.WithTimeout(ctx, time.Duration(srv.StartupTimeout())*time.Second)
 	defer cancel()

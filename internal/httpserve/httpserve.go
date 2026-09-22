@@ -110,6 +110,9 @@ type httpSession struct {
 	lastActive atomic.Int64 // unix nanos; bumped by client actions only
 	inflight   atomic.Int64 // POSTed requests currently being dispatched
 	closeOnce  sync.Once
+	// posts are the POSTed requests being handled, so a server→client
+	// request tied to one can ride its response stream (see postStream).
+	posts postStreams
 }
 
 func (hs *httpSession) touch() {

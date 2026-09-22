@@ -101,7 +101,10 @@ type Session struct {
 	// sessions against one Core may negotiate different revisions.
 	initialized     bool
 	protocolVersion string
-	mu              sync.RWMutex
+	// clientCaps is what the client declared at initialize (see
+	// clientSupports); guarded by mu.
+	clientCaps clientCapabilities
+	mu         sync.RWMutex
 
 	// IO
 	reader  *bufio.Reader
@@ -119,6 +122,20 @@ type Session struct {
 	// agent cancel — or eavesdrop on the progress of — another's call.
 	inflight *inflightCalls
 	progress *progressRoutes
+
+	// calls are this session's upstream calls in flight, by instance (see
+	// upstreamCall); outbound are the requests mcpmu sent to this session's
+	// client and is waiting on. Each direction has its own table: a client
+	// response is matched only against outbound, a client cancellation only
+	// against inflight, so a client that happens to pick "mcpmu-1" for its
+	// own request id cannot confuse the two.
+	calls    *activeCalls
+	outbound *outboundRequests
+	// deliverer delivers server→client requests when the writer needs more
+	// than a plain write (HTTP: POST stream upgrade); nil means write them
+	// like any other frame.
+	delivererMu sync.RWMutex
+	deliverer   RequestDeliverer
 
 	// Background discovery
 	bgDiscovering        atomic.Bool
@@ -167,6 +184,8 @@ func NewSession(core *Core, opts Options) (*Session, error) {
 		resourceMap:    make(map[string]process.InstanceID),
 		inflight:       newInflightCalls(),
 		progress:       newProgressRoutes(),
+		calls:          newActiveCalls(),
+		outbound:       newOutboundRequests(),
 	}
 	s.privateAggregator = s.newPrivateAggregator()
 	s.router = NewRouter(s)
@@ -190,6 +209,9 @@ func (s *Session) Close() {
 		// cancelled; another session against the same shared instance keeps
 		// running.
 		s.inflight.cancelAll(errSessionClosed)
+		// Requests mcpmu relayed to this client can no longer be answered;
+		// fail them so each relay answers its upstream with the fallback.
+		s.outbound.failAll(errSessionClosed)
 		s.progress.clear()
 		// Unsubscribe RPCs run without resourceStateMu: the subscription table
 		// is internally synchronized and epoch-invalidated by the writers that

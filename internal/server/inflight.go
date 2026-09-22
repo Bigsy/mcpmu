@@ -97,6 +97,12 @@ func (t *inflightCalls) len() int {
 	return len(t.calls)
 }
 
+// CanonicalRequestID is requestKey for transports that key their own state by
+// a request's JSON-RPC id (the HTTP serve POST streams).
+func CanonicalRequestID(id json.RawMessage) string {
+	return requestKey(id)
+}
+
 // requestKey canonicalises a JSON-RPC id for map use. JSON-RPC ids may be
 // strings or numbers, and `1` and `"1"` are distinct ids, so the raw encoding
 // is the key — with whitespace normalised away by re-encoding.

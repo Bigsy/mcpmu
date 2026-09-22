@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -118,10 +119,10 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 	s.logVersionMismatch(r, hs)
 
 	if msg.IsResponse() {
-		// A client's response to a server→client request. mcpmu never issues
-		// one, so there is nothing to correlate this with — but it is a
-		// response, not a request, so it gets 202 and no body rather than
-		// being dispatched as a call to the empty method.
+		// A client's answer to a request mcpmu relayed to it. Routed to the
+		// waiting relay before the 202; never dispatched as a call to the
+		// empty method, and never answered.
+		hs.sess.HandleClientResponse(msg)
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -148,12 +149,57 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 	callCtx, release := hs.sess.TrackRequest(dispatchCtx, msg.ID)
 	defer release()
 
-	resp, hasResponse := hs.sess.Dispatch(callCtx, msg)
-	if !hasResponse {
-		w.WriteHeader(http.StatusAccepted)
-		return
+	// Register this POST so a server→client request tied to this call can
+	// ride its response stream, then dispatch on a goroutine while this one
+	// stays free to do that stream's writes.
+	ps := newPostStream()
+	key := server.CanonicalRequestID(msg.ID)
+	hs.posts.add(key, ps)
+	defer hs.posts.remove(key, ps)
+
+	type dispatchResult struct {
+		resp        server.RPCResponse
+		hasResponse bool
 	}
-	writeJSON(w, http.StatusOK, resp)
+	results := make(chan dispatchResult, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("httpserve: PANIC dispatching %s: %v", msg.Method, recovered)
+				results <- dispatchResult{hasResponse: true, resp: server.RPCResponse{
+					JSONRPC: "2.0", ID: msg.ID,
+					Error: server.ErrInternalError(fmt.Sprintf("handler panicked: %v", recovered)),
+				}}
+			}
+		}()
+		resp, hasResponse := hs.sess.Dispatch(callCtx, msg)
+		results <- dispatchResult{resp: resp, hasResponse: hasResponse}
+	}()
+
+	stream := &sseResponse{w: w, rc: http.NewResponseController(w)}
+	for {
+		select {
+		case frame := <-ps.frames:
+			frame.ack <- stream.event(frame.data)
+		case res := <-results:
+			close(ps.done)
+			switch {
+			case stream.started:
+				// Upgraded: the final response goes on the same stream,
+				// which then ends.
+				if res.hasResponse {
+					if data, err := json.Marshal(res.resp); err == nil {
+						_ = stream.event(data)
+					}
+				}
+			case !res.hasResponse:
+				w.WriteHeader(http.StatusAccepted)
+			default:
+				writeJSON(w, http.StatusOK, res.resp)
+			}
+			return
+		}
+	}
 }
 
 // handleInitialize creates a Session bound to the route's namespace with an
@@ -206,6 +252,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, routeN
 		ctx:       sessCtx,
 		cancel:    cancel,
 	}
+	sess.SetRequestDeliverer(hs)
 	hs.touch()
 	if ok, full := s.register(id, hs); !ok {
 		s.teardown(id, hs)
@@ -271,15 +318,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	flushFrames := func() bool {
 		for _, frame := range hs.hub.takeAll(replaced) {
-			var buf bytes.Buffer
-			buf.WriteString("event: message\n")
-			for line := range bytes.Lines(frame.data) {
-				buf.WriteString("data: ")
-				buf.Write(bytes.TrimRight(line, "\n"))
-				buf.WriteByte('\n')
-			}
-			buf.WriteByte('\n')
-			if !writeChunk(buf.Bytes()) {
+			if !writeChunk(formatSSE(frame.data)) {
 				return false
 			}
 		}

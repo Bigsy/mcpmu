@@ -1,9 +1,11 @@
 package process
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 
+	"github.com/Bigsy/mcpmu/internal/config"
 	"github.com/Bigsy/mcpmu/internal/mcp"
 )
 
@@ -57,6 +59,30 @@ type UpstreamNotification struct {
 func (n UpstreamNotification) Clone() UpstreamNotification {
 	n.Params = append(json.RawMessage(nil), n.Params...)
 	return n
+}
+
+// UpstreamRequest is a server-to-client request tagged with the exact process
+// generation that sent it.
+type UpstreamRequest struct {
+	Instance   InstanceID
+	Generation uint64
+	mcp.ServerRequest
+}
+
+// ServerRequestObserver is implemented by an Observer that answers
+// server-to-client requests itself — serve mode's Core, which can relay them
+// to a downstream client. A Supervisor whose observer does not implement it
+// (the TUI and web managers) declares no client capabilities and keeps
+// mcp.DefaultServerRequestHandler.
+type ServerRequestObserver interface {
+	// ClientCapabilities returns the capabilities to declare upstream for an
+	// instance about to initialize. Only declare what OnServerRequest can
+	// answer.
+	ClientCapabilities(id InstanceID, srv config.ServerConfig) map[string]any
+	// OnServerRequest answers one request. It runs on its own goroutine and
+	// may block; ctx ends when the server cancels the request or the
+	// instance stops, and nothing is sent back after that.
+	OnServerRequest(ctx context.Context, req UpstreamRequest) (json.RawMessage, *mcp.RPCError)
 }
 
 // Observer receives lifecycle output owned by Supervisor. Implementations

@@ -484,7 +484,10 @@ serializing on different mutexes.
   server to hold that stream open after the response event, and reading it
   inline would block `Send` — which `Client.call` holds `sendMu` across, so every
   other RPC on the transport would queue behind it. The stream is tied to the
-  request's context and ends with it.
+  request's context and ends with it. Every message read from it is stamped
+  with the id of the POST's request (`SendRequest` / `ReceiveWithOrigin`), so
+  a server-to-client request the server sends there before its reply can be
+  traced back to the call that caused it (`mcp.ServerRequest.Origin`).
 - **The standalone GET stream.** Opened once, after the first successful POST has
   settled the protocol version and session ID, carrying `Accept:
   text/event-stream` plus the session ID. This is the only channel for messages
@@ -714,6 +717,45 @@ upstream instance cannot interfere with each other.
   short grace window because progress and the result travel different paths
   downstream — without it, a progress frame already in flight would lose a race
   it should never have been in.
+- **Call ownership.** Every upstream call a session makes for its client
+  (`tools/call`, `resources/read`, `prompts/get`) is an `upstreamCall`,
+  registered in the session's per-instance call table and attached to the call's
+  context as an `mcp.CallOwner`. `Client.call` registers the owner against the
+  upstream id it allocates, under the lock that registers the pending response,
+  before the frame is sent; the resend after HTTP session recovery reuses the
+  id, and the router's stop → restart → retry path opens a fresh owner record
+  naming the same downstream request. This is what lets a server-to-client
+  request be routed to the call that caused it.
+- **Execution budget.** The per-server tool timeout is not a context deadline
+  (those cannot be paused) but a timer (`callBudget`) that stops while a relayed
+  interaction attributed to the call is pending — an elicitation waiting on the
+  user must not burn the tool's time — and resumes with what is left. Pausing is
+  bounded twice over, so every call has a hard upper bound whatever the upstream
+  does: the cumulative **interaction budget** (`interaction_budget_sec`,
+  default 30 min) caps the total paused time, after which the timer stops
+  pausing and new interactions for the call fail at once; and the **hard
+  lifetime** (tool timeout + interaction budget) caps wall-clock time from
+  dispatch. Each interaction also has its own **interaction timeout**
+  (`interaction_timeout_sec`, default 10 min). Both are global and overridable
+  per server, and are read per call, so editing them restarts nothing. Budget
+  expiry cancels the call with a timeout cause and is recorded as
+  `OutcomeTimeout`; parent cancellation always wins. Time spent paused is
+  recorded separately (`InteractionWait`) and kept out of the call's latency.
+- **Who may cancel what.** A sender may only cancel requests it issued. The
+  upstream may cancel its own server-to-client request (`notifications/
+  cancelled`); mcpmu then withdraws the relayed request downstream with its own
+  `notifications/cancelled` for the `mcpmu-<n>` id, and sends nothing upstream,
+  because the receiver of a cancellation should not answer it. The client can
+  cancel its own `tools/call` but not an `mcpmu-<n>` request — a
+  `notifications/cancelled` is only ever looked up among the client's own
+  requests; to refuse an elicitation it answers `action: "cancel"`. Requests
+  mcpmu sent the client live in a separate table (`outboundRequests`) from the
+  requests the client sent mcpmu, and the kind of message — response or
+  cancellation — decides which table applies, so a client that picks
+  `"mcpmu-1"` for its own id is harmless. When the owning call ends (returned,
+  cancelled, out of budget, session closed), a pending relayed request is
+  withdrawn downstream and the upstream gets the method's fallback answer,
+  since its request was not cancelled by its issuer and still needs one.
 
 ## HTTP Server Custom Headers
 

@@ -89,6 +89,28 @@ func (s *Supervisor) installNotificationHandler(handle *Handle, client *mcp.Clie
 	})
 }
 
+// installServerRequestHandler wires a ServerRequestObserver into a client
+// before it initializes: the capabilities it chooses are declared in
+// initialize, and a server may send requests as soon as it has seen
+// notifications/initialized. Without such an observer the client keeps its
+// defaults — no capabilities, and mcp.DefaultServerRequestHandler.
+func (s *Supervisor) installServerRequestHandler(handle *Handle, client *mcp.Client, srv config.ServerConfig) {
+	s.observerMu.RLock()
+	observer, ok := s.observer.(ServerRequestObserver)
+	s.observerMu.RUnlock()
+	if !ok {
+		return
+	}
+	client.SetClientCapabilities(observer.ClientCapabilities(handle.instance, srv))
+	client.SetServerRequestHandler(func(ctx context.Context, req mcp.ServerRequest) (json.RawMessage, *mcp.RPCError) {
+		return observer.OnServerRequest(ctx, UpstreamRequest{
+			Instance:      handle.instance,
+			Generation:    handle.generation,
+			ServerRequest: req,
+		})
+	})
+}
+
 // SupervisorOptions configures a Supervisor.
 type SupervisorOptions struct {
 	// CredentialStoreMode specifies the OAuth credential store mode.

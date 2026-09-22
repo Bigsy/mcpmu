@@ -92,14 +92,17 @@ func (r *Recorder) Record(s CallSample) {
 		r.delta[key] = c
 	}
 	c.addSample(ms, s.Outcome)
+	waitMs := durationMs(s.InteractionWait)
+	c.InteractionWaitMsSum += waitMs
 
 	call := RecentCall{
-		Time:       s.Time,
-		Namespace:  s.Namespace,
-		Server:     s.Server,
-		Tool:       s.Tool,
-		DurationMs: ms,
-		Outcome:    s.Outcome,
+		Time:              s.Time,
+		Namespace:         s.Namespace,
+		Server:            s.Server,
+		Tool:              s.Tool,
+		DurationMs:        ms,
+		Outcome:           s.Outcome,
+		InteractionWaitMs: waitMs,
 	}
 	if s.Outcome.IsError() {
 		r.errors = append(r.errors, ErrorCall{RecentCall: call, Response: s.ErrorResponse, Input: input})

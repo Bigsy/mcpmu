@@ -109,8 +109,8 @@ type StreamableHTTPTransport struct {
 	sseConn   io.ReadCloser      // active stream body, so Close can unblock the read
 	sseActive bool
 
-	// Message queue for received messages from SSE
-	msgQueue chan []byte
+	// Message queue for received messages from SSE and JSON responses.
+	msgQueue chan inboundMessage
 
 	// Ready signal - closed when session ID is received (for legacy HTTP+SSE)
 	readyChan chan struct{}
@@ -144,7 +144,7 @@ func NewStreamableHTTPTransport(config StreamableHTTPConfig) *StreamableHTTPTran
 		config:     config,
 		sseClient:  sseClient,
 		rpcClient:  rpcClient,
-		msgQueue:   make(chan []byte, 100),
+		msgQueue:   make(chan inboundMessage, 100),
 		readyChan:  make(chan struct{}),
 		baseCtx:    baseCtx,
 		baseCancel: baseCancel,
@@ -173,10 +173,30 @@ func (t *StreamableHTTPTransport) Connect(ctx context.Context) error {
 	return nil
 }
 
+// inboundMessage is one received frame plus the id of mcpmu's request whose
+// POST response stream carried it (0 for the standalone GET stream and for a
+// direct JSON response, which is only ever the reply itself).
+type inboundMessage struct {
+	data   []byte
+	origin int64
+}
+
 // Send sends a JSON-RPC message via HTTP POST.
 // On version rejection (400 with "Unsupported MCP-Protocol-Version"), it automatically
 // retries with the next supported version until one is accepted.
 func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
+	return t.send(ctx, msg, 0)
+}
+
+// SendRequest is Send for a request whose JSON-RPC id is known. Messages the
+// server sends on this POST's response stream before the reply — an
+// elicitation/create it needs answered to finish the call, say — are stamped
+// with id, so ReceiveWithOrigin can say which request they relate to.
+func (t *StreamableHTTPTransport) SendRequest(ctx context.Context, id int64, msg []byte) error {
+	return t.send(ctx, msg, id)
+}
+
+func (t *StreamableHTTPTransport) send(ctx context.Context, msg []byte, origin int64) error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -371,7 +391,7 @@ func (t *StreamableHTTPTransport) Send(ctx context.Context, msg []byte) error {
 			// reading it here would block Send — which holds Client.sendMu, so
 			// every other RPC on this transport would queue behind it.
 			handedOff = true
-			t.drainResponseStream(ctx, resp.Body, cancelReq)
+			t.drainResponseStream(ctx, resp.Body, cancelReq, origin)
 			return nil
 		} else if strings.HasPrefix(contentType, "application/json") {
 			// Direct JSON response - queue it
@@ -409,7 +429,9 @@ func (t *StreamableHTTPTransport) upstreamError(resp *http.Response) *UpstreamHT
 // decide whether a connection was worth resetting its backoff for.
 //
 // Every event ID is recorded so a reconnect can resume with Last-Event-ID.
-func (t *StreamableHTTPTransport) pumpSSE(ctx context.Context, body io.Reader) (int, error) {
+//
+// origin is stamped on every queued message (see inboundMessage).
+func (t *StreamableHTTPTransport) pumpSSE(ctx context.Context, body io.Reader, origin int64) (int, error) {
 	scanner := newSSEScanner(body, MaxSSEEventSize)
 	delivered := 0
 	for {
@@ -443,7 +465,7 @@ func (t *StreamableHTTPTransport) pumpSSE(ctx context.Context, body io.Reader) (
 			select {
 			case <-t.done:
 				return delivered, errors.New("transport closed")
-			case t.msgQueue <- event.Data:
+			case t.msgQueue <- inboundMessage{data: event.Data, origin: origin}:
 				delivered++
 			case <-ctx.Done():
 				return delivered, ctx.Err()
@@ -458,7 +480,7 @@ func (t *StreamableHTTPTransport) pumpSSE(ctx context.Context, body io.Reader) (
 // context does. That is the right lifetime for a response stream: the reply has
 // already been queued, and the standalone GET stream is the channel for
 // server-initiated messages.
-func (t *StreamableHTTPTransport) drainResponseStream(ctx context.Context, body io.ReadCloser, release context.CancelFunc) {
+func (t *StreamableHTTPTransport) drainResponseStream(ctx context.Context, body io.ReadCloser, release context.CancelFunc, origin int64) {
 	if !t.trackGoroutine() {
 		_ = body.Close()
 		release()
@@ -474,7 +496,7 @@ func (t *StreamableHTTPTransport) drainResponseStream(ctx context.Context, body 
 		defer stop()
 		defer func() { _ = body.Close() }()
 
-		if _, err := t.pumpSSE(ctx, body); err != nil && DebugLogging {
+		if _, err := t.pumpSSE(ctx, body, origin); err != nil && DebugLogging {
 			log.Printf("HTTP POST response stream ended: %v", err)
 		}
 	}()
@@ -676,7 +698,7 @@ func (t *StreamableHTTPTransport) openStandaloneSSE(ctx context.Context) (produc
 	t.mu.Unlock()
 
 	startedAt := time.Now()
-	delivered, pumpErr := t.pumpSSE(ctx, resp.Body)
+	delivered, pumpErr := t.pumpSSE(ctx, resp.Body, 0)
 
 	t.mu.Lock()
 	if t.sseConn == resp.Body {
@@ -712,7 +734,7 @@ func (t *StreamableHTTPTransport) handleJSONResponse(ctx context.Context, resp *
 		select {
 		case <-t.done:
 			return errors.New("transport closed")
-		case t.msgQueue <- data:
+		case t.msgQueue <- inboundMessage{data: data}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -722,23 +744,30 @@ func (t *StreamableHTTPTransport) handleJSONResponse(ctx context.Context, resp *
 
 // Receive reads the next JSON-RPC message from the SSE stream or POST response.
 func (t *StreamableHTTPTransport) Receive(ctx context.Context) ([]byte, error) {
+	data, _, err := t.ReceiveWithOrigin(ctx)
+	return data, err
+}
+
+// ReceiveWithOrigin is Receive plus the id of the request whose POST response
+// stream carried the message, or 0 (see SendRequest).
+func (t *StreamableHTTPTransport) ReceiveWithOrigin(ctx context.Context) ([]byte, int64, error) {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
-		return nil, errors.New("transport closed")
+		return nil, 0, errors.New("transport closed")
 	}
 	t.mu.Unlock()
 
 	select {
 	case msg, ok := <-t.msgQueue:
 		if !ok {
-			return nil, errors.New("transport closed")
+			return nil, 0, errors.New("transport closed")
 		}
-		return msg, nil
+		return msg.data, msg.origin, nil
 	case <-t.done:
-		return nil, errors.New("transport closed")
+		return nil, 0, errors.New("transport closed")
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, 0, ctx.Err()
 	}
 }
 

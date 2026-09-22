@@ -159,13 +159,18 @@ func (s *Session) handleResourcesRead(ctx context.Context, params json.RawMessag
 		return nil, rpcErr
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, sc.timeout)
-	defer cancel()
+	// Owned and budgeted like a tool call: the upstream may ask the client
+	// something (elicitation) while reading.
+	callCtx, _, endCall := s.beginUpstreamCall(ctx, sc.handle.InstanceID(), sc.timeout)
+	defer endCall()
 
 	contents, err := sc.client.ReadResource(callCtx, req.URI)
 	if err != nil {
 		if upstream := upstreamRPCError(err); upstream != nil {
 			return nil, upstream
+		}
+		if cause := context.Cause(callCtx); isCallTimeout(cause) {
+			err = cause
 		}
 		return nil, ErrInternalError(fmt.Sprintf("resources/read from %s: %v", instance, err))
 	}

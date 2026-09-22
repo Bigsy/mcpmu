@@ -60,9 +60,17 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	cfg := r.session.currentConfig()
 	srv, serverExists := cfg.GetServer(serverName)
 	var sample *metrics.CallSample
+	// waited sums the time the call spent paused on relayed interactions
+	// (an elicitation waiting on the user). It is recorded separately and
+	// kept out of Duration, so call latency stays meaningful.
+	var waited time.Duration
 	defer func() {
 		if sample == nil {
 			return
+		}
+		if sample.Duration > 0 {
+			sample.InteractionWait = min(waited, sample.Duration)
+			sample.Duration -= sample.InteractionWait
 		}
 		if sample.Outcome.IsError() && sample.ErrorResponse == "" {
 			if finalError != nil {
@@ -126,14 +134,19 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 	}
 	client := sc.client
 
-	// Set timeout for the call using per-server config (defaults to 60s)
+	// The per-server tool timeout (default 60s) is an execution budget, not a
+	// deadline: it pauses while the call waits on a relayed interaction. The
+	// call is registered as the owner of its upstream request, so a
+	// server-to-client request the upstream makes on its behalf can be
+	// routed back to it.
 	timeout := time.Duration(srv.ToolTimeout()) * time.Second
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	instance := sc.handle.InstanceID()
+	callCtx, _, endCall := r.session.beginUpstreamCall(ctx, instance, timeout)
+	defer func() { waited += endCall() }()
 
 	result, err := client.CallToolWithMeta(callCtx, toolName, arguments, meta)
 	if err != nil {
-		if callCtx.Err() == context.DeadlineExceeded {
+		if isCallTimeout(context.Cause(callCtx)) {
 			record(metrics.OutcomeTimeout, time.Since(start))
 			return nil, ErrToolCallTimeout(serverName, toolName)
 		}
@@ -161,12 +174,17 @@ func (r *Router) CallTool(ctx context.Context, qualifiedName string, arguments, 
 			}
 			client = reinitialized.client
 
-			retryCtx, retryCancel := context.WithTimeout(ctx, timeout)
-			defer retryCancel()
+			// The retry is the same client request on a fresh upstream
+			// client, so it gets a fresh budget and a fresh owner record
+			// naming the same downstream request: a server request the
+			// restarted instance makes still routes back to this call.
+			waited += endCall()
+			retryCtx, _, endRetry := r.session.beginUpstreamCall(ctx, reinitialized.handle.InstanceID(), timeout)
+			defer func() { waited += endRetry() }()
 
 			result, err = client.CallToolWithMeta(retryCtx, toolName, arguments, meta)
 			if err != nil {
-				if retryCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+				if isCallTimeout(context.Cause(retryCtx)) && ctx.Err() == nil {
 					record(metrics.OutcomeTimeout, time.Since(start))
 					return nil, ErrToolCallTimeout(serverName, toolName)
 				}

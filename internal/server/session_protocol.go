@@ -144,7 +144,7 @@ func (s *Session) Dispatch(ctx context.Context, msg RPCMessage) (RPCResponse, bo
 		}
 		return RPCResponse{}, false
 	}
-	result, rpcErr := s.handleRequest(ctx, msg.Method, msg.Params)
+	result, rpcErr := s.handleRequest(withDownstreamRequestID(ctx, msg.ID), msg.Method, msg.Params)
 	if rpcErr != nil {
 		return RPCResponse{JSONRPC: "2.0", ID: msg.ID, Error: rpcErr}, true
 	}
@@ -176,10 +176,9 @@ func (s *Session) handleMessage(ctx context.Context, data []byte) error {
 	}
 
 	if msg.IsResponse() {
-		// A client response. The server issues no server→client requests, so
-		// there is nothing to correlate it with; replying would be a protocol
-		// violation (a response to a response), so drop it.
-		log.Printf("Dropping unexpected client response (id %s)", msg.ID)
+		// A client's answer to a request mcpmu relayed to it. Never replied
+		// to — a response to a response is a protocol violation.
+		s.HandleClientResponse(msg)
 		return nil
 	}
 
@@ -348,6 +347,7 @@ func (s *Session) handleInitialize(ctx context.Context, params json.RawMessage) 
 	s.router.SetActiveNamespace(s.activeNamespaceName, s.selectionMethod)
 
 	s.protocolVersion = negotiateProtocolVersion(req.ProtocolVersion)
+	s.clientCaps = parseClientCapabilities(req.Capabilities)
 	s.initialized = true
 
 	// Build capabilities
@@ -452,9 +452,9 @@ type RPCResponse struct {
 }
 
 type initializeRequest struct {
-	ProtocolVersion string     `json:"protocolVersion"`
-	Capabilities    any        `json:"capabilities"`
-	ClientInfo      clientInfo `json:"clientInfo"`
+	ProtocolVersion string          `json:"protocolVersion"`
+	Capabilities    json.RawMessage `json:"capabilities"`
+	ClientInfo      clientInfo      `json:"clientInfo"`
 }
 
 type clientInfo struct {

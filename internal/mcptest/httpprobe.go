@@ -255,6 +255,21 @@ func (p *HTTPProbe) OpenStream(t *testing.T, extraHeaders ...string) *SSEStream 
 	return stream
 }
 
+// ResponseStream parses an SSE response body — a POST whose response was
+// upgraded to text/event-stream — into an SSEStream. The stream's Events
+// channel closes when the body ends.
+func ResponseStream(t *testing.T, resp *http.Response) *SSEStream {
+	t.Helper()
+	events := make(chan SSEEvent, 64)
+	stream := &SSEStream{Events: events, Status: resp.StatusCode, cancel: func() {}, body: resp.Body}
+	go func() {
+		defer close(events)
+		parseSSE(resp.Body, events)
+	}()
+	t.Cleanup(stream.Close)
+	return stream
+}
+
 // parseSSE reads SSE frames until the body ends. Minimal by design — this is
 // a test probe, not a client.
 func parseSSE(body io.Reader, out chan<- SSEEvent) {

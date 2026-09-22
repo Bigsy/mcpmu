@@ -2,6 +2,7 @@ package httpserve
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"sync"
 )
@@ -11,11 +12,20 @@ import (
 // hundreds of distinct notification keys with no consumer.
 const hubBacklogCap = 256
 
-// sseFrame is one queued notification.
+// sseFrame is one queued frame: a notification, or a server→client request
+// queued by Deliver.
 type sseFrame struct {
-	key  string // coalescing key; "" = never coalesce
-	data []byte // one JSON-RPC frame, no trailing newline
+	key     string // coalescing key; "" = never coalesce
+	data    []byte // one JSON-RPC frame, no trailing newline
+	request bool   // a server→client request: never coalesced or evicted
 }
+
+// Why Deliver refused a request.
+var (
+	errHubClosed          = errors.New("session is closed")
+	errNoStandaloneStream = errors.New("no standalone SSE stream is attached")
+	errBacklogFull        = errors.New("SSE backlog is full of undelivered requests")
+)
 
 // sseHub is an HTTP session's writer. Every Session notification arrives as
 // exactly one Write call per frame (send() writes payload+newline together);
@@ -23,6 +33,8 @@ type sseFrame struct {
 // GET stream. Unlike the daemon's queuedWriter it never kills the session on
 // overflow — responses do not flow through here, only notifications, and the
 // load-bearing ones are idempotent "go re-fetch" signals that coalesce.
+// Server→client requests that cannot ride a POST stream arrive through
+// Deliver instead, which can refuse them (see postStream).
 //
 // Network writes happen on the GET handler's goroutine, never here: Write
 // only appends to the queue under a short mutex and signals the current
@@ -55,12 +67,7 @@ func newSSEHub() *sseHub {
 // (Session-internal notification goroutines may fire late): a closed hub
 // swallows the frame.
 func (h *sseHub) Write(p []byte) (int, error) {
-	data := make([]byte, len(p))
-	copy(data, p)
-	// Strip the NDJSON framing newline; SSE re-frames each message itself.
-	for len(data) > 0 && (data[len(data)-1] == '\n' || data[len(data)-1] == '\r') {
-		data = data[:len(data)-1]
-	}
+	data := trimFrame(p)
 	if len(data) == 0 {
 		return len(p), nil
 	}
@@ -84,22 +91,88 @@ func (h *sseHub) Write(p []byte) (int, error) {
 		}
 	}
 	if !replaced {
-		if len(h.queue) >= hubBacklogCap {
-			log.Printf("httpserve: SSE backlog full, dropping oldest frame")
-			h.queue = h.queue[1:]
+		if len(h.queue) >= hubBacklogCap && !h.evictNotificationLocked() {
+			// Every queued frame is a request awaiting its answer; this
+			// notification is the one that goes.
+			h.mu.Unlock()
+			log.Printf("httpserve: SSE backlog full of requests, dropping notification")
+			return len(p), nil
 		}
 		h.queue = append(h.queue, frame)
 	}
 	drain := h.drain
 	h.mu.Unlock()
 
-	if drain != nil {
-		select {
-		case drain <- struct{}{}:
-		default:
+	signal(drain)
+	return len(p), nil
+}
+
+// Deliver queues a server→client request for the attached GET stream. Unlike
+// Write it can fail, because a request nobody sees would wait out its whole
+// timeout: it errors when the hub is closed, when no stream is attached (a
+// client need not open one, and a request queued for a stream that may never
+// come is as good as lost), or when the backlog holds nothing but requests. A
+// request is never coalesced, and the overflow logic evicts a notification to
+// make room for it rather than another request.
+func (h *sseHub) Deliver(p []byte) error {
+	data := trimFrame(p)
+	if len(data) == 0 {
+		return errors.New("empty frame")
+	}
+	h.mu.Lock()
+	switch {
+	case h.closed:
+		h.mu.Unlock()
+		return errHubClosed
+	case h.replaced == nil:
+		h.mu.Unlock()
+		return errNoStandaloneStream
+	}
+	if len(h.queue) >= hubBacklogCap && !h.evictNotificationLocked() {
+		h.mu.Unlock()
+		return errBacklogFull
+	}
+	h.queue = append(h.queue, sseFrame{data: data, request: true})
+	drain := h.drain
+	h.mu.Unlock()
+
+	signal(drain)
+	return nil
+}
+
+// evictNotificationLocked drops the oldest queued notification to make room,
+// reporting false when every queued frame is a request.
+func (h *sseHub) evictNotificationLocked() bool {
+	for i, frame := range h.queue {
+		if !frame.request {
+			log.Printf("httpserve: SSE backlog full, dropping oldest notification")
+			h.queue = append(h.queue[:i], h.queue[i+1:]...)
+			return true
 		}
 	}
-	return len(p), nil
+	return false
+}
+
+// trimFrame copies one written frame, stripping the NDJSON framing newline;
+// SSE re-frames each message itself.
+func trimFrame(p []byte) []byte {
+	data := make([]byte, len(p))
+	copy(data, p)
+	for len(data) > 0 && (data[len(data)-1] == '\n' || data[len(data)-1] == '\r') {
+		data = data[:len(data)-1]
+	}
+	return data
+}
+
+// signal wakes a stream's drain loop without blocking.
+func signal(drain chan struct{}) {
+	if drain == nil {
+		return
+	}
+	select {
+	case drain <- struct{}{}:
+	default:
+	}
 }
 
 // coalesceKey derives the dedupe key for a queued frame. Notifications that

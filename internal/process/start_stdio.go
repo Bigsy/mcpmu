@@ -126,6 +126,7 @@ func (s *Supervisor) startStdio(ctx context.Context, id InstanceID, generation u
 	// Callers wait via handle.WaitForTools(), which blocks until init + discovery
 	// complete (or the caller's context expires). The process stays alive even if
 	// the caller's context expires — only handle.Stop() kills it.
+	s.installServerRequestHandler(handle, client, srv)
 	go s.initAndDiscoverAsync(handle, client, name)
 
 	return handle, nil

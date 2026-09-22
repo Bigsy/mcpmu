@@ -85,6 +85,9 @@ type storeRow struct {
 	DurationMsSum uint64             `json:"durationMsSum,omitempty"`
 	DurationMsMax uint64             `json:"durationMsMax,omitempty"`
 	Hist          []uint64           `json:"hist,omitempty"`
+	// Added after StoreVersion 1 shipped; absent in older files, which
+	// decode to zero.
+	InteractionWaitMsSum uint64 `json:"interactionWaitMsSum,omitempty"`
 }
 
 // Load reads and parses a metrics file. A missing file returns an empty
@@ -118,6 +121,7 @@ func parseStore(data []byte) (*Store, error) {
 		maps.Copy(c.Outcomes, row.Outcomes)
 		c.DurationMsSum = row.DurationMsSum
 		c.DurationMsMax = row.DurationMsMax
+		c.InteractionWaitMsSum = row.InteractionWaitMsSum
 		copy(c.Hist[:], row.Hist)
 		// Merge rather than overwrite so duplicate keys (hand-edited files)
 		// don't silently drop counts.
@@ -221,6 +225,8 @@ func (s *Store) saveAtomic(path string) error {
 			DurationMsSum: c.DurationMsSum,
 			DurationMsMax: c.DurationMsMax,
 			Hist:          c.Hist[:],
+
+			InteractionWaitMsSum: c.InteractionWaitMsSum,
 		})
 	}
 	// Stable output ordering keeps diffs and tests sane.

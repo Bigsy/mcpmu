@@ -30,6 +30,8 @@ const (
 	// rpcCodeMethodNotFound is the JSON-RPC 2.0 "Method not found" code, the
 	// answer to every server-to-client request mcpmu does not implement.
 	rpcCodeMethodNotFound = -32601
+	// rpcCodeInternalError is the JSON-RPC 2.0 "Internal error" code.
+	rpcCodeInternalError = -32603
 )
 
 // NotificationHandler is invoked for each JSON-RPC notification received from
@@ -44,10 +46,25 @@ type Client struct {
 	transport Transport
 	nextID    atomic.Int64
 
-	// mu guards pending and closed.
+	// mu guards pending, owners, serverReqs and closed.
 	mu      sync.Mutex
 	closed  bool
 	pending map[int64]chan rpcResponse
+	// owners maps an in-flight upstream request id to the downstream request
+	// it was made for (see CallOwner). Registered with pending, under the
+	// same lock, before the request is sent.
+	owners map[int64]*CallOwner
+	// serverReqs are the server-to-client requests being answered, keyed by
+	// canonical id, so the server's notifications/cancelled can reach them.
+	serverReqs map[string]*serverRequestEntry
+
+	// lifetime parents every server request handler; cancelled by Close and
+	// when the reader exits.
+	lifetime       context.Context
+	cancelLifetime context.CancelCauseFunc
+
+	serverReqHandler atomic.Pointer[ServerRequestHandler]
+	clientCaps       atomic.Pointer[map[string]any]
 
 	// reinitMu single-flights session-expiry recovery. See reinitializeOnce.
 	reinitMu sync.Mutex
@@ -175,10 +192,15 @@ type toolsListResult struct {
 // goroutine starts immediately so that Close is safe even if Initialize is
 // never called.
 func NewClient(transport Transport) *Client {
+	lifetime, cancelLifetime := context.WithCancelCause(context.Background())
 	c := &Client{
-		transport:  transport,
-		pending:    make(map[int64]chan rpcResponse),
-		readerDone: make(chan struct{}),
+		transport:      transport,
+		pending:        make(map[int64]chan rpcResponse),
+		owners:         make(map[int64]*CallOwner),
+		serverReqs:     make(map[string]*serverRequestEntry),
+		readerDone:     make(chan struct{}),
+		lifetime:       lifetime,
+		cancelLifetime: cancelLifetime,
 	}
 	c.readerOnce.Do(func() { go c.readLoop() })
 	return c
@@ -202,10 +224,20 @@ func (c *Client) readLoop() {
 	defer close(c.readerDone)
 
 	ctx := context.Background()
-	for {
+	receive := func() ([]byte, int64, error) {
 		data, err := c.transport.Receive(ctx)
+		return data, 0, err
+	}
+	if withOrigin, ok := c.transport.(originReceiver); ok {
+		receive = func() ([]byte, int64, error) { return withOrigin.ReceiveWithOrigin(ctx) }
+	}
+	for {
+		data, origin, err := receive()
 		if err != nil {
 			c.readerErr.Store(err)
+			// Nothing can reach the server any more: abandon every request
+			// it is still waiting on an answer to.
+			c.cancelLifetime(errClientClosed)
 			c.mu.Lock()
 			pending := c.pending
 			c.pending = make(map[int64]chan rpcResponse)
@@ -257,12 +289,17 @@ func (c *Client) readLoop() {
 			}
 
 		case !hasID && hasMethod:
+			if *env.Method == "notifications/cancelled" && c.handleServerCancellation(env.Params) {
+				// The server withdrew a request it sent us; that concerns
+				// only the handler answering it.
+				continue
+			}
 			if h := c.notifHandler.Load(); h != nil && *h != nil {
 				(*h)(*env.Method, env.Params)
 			}
 
 		case hasID && hasMethod:
-			c.answerServerRequest(*env.ID, *env.Method)
+			c.handleServerRequest(*env.ID, *env.Method, env.Params, origin)
 
 		default:
 			if DebugLogging {
@@ -281,7 +318,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 	for _, version := range SupportedProtocolVersions {
 		params := initializeParams{
 			ProtocolVersion: version,
-			Capabilities:    map[string]any{},
+			Capabilities:    c.clientCapabilities(),
 			ClientInfo: clientInfo{
 				Name:    "mcpmu-go",
 				Version: "0.1.0",
@@ -448,60 +485,6 @@ func (c *Client) Instructions() string {
 	return ""
 }
 
-// answerServerRequest replies to a request the server sent to mcpmu.
-//
-// mcpmu declares no client capabilities upstream, so a well-behaved server
-// never asks for sampling, elicitation or roots. `ping`, however, needs no
-// capability, and a server that pings its client as a liveness check would
-// otherwise conclude the connection is dead. Everything else is answered with
-// "Method not found" rather than silence: a JSON-RPC request that never gets a
-// response leaves the server blocked until its own timeout, and an explicit
-// error is what lets it fail the operation cleanly instead.
-//
-// The reply is sent from its own goroutine. This runs on the reader goroutine,
-// and a transport write may block (a full stdin pipe, an HTTP POST round
-// trip); blocking here would stop every response and notification behind it.
-func (c *Client) answerServerRequest(id json.RawMessage, method string) {
-	reply := rpcReply{JSONRPC: "2.0", ID: append(json.RawMessage(nil), id...)}
-	if method == "ping" {
-		reply.Result = json.RawMessage(`{}`)
-	} else {
-		reply.Error = &RPCError{
-			Code:    rpcCodeMethodNotFound,
-			Message: fmt.Sprintf("Method not found: %s (mcpmu does not relay server-to-client requests)", method),
-		}
-		if DebugLogging {
-			log.Printf("MCP Recv: server->client request %s (id=%s) answered with method not found", method, string(id))
-		}
-	}
-
-	data, err := json.Marshal(reply)
-	if err != nil {
-		if DebugLogging {
-			log.Printf("MCP Recv: marshal reply to %s: %v", method, err)
-		}
-		return
-	}
-
-	c.mu.Lock()
-	closed := c.closed
-	c.mu.Unlock()
-	if closed {
-		return
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), serverReplyTimeout)
-		defer cancel()
-		// Plain Send, not sendWithSessionRecovery: a reply to a dead HTTP
-		// session is worthless, and reinitializing on its account would be a
-		// side effect the server never asked for.
-		if err := c.transport.Send(ctx, data); err != nil && DebugLogging {
-			log.Printf("MCP Send: reply to server request %s not delivered: %v", method, err)
-		}
-	}()
-}
-
 // CallTool invokes a tool on the MCP server.
 func (c *Client) CallTool(ctx context.Context, name string, arguments json.RawMessage) (*ToolResult, error) {
 	return c.CallToolWithMeta(ctx, name, arguments, nil)
@@ -610,6 +593,7 @@ func (c *Client) Close() error {
 	}
 	c.closed = true
 	c.mu.Unlock()
+	c.cancelLifetime(errClientClosed)
 
 	err := c.transport.Close()
 
@@ -629,6 +613,12 @@ func (c *Client) call(ctx context.Context, method string, params any, result any
 	id := c.nextID.Add(1)
 	ch := make(chan rpcResponse, 1)
 	c.pending[id] = ch
+	// Register the owner before the request can reach the wire, so a server
+	// request that arrives on its response stream — however quickly — can
+	// be traced back to it.
+	if owner := CallOwnerFromContext(ctx); owner != nil {
+		c.owners[id] = owner
+	}
 	c.mu.Unlock()
 
 	// Cleanup: remove pending entry if still present. Channel is never
@@ -637,6 +627,7 @@ func (c *Client) call(ctx context.Context, method string, params any, result any
 	defer func() {
 		c.mu.Lock()
 		delete(c.pending, id)
+		delete(c.owners, id)
 		c.mu.Unlock()
 	}()
 
@@ -651,7 +642,7 @@ func (c *Client) call(ctx context.Context, method string, params any, result any
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	if sendErr := c.sendWithSessionRecovery(ctx, method, data); sendErr != nil {
+	if sendErr := c.sendWithSessionRecovery(ctx, method, id, data); sendErr != nil {
 		return fmt.Errorf("send: %w", sendErr)
 	}
 
@@ -722,7 +713,7 @@ func (c *Client) notify(ctx context.Context, method string, params any) error {
 		return fmt.Errorf("marshal notification: %w", err)
 	}
 
-	return c.sendWithSessionRecovery(ctx, method, data)
+	return c.sendWithSessionRecovery(ctx, method, 0, data)
 }
 
 // sendWithSessionRecovery sends one frame, recovering once from an expired
@@ -742,8 +733,12 @@ func (c *Client) notify(ctx context.Context, method string, params any) error {
 // POST round trip — head-of-line blocking every concurrent caller, and
 // stranding notifications/cancelled behind the very tool call being
 // cancelled until its 5-second deadline blew.
-func (c *Client) sendWithSessionRecovery(ctx context.Context, method string, data []byte) error {
-	sendErr := c.transport.Send(ctx, data)
+//
+// id is the frame's JSON-RPC request id, or 0 for a notification. The resend
+// after recovery reuses the same id, so its owner registration (see call)
+// still applies.
+func (c *Client) sendWithSessionRecovery(ctx context.Context, method string, id int64, data []byte) error {
+	sendErr := c.sendFrame(ctx, id, data)
 
 	var expired *SessionExpiredError
 	if !errors.As(sendErr, &expired) || method == "initialize" || method == "notifications/initialized" {
@@ -753,6 +748,27 @@ func (c *Client) sendWithSessionRecovery(ctx context.Context, method string, dat
 	log.Printf("MCP session expired before %s; reinitializing and retrying once", method)
 	if initErr := c.reinitializeOnce(ctx); initErr != nil {
 		return fmt.Errorf("reinitialize after session expiry: %w", initErr)
+	}
+	return c.sendFrame(ctx, id, data)
+}
+
+// requestSender is implemented by transports that want to know the id of the
+// request they are sending without parsing it (Streamable HTTP stamps it on
+// messages arriving on that request's response stream).
+type requestSender interface {
+	SendRequest(ctx context.Context, id int64, msg []byte) error
+}
+
+// originReceiver is implemented by transports that can say which of mcpmu's
+// requests a received message arrived in response to (see
+// ServerRequest.OriginRequestID).
+type originReceiver interface {
+	ReceiveWithOrigin(ctx context.Context) ([]byte, int64, error)
+}
+
+func (c *Client) sendFrame(ctx context.Context, id int64, data []byte) error {
+	if sender, ok := c.transport.(requestSender); ok && id != 0 {
+		return sender.SendRequest(ctx, id, data)
 	}
 	return c.transport.Send(ctx, data)
 }

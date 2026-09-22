@@ -15,9 +15,14 @@ func metadataOnlyReload(old, next *config.Config) bool {
 		c := *cfg
 		c.LastModified = time.Time{}
 		c.ToolPermissions = nil
+		// Read per relayed interaction, never baked into a process.
+		c.InteractionTimeoutSec = 0
+		c.InteractionBudgetSec = 0
 		c.Servers = maps.Clone(c.Servers)
 		for name, srv := range c.Servers {
 			srv.DeniedTools = nil
+			srv.InteractionTimeoutSec = 0
+			srv.InteractionBudgetSec = 0
 			c.Servers[name] = srv
 		}
 		c.Namespaces = maps.Clone(c.Namespaces)
@@ -60,6 +65,10 @@ func selectiveReload(old, next *config.Config) (map[string]bool, bool) {
 
 func runtimeServerConfig(s config.ServerConfig) config.ServerConfig {
 	s.DeniedTools = nil
+	// Interaction limits are read per relayed interaction; editing them must
+	// not restart the instance.
+	s.InteractionTimeoutSec = 0
+	s.InteractionBudgetSec = 0
 	isHTTP := s.IsHTTP()
 	s.Kind = config.ServerKindStdio
 	if isHTTP {

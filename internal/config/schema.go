@@ -53,6 +53,10 @@ type ServerConfig struct {
 	// Timeouts (seconds)
 	StartupTimeoutSec int `json:"startup_timeout_sec,omitempty"` // Default 10
 	ToolTimeoutSec    int `json:"tool_timeout_sec,omitempty"`    // Default 60
+	// Relayed-interaction limits (seconds); 0 = the global setting. See
+	// Config.InteractionTimeoutSec and Config.InteractionBudgetSec.
+	InteractionTimeoutSec int `json:"interaction_timeout_sec,omitempty"`
+	InteractionBudgetSec  int `json:"interaction_budget_sec,omitempty"`
 
 	RecordErrorInputs bool `json:"recordErrorInputs,omitempty"` // Opt in to redacted arguments on failed calls.
 
@@ -152,6 +156,15 @@ type Config struct {
 	Metrics          *MetricsConfig             `json:"metrics,omitempty"`
 	LastModified     time.Time                  `json:"lastModified"`
 
+	// InteractionTimeoutSec bounds one relayed server-to-client interaction
+	// (an elicitation waiting on the user); 0 = DefaultInteractionTimeoutSec.
+	// InteractionBudgetSec bounds the total time one call may spend paused on
+	// such interactions; 0 = DefaultInteractionBudgetSec. A call's hard
+	// lifetime is its tool timeout plus its interaction budget. Both are
+	// overridable per server.
+	InteractionTimeoutSec int `json:"interaction_timeout_sec,omitempty"`
+	InteractionBudgetSec  int `json:"interaction_budget_sec,omitempty"`
+
 	// OAuth settings (Codex-compatible)
 	MCPOAuthCredentialStore string `json:"mcp_oauth_credentials_store,omitempty"` // "auto", "keyring", "file"
 	MCPOAuthCallbackPort    *int   `json:"mcp_oauth_callback_port,omitempty"`     // nil = random, 0 invalid
@@ -193,6 +206,33 @@ func (c *Config) MetricsRetentionDays() int {
 		return DefaultMetricsRetentionDays
 	}
 	return c.Metrics.RetentionDays
+}
+
+// Default relayed-interaction limits, in seconds.
+const (
+	DefaultInteractionTimeoutSec = 10 * 60
+	DefaultInteractionBudgetSec  = 30 * 60
+)
+
+// InteractionTimeout returns how long one relayed interaction for srv may
+// wait: the server's own setting, else the global one, else the default.
+func (c *Config) InteractionTimeout(srv ServerConfig) time.Duration {
+	return time.Duration(firstPositive(srv.InteractionTimeoutSec, c.InteractionTimeoutSec, DefaultInteractionTimeoutSec)) * time.Second
+}
+
+// InteractionBudget returns the total time one call to srv may spend paused
+// on relayed interactions, resolved like InteractionTimeout.
+func (c *Config) InteractionBudget(srv ServerConfig) time.Duration {
+	return time.Duration(firstPositive(srv.InteractionBudgetSec, c.InteractionBudgetSec, DefaultInteractionBudgetSec)) * time.Second
+}
+
+func firstPositive(values ...int) int {
+	for _, v := range values {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 // NewConfig creates a new empty configuration with default values.

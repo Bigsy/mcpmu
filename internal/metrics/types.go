@@ -33,14 +33,17 @@ const dateLayout = "2006-01-02"
 // CallSample is the single unit handed to the Recorder. Deliberately flat —
 // if OTel export is ever added, these fields map 1:1 onto span attributes.
 type CallSample struct {
-	Time          time.Time
-	Namespace     string        // "" when no namespace is active; store as ""
-	Server        string        // config server name; "mcpmu" for manager tools
-	Tool          string        // unqualified tool name
-	Duration      time.Duration // 0 for denied calls
-	Outcome       Outcome
-	ErrorInput    json.RawMessage // only supplied when the server opts in; redacted before retention
-	ErrorResponse string          // failed response JSON or diagnostic text
+	Time      time.Time
+	Namespace string        // "" when no namespace is active; store as ""
+	Server    string        // config server name; "mcpmu" for manager tools
+	Tool      string        // unqualified tool name
+	Duration  time.Duration // 0 for denied calls; excludes InteractionWait
+	// InteractionWait is the time the call spent paused on relayed
+	// server-to-client interactions (an elicitation waiting on the user).
+	InteractionWait time.Duration
+	Outcome         Outcome
+	ErrorInput      json.RawMessage // only supplied when the server opts in; redacted before retention
+	ErrorResponse   string          // failed response JSON or diagnostic text
 }
 
 // BucketKey identifies one daily counter row.
@@ -66,6 +69,9 @@ type Counters struct {
 	// reached an upstream and are excluded (see addSample).
 	DurationMsSum uint64
 	DurationMsMax uint64
+	// InteractionWaitMsSum is the total time calls spent paused on relayed
+	// interactions, kept out of the latency figures above.
+	InteractionWaitMsSum uint64
 	// Latency histogram. Hist[i] counts calls with duration <= HistBoundsMs[i];
 	// the last element is the +Inf overflow.
 	Hist [histBuckets]uint64
@@ -114,6 +120,7 @@ func (c *Counters) merge(o *Counters) {
 	}
 	c.DurationMsSum += o.DurationMsSum
 	c.DurationMsMax = max(c.DurationMsMax, o.DurationMsMax)
+	c.InteractionWaitMsSum += o.InteractionWaitMsSum
 	for i := range c.Hist {
 		c.Hist[i] += o.Hist[i]
 	}
@@ -187,6 +194,9 @@ type RecentCall struct {
 	Tool       string    `json:"tool"`
 	DurationMs uint64    `json:"durationMs"`
 	Outcome    Outcome   `json:"outcome"`
+	// InteractionWaitMs is time spent paused on relayed interactions, not
+	// included in DurationMs.
+	InteractionWaitMs uint64 `json:"interactionWaitMs,omitempty"`
 }
 
 // durationMs converts a duration to whole milliseconds, clamping negatives.
