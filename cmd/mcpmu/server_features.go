@@ -29,13 +29,21 @@ Features:
                 roots, relay roots/list to its owning client and forward that
                 client's roots/list_changed. Configured roots always win (see
                 "mcpmu server set-roots").
+  sampling      Declare sampling upstream and relay sampling/createMessage to
+                the client that caused it, letting the server spend that
+                client's model tokens. Only relayed from a private instance or
+                an HTTP upstream's own response stream — never by heuristic.
+  sampling-tools
+                Also allow sampling requests that offer the model tools
+                (declares sampling.tools; turns sampling on).
 
 Changing a feature changes what mcpmu declares to the server at initialize, so
 a running instance restarts.
 
 Examples:
   mcpmu server set-client-feature browser elicitation on
-  mcpmu server set-client-feature browser elicitation off`,
+  mcpmu server set-client-feature browser elicitation off
+  mcpmu server set-client-feature agent sampling on`,
 	Args: cobra.ExactArgs(3),
 	RunE: runServerSetClientFeature,
 }

@@ -79,6 +79,7 @@ Note: `--bearer-env` and OAuth flags are mutually exclusive. `--header` and `--e
 - `--startup-timeout` — connection, initialization, and initial-discovery timeout in seconds (default: 10)
 - `--tool-timeout` — tool call timeout in seconds (default: 60)
 - `--elicitation` — relay the server's elicitation requests to the client in serve mode (see [Client features](#client-features-elicitation)); best with `--shared=false`
+- `--sampling` — relay the server's sampling requests to the client, spending its model tokens (see [Sampling](#sampling))
 - `--root <path|uri>` — root reported to the server as its client's roots (absolute path or `file://` URI, repeatable; see [Roots](#roots))
 
 ## OAuth authentication
@@ -344,6 +345,30 @@ Outcomes (accepted, declined, cancelled, or why the fallback was sent) are
 counted per server in the usage metrics; the request's content and the user's
 answer are never recorded.
 
+## Sampling
+
+`sampling/createMessage` lets a server use the client's model — and spend its
+tokens — so it is opt-in per server and routed only on strong evidence:
+
+```bash
+mcpmu add agent --shared=false --sampling -- agent-mcp
+mcpmu server set-client-feature agent sampling on
+mcpmu server set-client-feature agent sampling-tools on   # also allow tool use
+```
+
+- Declared upstream only for opted-in servers (`clientFeatures.sampling`);
+  `sampling.tools` only with `clientFeatures.samplingTools`.
+- Relayed only from a private instance or when an HTTP upstream sends the
+  request on the call's own response stream — never by the single-caller
+  heuristic, whatever its setting.
+- Never sent to a client that did not declare `sampling`; a request that
+  offers the model tools additionally needs the client's `sampling.tools`.
+- The requesting server is named in the request's `_meta`
+  (`"mcpmu/server": "<name>"`); the messages and system prompt the model sees
+  are forwarded untouched.
+- Sampling has no "cancel" action, so a request that cannot be relayed or
+  answered gets a JSON-RPC error saying why.
+
 ## Roots
 
 Roots tell a server which directories it may work in. They are per-client
@@ -479,7 +504,7 @@ With bearer token auth:
 | Field | Description |
 |-------|-------------|
 | `shared` | Share one daemon upstream across serve sessions; absent/true is shared, false creates a private per-session instance |
-| `clientFeatures` | Relayed client features the server opts in to: `elicitation` (see [Client features](#client-features-elicitation)) and `roots` (relay a private instance's owning client's roots; see [Roots](#roots)) |
+| `clientFeatures` | Relayed client features the server opts in to: `elicitation` (see [Client features](#client-features-elicitation)), `sampling` and `samplingTools` (see [Sampling](#sampling)), and `roots` (relay a private instance's owning client's roots; see [Roots](#roots)) |
 | `roots` | `file://` URIs reported to the server as its roots; mcpmu answers `roots/list` (see [Roots](#roots)) |
 | `interaction_timeout_sec` | Per-server override of the global relayed-interaction timeout |
 | `interaction_budget_sec` | Per-server override of the global per-call interaction budget |

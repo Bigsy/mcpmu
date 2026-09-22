@@ -21,6 +21,18 @@ import (
 // single Core — the daemon's shape — and initializes each with elicitation.
 func startCoreSessions(t *testing.T, cfg *config.Config, sessionOpts ...SessionOptions) []*relayHarness {
 	t.Helper()
+	return startCoreSessionsWith(t, cfg, `{"elicitation":{}}`, sessionOpts...)
+}
+
+// startCoreSessionsWithCaps is startCoreSessions for one session whose
+// client declares clientCaps.
+func startCoreSessionsWithCaps(t *testing.T, cfg *config.Config, clientCaps string) []*relayHarness {
+	t.Helper()
+	return startCoreSessionsWith(t, cfg, clientCaps, SessionOptions{})
+}
+
+func startCoreSessionsWith(t *testing.T, cfg *config.Config, clientCaps string, sessionOpts ...SessionOptions) []*relayHarness {
+	t.Helper()
 	core, err := NewCore(Options{Config: cfg, PIDTrackerDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewCore: %v", err)
@@ -55,7 +67,7 @@ func startCoreSessions(t *testing.T, cfg *config.Config, sessionOpts ...SessionO
 			_ = pr.Close()
 		})
 		h.write(
-			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{}},"clientInfo":{"name":"test","version":"1.0"}}}`,
+			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":`+clientCaps+`,"clientInfo":{"name":"test","version":"1.0"}}}`,
 			`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		)
 		h.response("1")

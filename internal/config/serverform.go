@@ -46,6 +46,8 @@ type ServerFormData struct {
 	RecordErrorInputs *bool   // nil preserves the setting when a form does not expose it
 	Elicitation       *bool   // nil preserves the client feature when a form does not expose it
 	Roots             *string // one root per line (paths or file:// URIs); nil preserves the list
+	Sampling          *bool   // nil preserves the client feature
+	SamplingTools     *bool   // nil preserves the client feature
 	Autostart         bool
 	// Timeouts in seconds; 0 means "use the default".
 	StartupTimeoutSec int
@@ -79,6 +81,14 @@ func BuildServerConfig(form ServerFormData, existing *ServerConfig) (ServerConfi
 	}
 	if form.Elicitation != nil {
 		_ = srv.SetClientFeature(ClientFeatureElicitation, *form.Elicitation)
+	}
+	if form.Sampling != nil {
+		_ = srv.SetClientFeature(ClientFeatureSampling, *form.Sampling)
+	}
+	if form.SamplingTools != nil && (form.Sampling == nil || *form.Sampling || !*form.SamplingTools) {
+		// Tools need sampling; a form that turns sampling off wins over a
+		// stale tools checkbox.
+		_ = srv.SetClientFeature(ClientFeatureSamplingTools, *form.SamplingTools)
 	}
 	if form.Roots != nil {
 		roots, err := ParseRootLines(*form.Roots)

@@ -23,6 +23,7 @@ var (
 	addStartupTimeout    int
 	addToolTimeout       int
 	addElicitation       bool
+	addSampling          bool
 	addRoots             []string
 )
 
@@ -75,6 +76,8 @@ func init() {
 	addCmd.Flags().IntVar(&addToolTimeout, "tool-timeout", 0, "Tool call timeout in seconds (default: 60)")
 	addCmd.Flags().BoolVar(&addElicitation, "elicitation", false,
 		"Relay the server's elicitation requests to the client (serve mode; best with --shared=false)")
+	addCmd.Flags().BoolVar(&addSampling, "sampling", false,
+		"Relay the server's sampling requests to the client, spending its model tokens (serve mode; private instances or HTTP response streams only)")
 	addCmd.Flags().StringArrayVar(&addRoots, "root", nil,
 		"Root reported to the server as its client's roots (absolute path or file:// URI, repeatable)")
 	addCmd.Flags().StringArrayVar(&addHeaders, "header", nil,
@@ -180,6 +183,9 @@ func runAddStdio(cmd *cobra.Command, args []string) error {
 		if addElicitation {
 			_ = srv.SetClientFeature(config.ClientFeatureElicitation, true)
 		}
+		if addSampling {
+			_ = srv.SetClientFeature(config.ClientFeatureSampling, true)
+		}
 		srv.Roots = roots
 
 		// Add server (this enforces name uniqueness)
@@ -265,6 +271,9 @@ func runAddHTTP(cmd *cobra.Command, args []string) error {
 		}
 		if addElicitation {
 			_ = srv.SetClientFeature(config.ClientFeatureElicitation, true)
+		}
+		if addSampling {
+			_ = srv.SetClientFeature(config.ClientFeatureSampling, true)
 		}
 		srv.Roots = roots
 

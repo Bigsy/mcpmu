@@ -213,6 +213,7 @@ General flags (stdio and HTTP):
 - `--startup-timeout` — startup timeout in seconds (default: 10)
 - `--tool-timeout` — tool call timeout in seconds (default: 60)
 - `--elicitation` — relay the server's elicitation requests (forms, sign-in URLs) to the agent's client in serve mode; best with `--shared=false`. Toggle later with `mcpmu server set-client-feature <server> elicitation on|off`
+- `--sampling` — relay the server's sampling requests (it spends the client's model tokens); only from `shared: false` servers or an HTTP server's own response stream. `mcpmu server set-client-feature <server> sampling-tools on` also allows tool use in sampling
 - `--root <path|uri>` — root reported to the server (repeatable); mcpmu answers the server's `roots/list` itself. Change later with `mcpmu server set-roots <server> [<root>...]` (no roots clears)
 
 Note: `--bearer-env` and OAuth flags (`--oauth-client-id`, `--scopes`, `--oauth-callback-port`) are mutually exclusive.
@@ -386,7 +387,10 @@ Flags:
   `{"action":"cancel"}`. A tool's
   timeout pauses while it waits on the user (bounded by
   `interaction_timeout_sec`, default 600, and `interaction_budget_sec`,
-  default 1800). Other server requests get method-not-found.
+  default 1800). Sampling (`--sampling`) is relayed only on certain or strong
+  routing and names the server in `_meta."mcpmu/server"`; roots/list is
+  answered from the server's configured roots. Other server requests get
+  method-not-found.
 - **Upstream errors** pass through with their code and data intact, so a
   `URLElicitationRequiredError` (`-32042`) reaches the client with its
   sign-in URLs.

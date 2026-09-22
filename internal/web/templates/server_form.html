@@ -186,6 +186,18 @@
             <input type="hidden" name="elicitation" value="false">
             <input type="checkbox" name="elicitation" value="true" id="elicitation"{{if .Form.Elicitation}} checked{{end}} style="width:auto">
           </div>
+          <div class="toggle-row">
+            <label for="sampling">Relay sampling requests</label>
+            <input type="hidden" name="sampling" value="false">
+            <input type="checkbox" name="sampling" value="true" id="sampling"{{if .Form.Sampling}} checked{{end}} style="width:auto">
+          </div>
+          <div class="toggle-row">
+            <label for="sampling_tools">Allow tools in sampling</label>
+            <input type="hidden" name="sampling_tools" value="false">
+            <input type="checkbox" name="sampling_tools" value="true" id="sampling_tools"{{if .Form.SamplingTools}} checked{{end}} style="width:auto">
+          </div>
+          <p class="text-muted">Let the server use the agent's model, spending its tokens. Relayed only from a server that is not shared, or from an HTTP server's own response stream — never by guess. Changing this restarts the server.</p>
+
           <div class="form-group mt-2">
             <label for="roots">Roots</label>
             <textarea id="roots" name="roots" rows="2" class="mono" placeholder="/home/me/project">{{.Form.Roots}}</textarea>

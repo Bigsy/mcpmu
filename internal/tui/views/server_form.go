@@ -51,6 +51,8 @@ type ServerFormModel struct {
 	oauthCallbackPort string // Only used for HTTP (string for form input)
 	shared            bool
 	elicitation       bool
+	sampling          bool
+	samplingTools     bool
 	roots             string // one per line
 	autostart         bool
 	oauthScopes       string // comma-separated, HTTP only
@@ -70,6 +72,8 @@ type ServerFormModel struct {
 	initialOAuthCallbackPort string
 	initialShared            bool
 	initialElicitation       bool
+	initialSampling          bool
+	initialSamplingTools     bool
 	initialRoots             string
 	initialAutostart         bool
 	initialOAuthScopes       string
@@ -114,6 +118,8 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.oauthCallbackPort = ""
 	m.shared = true
 	m.elicitation = false
+	m.sampling = false
+	m.samplingTools = false
 	m.roots = ""
 	m.autostart = false
 	m.oauthScopes = ""
@@ -132,6 +138,8 @@ func (m *ServerFormModel) ShowAdd() tea.Cmd {
 	m.initialOAuthCallbackPort = ""
 	m.initialShared = true
 	m.initialElicitation = false
+	m.initialSampling = false
+	m.initialSamplingTools = false
 	m.initialRoots = ""
 	m.initialAutostart = false
 	m.initialOAuthScopes = ""
@@ -162,6 +170,8 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.oauthCallbackPort = oauthCallbackPort
 	m.shared = true
 	m.elicitation = false
+	m.sampling = false
+	m.samplingTools = false
 	m.roots = ""
 	m.autostart = false
 	m.oauthScopes = oauthScopes
@@ -180,6 +190,8 @@ func (m *ServerFormModel) ShowAddWithDefaults(name, commandOrURL, args, env, bea
 	m.initialOAuthCallbackPort = oauthCallbackPort
 	m.initialShared = true
 	m.initialElicitation = false
+	m.initialSampling = false
+	m.initialSamplingTools = false
 	m.initialRoots = ""
 	m.initialAutostart = false
 	m.initialOAuthScopes = oauthScopes
@@ -233,6 +245,8 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	m.env = formatEnvVars(srv.Env)
 	m.shared = srv.IsShared()
 	m.elicitation = srv.ElicitationEnabled()
+	m.sampling = srv.SamplingEnabled()
+	m.samplingTools = srv.SamplingToolsEnabled()
 	m.roots = config.FormatRootLines(srv.Roots)
 	m.autostart = srv.Autostart
 	if srv.StartupTimeoutSec > 0 {
@@ -259,6 +273,8 @@ func (m *ServerFormModel) ShowEdit(name string, srv config.ServerConfig) tea.Cmd
 	m.initialOAuthCallbackPort = m.oauthCallbackPort
 	m.initialShared = m.shared
 	m.initialElicitation = m.elicitation
+	m.initialSampling = m.sampling
+	m.initialSamplingTools = m.samplingTools
 	m.initialRoots = m.roots
 	m.initialAutostart = m.autostart
 	m.initialOAuthScopes = m.oauthScopes
@@ -370,22 +386,6 @@ func (m *ServerFormModel) buildForm() {
 				Value(&m.shared),
 
 			huh.NewConfirm().
-				Title("Relay elicitation requests").
-				Description("Let the server ask the agent's user for input (serve mode). Routing is certain only when not shared.").
-				Value(&m.elicitation),
-
-			huh.NewText().
-				Title("Roots").
-				Description("Reported to the server as its client's roots: one absolute path or file:// URI per line (optional)").
-				Value(&m.roots).
-				CharLimit(4000).
-				Lines(2).
-				Validate(func(s string) error {
-					_, err := config.ParseRootLines(s)
-					return err
-				}),
-
-			huh.NewConfirm().
 				Title("Autostart").
 				Description("Start server automatically on app launch").
 				Value(&m.autostart),
@@ -429,6 +429,32 @@ func (m *ServerFormModel) buildForm() {
 					}
 					return nil
 				}),
+
+			huh.NewConfirm().
+				Title("Relay elicitation requests").
+				Description("Let the server ask the agent's user for input (serve mode). Routing is certain only when not shared.").
+				Value(&m.elicitation),
+
+			huh.NewConfirm().
+				Title("Relay sampling requests").
+				Description("Let the server use the agent's model (spends its tokens). Relayed only when not shared or from an HTTP server's own response stream.").
+				Value(&m.sampling),
+
+			huh.NewConfirm().
+				Title("Allow tools in sampling").
+				Description("Also allow sampling requests that offer the model tools (needs sampling).").
+				Value(&m.samplingTools),
+
+			huh.NewText().
+				Title("Roots").
+				Description("Reported to the server as its client's roots: one absolute path or file:// URI per line (optional)").
+				Value(&m.roots).
+				CharLimit(4000).
+				Lines(2).
+				Validate(func(s string) error {
+					_, err := config.ParseRootLines(s)
+					return err
+				}),
 		).Title("Advanced"),
 	).WithTheme(formTheme).
 		WithWidth(60).
@@ -453,6 +479,8 @@ func (m *ServerFormModel) isDirty() bool {
 		m.shared != m.initialShared ||
 		m.elicitation != m.initialElicitation ||
 		m.roots != m.initialRoots ||
+		m.sampling != m.initialSampling ||
+		m.samplingTools != m.initialSamplingTools ||
 		m.autostart != m.initialAutostart ||
 		m.oauthScopes != m.initialOAuthScopes ||
 		m.startupTimeout != m.initialStartupTimeout ||
@@ -645,6 +673,8 @@ func (m ServerFormModel) buildServerConfig() (config.ServerConfig, error) {
 		Shared:            &m.shared,
 		Elicitation:       &m.elicitation,
 		Roots:             &m.roots,
+		Sampling:          &m.sampling,
+		SamplingTools:     &m.samplingTools,
 		Autostart:         m.autostart,
 	}
 	if s := strings.TrimSpace(m.startupTimeout); s != "" {

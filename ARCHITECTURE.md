@@ -713,7 +713,8 @@ never included), and tied to one only if there was exactly one.
 **Fallbacks.** Once a feature is declared, nothing gets `-32601`:
 elicitation that cannot be routed, or that needs a mode the client did not
 declare (URL mode for a form-only client), gets `{"action": "cancel"}`, a
-normal result every server must handle. The same answer goes back when the
+normal result every server must handle; sampling gets a JSON-RPC error; roots
+are answered locally, so routing never applies to them. The same answer goes back when the
 interaction times out, the owning call ends, or delivery fails. When the
 server itself withdraws the request, nothing goes back at all.
 
@@ -730,6 +731,18 @@ the session sink like progress: only the session holding the id forwards it,
 rewritten back to the id its client knows. Entries expire after the
 interaction timeout plus a grace window. Outcomes are counted per server in
 `metrics.json` (`interactions`) — names and outcomes only, never content.
+
+**Sampling relay** (`Core.relaySampling`). Sampling lets an upstream spend
+the client's model tokens, so it is declared only for opted-in servers
+(`clientFeatures.sampling`, plus `samplingTools` for `sampling.tools`) and
+routed only by the private-instance and POST-origin rules — never by the
+single-caller heuristic. It is never sent to a client that did not declare
+`sampling`, and a request offering tools (`tools`/`toolChoice`) also needs the
+server's `samplingTools` and the client's `sampling.tools`. The requester is
+named in `_meta` (`mcpmu/server`) rather than by rewriting `messages` or the
+`systemPrompt`, which the model would see and which carry the upstream's
+intent. Sampling has no `cancel` action, so its fallback is a JSON-RPC error
+saying why the request was not relayed.
 
 **Roots** (`Core.answerRoots`). Roots are per-client state, so relaying them
 to an instance several sessions share makes no sense; mcpmu answers

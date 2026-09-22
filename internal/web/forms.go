@@ -48,6 +48,11 @@ type serverFormData struct {
 
 	Roots         string // textarea, one root per line
 	RootsProvided bool
+
+	Sampling              bool
+	SamplingProvided      bool
+	SamplingTools         bool
+	SamplingToolsProvided bool
 }
 
 // serverFormPageData is the template data for the server add/edit form page.
@@ -100,6 +105,11 @@ func serverFormDataFromConfig(name string, srv config.ServerConfig) serverFormDa
 
 		Roots:         config.FormatRootLines(srv.Roots),
 		RootsProvided: true,
+
+		Sampling:              srv.SamplingEnabled(),
+		SamplingProvided:      true,
+		SamplingTools:         srv.SamplingToolsEnabled(),
+		SamplingToolsProvided: true,
 	}
 
 	// Auth mode
@@ -160,6 +170,11 @@ func parseServerForm(r *http.Request) serverFormData {
 
 		Roots:         r.FormValue("roots"),
 		RootsProvided: r.Form.Has("roots"),
+
+		Sampling:              formChecked(r, "sampling"),
+		SamplingProvided:      r.Form.Has("sampling"),
+		SamplingTools:         formChecked(r, "sampling_tools"),
+		SamplingToolsProvided: r.Form.Has("sampling_tools"),
 	}
 }
 
@@ -216,6 +231,13 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config
 	if fd.RootsProvided {
 		roots = &fd.Roots
 	}
+	var sampling, samplingTools *bool
+	if fd.SamplingProvided {
+		sampling = &fd.Sampling
+	}
+	if fd.SamplingToolsProvided {
+		samplingTools = &fd.SamplingTools
+	}
 	form := config.ServerFormData{
 		Shared:            shared,
 		IsHTTP:            fd.IsHTTP,
@@ -238,6 +260,8 @@ func buildServerConfig(fd serverFormData, existing *config.ServerConfig) (config
 		RecordErrorInputs: recordErrorInputs,
 		Elicitation:       elicitation,
 		Roots:             roots,
+		Sampling:          sampling,
+		SamplingTools:     samplingTools,
 	}
 	if form.AuthMode == "" {
 		form.AuthMode = config.AuthModeNone

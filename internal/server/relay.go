@@ -24,6 +24,13 @@ func (c *Core) ClientCapabilities(id process.InstanceID, srv config.ServerConfig
 	if roots := c.rootsDeclaration(id, srv); roots != nil {
 		caps[featureRoots] = roots
 	}
+	if srv.SamplingEnabled() {
+		sampling := map[string]any{}
+		if srv.SamplingToolsEnabled() {
+			sampling[modeTools] = map[string]any{}
+		}
+		caps[featureSampling] = sampling
+	}
 	return caps
 }
 
@@ -39,6 +46,10 @@ func (c *Core) OnServerRequest(ctx context.Context, req process.UpstreamRequest)
 		}
 	case "roots/list":
 		return c.answerRoots(ctx, req)
+	case "sampling/createMessage":
+		if srv, ok := c.currentConfig().GetServer(req.Instance.Server); ok && srv.SamplingEnabled() {
+			return c.relaySampling(ctx, req)
+		}
 	}
 	return mcp.DefaultServerRequestHandler(ctx, req.ServerRequest)
 }

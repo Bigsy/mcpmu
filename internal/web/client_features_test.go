@@ -65,3 +65,28 @@ func TestRootsFormSetting(t *testing.T) {
 		t.Fatalf("an absent roots field did not preserve them: %v, %v", got.Roots, err)
 	}
 }
+
+func TestSamplingFormSetting(t *testing.T) {
+	for _, tc := range []struct {
+		body            string
+		sampling, tools bool
+	}{
+		{"sampling=false&sampling=true&sampling_tools=false", true, false},
+		{"sampling=false&sampling=true&sampling_tools=false&sampling_tools=true", true, true},
+		{"sampling=false&sampling_tools=false&sampling_tools=true", false, false},
+	} {
+		req := httptest.NewRequest("POST", "/servers", strings.NewReader("command=fixture&"+tc.body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if err := req.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		got, err := buildServerConfig(parseServerForm(req), &config.ServerConfig{Command: "fixture"})
+		if err != nil || got.SamplingEnabled() != tc.sampling || got.SamplingToolsEnabled() != tc.tools {
+			t.Fatalf("%q: %+v %v", tc.body, got.ClientFeatures, err)
+		}
+		fd := serverFormDataFromConfig("fixture", got)
+		if fd.Sampling != tc.sampling || fd.SamplingTools != tc.tools {
+			t.Fatalf("%q: edit form lost the settings", tc.body)
+		}
+	}
+}

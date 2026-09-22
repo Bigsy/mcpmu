@@ -124,6 +124,15 @@ type ClientFeatures struct {
 	// goes to that client, and its notifications/roots/list_changed is
 	// forwarded. Configured roots always win.
 	Roots bool `json:"roots,omitempty"`
+	// Sampling declares sampling upstream and relays
+	// sampling/createMessage to the client that caused it — letting the
+	// server spend that client's model tokens. Only relayed with certain or
+	// strong routing (a private instance, or an HTTP upstream's POST
+	// stream), never by the single-caller heuristic.
+	Sampling bool `json:"sampling,omitempty"`
+	// SamplingTools additionally declares sampling.tools, allowing sampling
+	// requests that offer the model tools. Requires Sampling.
+	SamplingTools bool `json:"samplingTools,omitempty"`
 }
 
 // ElicitationEnabled reports whether the server opted in to elicitation.
@@ -133,12 +142,25 @@ func (s ServerConfig) ElicitationEnabled() bool {
 
 // Client feature names, as the CLI and forms spell them.
 const (
-	ClientFeatureElicitation = "elicitation"
-	ClientFeatureRoots       = "roots"
+	ClientFeatureElicitation   = "elicitation"
+	ClientFeatureRoots         = "roots"
+	ClientFeatureSampling      = "sampling"
+	ClientFeatureSamplingTools = "sampling-tools"
 )
 
 // ClientFeatureNames lists the names SetClientFeature accepts.
-var ClientFeatureNames = []string{ClientFeatureElicitation, ClientFeatureRoots}
+var ClientFeatureNames = []string{ClientFeatureElicitation, ClientFeatureRoots, ClientFeatureSampling, ClientFeatureSamplingTools}
+
+// SamplingEnabled reports whether the server opted in to sampling.
+func (s ServerConfig) SamplingEnabled() bool {
+	return s.ClientFeatures != nil && s.ClientFeatures.Sampling
+}
+
+// SamplingToolsEnabled reports whether the server opted in to tool-enabled
+// sampling (which needs sampling itself).
+func (s ServerConfig) SamplingToolsEnabled() bool {
+	return s.SamplingEnabled() && s.ClientFeatures.SamplingTools
+}
 
 // RootsRelayEnabled reports whether the server opted in to relaying its
 // owning client's roots (private instances without configured roots).
@@ -159,6 +181,16 @@ func (s *ServerConfig) SetClientFeature(name string, on bool) error {
 		features.Elicitation = on
 	case ClientFeatureRoots:
 		features.Roots = on
+	case ClientFeatureSampling:
+		features.Sampling = on
+		if !on {
+			features.SamplingTools = false // tools cannot outlive sampling
+		}
+	case ClientFeatureSamplingTools:
+		features.SamplingTools = on
+		if on {
+			features.Sampling = true
+		}
 	default:
 		return fmt.Errorf("unknown client feature %q (want one of: %s)", name, strings.Join(ClientFeatureNames, ", "))
 	}
@@ -179,6 +211,12 @@ func (s ServerConfig) EnabledClientFeatures() []string {
 	}
 	if s.RootsRelayEnabled() {
 		names = append(names, ClientFeatureRoots)
+	}
+	if s.SamplingEnabled() {
+		names = append(names, ClientFeatureSampling)
+	}
+	if s.SamplingToolsEnabled() {
+		names = append(names, ClientFeatureSamplingTools)
 	}
 	return names
 }

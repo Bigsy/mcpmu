@@ -97,3 +97,26 @@ func TestCLI_Roots(t *testing.T) {
 		t.Error("roots relay not enabled")
 	}
 }
+
+func TestCLI_SamplingFeatures(t *testing.T) {
+	t.Parallel()
+	configPath := setupTestConfig(t)
+	if _, stderr, err := runCLI(testBinary, configPath, "add", "agent", "--sampling", "--", "agent-mcp"); err != nil {
+		t.Fatalf("add: %v %s", err, stderr)
+	}
+	if srv := loadServer(t, configPath, "agent"); !srv.SamplingEnabled() || srv.SamplingToolsEnabled() {
+		t.Fatalf("after add: %+v", srv.ClientFeatures)
+	}
+	if _, stderr, err := runCLI(testBinary, configPath, "server", "set-client-feature", "agent", "sampling-tools", "on"); err != nil {
+		t.Fatalf("sampling-tools on: %v %s", err, stderr)
+	}
+	if !loadServer(t, configPath, "agent").SamplingToolsEnabled() {
+		t.Fatal("sampling tools not enabled")
+	}
+	if _, stderr, err := runCLI(testBinary, configPath, "server", "set-client-feature", "agent", "sampling", "off"); err != nil {
+		t.Fatalf("sampling off: %v %s", err, stderr)
+	}
+	if srv := loadServer(t, configPath, "agent"); srv.ClientFeatures != nil {
+		t.Errorf("turning sampling off left %+v; tools cannot outlive it", srv.ClientFeatures)
+	}
+}

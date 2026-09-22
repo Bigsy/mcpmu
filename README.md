@@ -254,6 +254,9 @@ Global settings such as metrics and OAuth still use a full reload.
   `cancel`, and a tool's timeout pauses while it waits on the user.
   Upstream JSON-RPC errors such as `URLElicitationRequiredError` pass through
   intact. See [Client features](docs/CLI.md#client-features-elicitation).
+- Relay sampling requests for servers that opt in (`--sampling`), only where
+  the request is certainly or strongly tied to one client. See
+  [Sampling](docs/CLI.md#sampling).
 - Tell servers their roots (`--root`, `mcpmu server set-roots`): mcpmu answers
   `roots/list` itself and announces edits with `roots/list_changed`. See
   [Roots](docs/CLI.md#roots).

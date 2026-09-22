@@ -559,6 +559,14 @@ func TestServerFormSmallTerminal(t *testing.T) {
 		checkFits(80, 24)
 	}
 	if !strings.Contains(form.View(), "Tool Timeout") {
+		t.Fatal("tool timeout field is not visible")
+	}
+	// The client-feature controls follow the timeouts; the last is Roots.
+	for range 4 {
+		form.form.NextField()
+		checkFits(80, 24)
+	}
+	if !strings.Contains(form.View(), "Roots") {
 		t.Fatal("final field is not visible")
 	}
 	form.form.NextGroup()
@@ -606,5 +614,18 @@ func TestServerFormRoots(t *testing.T) {
 	form.roots = "not/absolute"
 	if _, err := form.buildServerConfig(); err == nil {
 		t.Fatal("a relative root was accepted")
+	}
+}
+
+func TestServerFormSampling(t *testing.T) {
+	form := NewServerForm(theme.New())
+	form.ShowEdit("agent", config.ServerConfig{Command: "fixture", ClientFeatures: &config.ClientFeatures{Sampling: true, SamplingTools: true}})
+	if !form.sampling || !form.samplingTools || form.isDirty() {
+		t.Fatal("edit did not load the sampling settings")
+	}
+	form.sampling = false
+	got, err := form.buildServerConfig()
+	if err != nil || got.SamplingEnabled() || got.SamplingToolsEnabled() {
+		t.Fatalf("turning sampling off left %+v (%v)", got.ClientFeatures, err)
 	}
 }
