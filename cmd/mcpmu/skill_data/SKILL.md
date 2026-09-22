@@ -1,7 +1,7 @@
 ---
 name: mcpmu
 disable-model-invocation: true
-description: Install, set up, and manage MCP servers using the mcpmu CLI. Use when the user wants to install mcpmu, register it as an MCP server, add/remove/list MCP servers, manage namespaces, set tool permissions, manage server-level denied tools, or expose servers via serve mode.
+description: Install, set up, and manage MCP servers using the mcpmu CLI. Use when the user wants to install mcpmu, register it as an MCP server, add/remove/list MCP servers, manage namespaces, set tool permissions, manage server-level denied tools, expose servers via serve mode (stdio or HTTP), run the web UI, or inspect usage metrics and failed tool calls.
 allowed-tools: Bash(mcpmu *), Bash(brew *), Bash(go install *), Bash(claude mcp *), Bash(codex mcp *), Bash(which mcpmu), Bash(command -v mcpmu), Bash(curl http://127.0.0.1:*), Bash(curl http://localhost:*)
 ---
 
@@ -26,6 +26,15 @@ brew tap Bigsy/tap && brew install mcpmu
 **From source (requires Go):**
 ```bash
 go install github.com/Bigsy/mcpmu/cmd/mcpmu@latest
+```
+
+### Installing / updating this skill
+
+The skill ships inside the mcpmu binary. Re-run install after upgrading mcpmu
+to pick up the latest version:
+```bash
+mcpmu skill install     # ~/.agents/skills/mcpmu/ plus detected agents (~/.claude/skills, ~/.codex/skills)
+mcpmu skill uninstall   # remove it from everywhere
 ```
 
 ## Registering mcpmu as an MCP Server
@@ -82,10 +91,15 @@ codex mcp add work -- mcpmu serve --stdio --namespace work
 }
 ```
 
-**With management tools (lets the agent add/remove servers via MCP):**
+**With management tools (lets the agent inspect and start/stop servers via MCP):**
 ```bash
 claude mcp add mcpmu -- mcpmu serve --stdio --expose-manager-tools
 ```
+
+This adds `mcpmu.servers_list`, `mcpmu.servers_start`, `mcpmu.servers_stop`,
+`mcpmu.servers_restart`, `mcpmu.server_logs` and `mcpmu.namespaces_list`. They
+are runtime controls only — they cannot add, remove or edit servers,
+namespaces or permissions; use the CLI for that.
 
 **With a compressed tool surface (saves context on large namespaces):**
 ```bash
@@ -189,7 +203,11 @@ Flags for HTTP servers:
 - `--header` — custom HTTP header in `Name: Value` form, repeatable. Sent on every request. Stored verbatim in config.
 - `--env-header` — HTTP header sourced from an env var, `Name: ENV_VAR` form, repeatable. Value read at request time — use this for secrets so they stay out of the config file.
 
+The URL can also be given as `--url <url>` instead of a positional argument.
+
 General flags (stdio and HTTP):
+- `--env KEY=VALUE` / `-e` — environment variable, repeatable
+- `--cwd` — working directory (stdio; prefer absolute paths, see daemon notes)
 - `--autostart` — start server automatically on app launch
 - `--shared=<bool>` — share between agent connections (default: true); use `--shared=false` for a private instance per connection
 - `--startup-timeout` — startup timeout in seconds (default: 10)
@@ -198,6 +216,14 @@ General flags (stdio and HTTP):
 Note: `--bearer-env` and OAuth flags (`--oauth-client-id`, `--scopes`, `--oauth-callback-port`) are mutually exclusive.
 Note: `--header` / `--env-header` are orthogonal to auth mode — they stack on top of bearer or OAuth, useful for gateways like Cloudflare Access. A header name cannot appear in both flags.
 Note: Most OAuth servers advertise supported scopes via metadata — `--scopes` is only needed when the server doesn't or you want to restrict the requested set.
+
+### Finding servers in the official registry
+
+The TUI and web UI can search `registry.modelcontextprotocol.io` and
+pre-fill the add form with the install spec: in the TUI press `a` on the
+server list and choose **Official Registry**; in the web UI open the
+**Registry** page. There is no CLI search — use `mcpmu add` directly when you
+already know the command or URL.
 
 ### OAuth login (for HTTP servers that need it)
 ```bash
@@ -216,6 +242,12 @@ mcpmu remove <name>     # remove (prompts for confirmation)
 mcpmu remove <name> --yes  # skip confirmation
 mcpmu rename <old> <new>   # rename (updates namespace/permission refs)
 ```
+
+### Disabling a server without removing it
+
+Set `"enabled": false` on the server in the config (or press `E` in the TUI,
+or use the web edit form). Disabled servers are never started and their
+tools are hidden from serve mode. There is no CLI command for this.
 
 ## Namespaces
 
@@ -267,6 +299,24 @@ mcpmu permission set work atlassian jira_search allow
 mcpmu permission set work atlassian confluence_delete deny
 ```
 
+### Per-server default within a namespace
+
+Override the namespace's deny-by-default setting for one server's tools.
+Explicit tool permissions still win:
+
+```bash
+mcpmu permission set-server-default <namespace> <server> <deny|allow>
+mcpmu permission unset-server-default <namespace> <server>
+```
+
+Example — allow everything from a trusted server but deny a noisy one by
+default, then allowlist one of its tools:
+```bash
+mcpmu permission set-server-default work context7 allow
+mcpmu permission set-server-default work atlassian deny
+mcpmu permission set work atlassian jira_search allow
+```
+
 ### Server-level global deny list
 
 For defense-in-depth, deny tools at the server level. Globally denied tools are blocked regardless of namespace permissions — even a namespace explicit allow cannot override a server global deny:
@@ -299,6 +349,7 @@ mcpmu serve --stdio -n work --eager          # pre-start all servers
 mcpmu serve --stdio --expose-manager-tools   # include mcpmu.* management tools
 mcpmu serve --stdio --log-level debug        # verbose logging
 mcpmu serve --stdio --isolated               # private embedded serve
+mcpmu serve --stdio --resources=false --prompts=false  # tools only
 mcpmu serve --http                           # same endpoint over Streamable HTTP (see below)
 ```
 
@@ -308,6 +359,22 @@ Flags:
 - `--expose-manager-tools` — include mcpmu.* tools in tools/list
 - `-l, --log-level` — debug, info, warn, error
 - `--isolated` — bypass the shared daemon for this serve process (stdio only)
+- `--resources` / `--prompts` — pass through upstream `resources/*` and
+  `prompts/*` (both default on; set `=false` to expose tools only)
+- `--compress <level|off>` — compressed tool surface (see above)
+
+### What agents see from upstream servers
+
+- **Instructions:** the `instructions` string each upstream returns from
+  `initialize` is combined into mcpmu's own initialize result, one section per
+  server, headed by the server name that prefixes its tools. Only shared
+  upstreams that are *already running* at initialize contribute (initialize
+  starts nothing), so a cold first session sees none — use `--eager` or
+  `autostart` if an agent should always get a server's instructions.
+- **Server-to-client requests:** mcpmu answers upstream `ping`, and replies
+  method-not-found to anything else (sampling, elicitation, roots). Servers
+  that require those client features will not work behind mcpmu.
+- Cancellation and progress notifications are relayed in both directions.
 
 ### HTTP serve mode
 
@@ -386,82 +453,88 @@ connected serve session.
 the next use starts it again. For `shared: false`, manager start/stop/restart
 actions affect only the caller's instance.
 
-Daemon diagnostics are available when needed:
+To mark a server as stateful, use `mcpmu add --shared=false ...`, or untick
+**Share between agent connections** in the TUI/web server form.
+
+The `daemon` command is hidden from `--help`; it is for diagnostics only
+(prefer `mcpmu status`). `daemon stop` drains connected sessions for up to 30
+seconds, then cancels them and stops every shared upstream — agents using it
+lose their connection until they restart their serve. The daemon also exits
+on its own 60 seconds after the last session disconnects:
 
 ```bash
 mcpmu daemon status
 mcpmu daemon stop
 ```
 
-## Connecting mcpmu to Other Agents
-
-For Claude Code registration, see "Registering mcpmu as an MCP Server" above.
-
-For other agents:
-
-**Codex:**
-```bash
-codex mcp add mcpmu -- mcpmu serve --stdio
-```
-
-**OpenCode** (global `~/.config/opencode/config.json` or project `opencode.json`):
-```json
-{
-  "mcp": {
-    "mcpmu": {
-      "type": "local",
-      "command": ["mcpmu", "serve", "--stdio"]
-    }
-  }
-}
-```
-
-**Any MCP config JSON (Cursor, Windsurf, etc.):**
-```json
-{
-  "mcpmu": {
-    "command": "mcpmu",
-    "args": ["serve", "--stdio"]
-  }
-}
-```
-
-For a namespace-specific entry:
-
-**Codex:**
-```bash
-codex mcp add work -- mcpmu serve --stdio --namespace work
-```
-
-**OpenCode:**
-```json
-{
-  "mcp": {
-    "work": {
-      "type": "local",
-      "command": ["mcpmu", "serve", "--stdio", "--namespace", "work"]
-    }
-  }
-}
-```
-
-**Cursor, Windsurf, etc.:**
-```json
-{
-  "work": {
-    "command": "mcpmu",
-    "args": ["serve", "--stdio", "--namespace", "work"]
-  }
-}
-```
-
 ## Interactive TUI
 
-Run `mcpmu` with no arguments to open the terminal UI for visual server management, log monitoring, and namespace switching.
+Run `mcpmu` (or `mcpmu tui`) to open the terminal UI for server management,
+log monitoring, namespaces, permissions and the registry browser. `--debug`
+logs to `/tmp/mcpmu-debug.log`.
+
+## Web UI
+
+`mcpmu web` serves a browser UI for the same management tasks, plus live log
+streaming, the registry browser and the Metrics page.
+
+```bash
+mcpmu web                                    # http://127.0.0.1:8080
+mcpmu web --addr 127.0.0.1:3000              # custom port
+mcpmu web --addr 0.0.0.0:8080 --token $TOK   # token mandatory off-loopback
+mcpmu web --allow-origin https://mcpmu.example  # behind a reverse proxy
+```
+
+- `--token` falls back to `MCPMU_WEB_TOKEN`. A non-loopback `--addr` without a
+  token refuses to start.
+- The TUI and web UI are mutually exclusive managers (a `manager.lock` next to
+  the config prevents running both). `mcpmu serve` is unaffected by the lock.
+- Their start/stop/test controls use their own supervisor, separate from the
+  daemon that serves agents: a server stopped in the UI may still be running
+  for an agent.
+
+## Usage Metrics and Failed Tool Calls
+
+Serve mode records one sample per tool call — server, tool, namespace,
+outcome and latency; never arguments or results by default. Samples flush
+every ~30s to `metrics.json` next to the config. View them on the web UI's
+**Metrics** page (call counts, error rates, latency, unused tools) or as JSON:
+
+```bash
+curl http://127.0.0.1:8080/api/metrics    # while `mcpmu web` is running
+```
+
+Click a tool's error count on the Metrics page to see failed responses
+(structured MCP errors and transport diagnostics), filterable by namespace and
+time window. Error responses are kept for 60 days.
+
+Config knobs:
+```json
+{
+  "metrics": { "enabled": true, "retentionDays": 60 },
+  "servers": {
+    "my-server": { "recordErrorInputs": true }
+  }
+}
+```
+
+- `metrics.enabled` — on by default; set `false` to stop collection.
+- `metrics.retentionDays` — how long daily counters are kept (default 60).
+- `recordErrorInputs` (per server, default off) — also store the *inputs* of
+  failed calls, with common secret fields redacted recursively. Free text is
+  not redacted, so leave it off for servers that handle sensitive data. Also
+  available as **Record inputs for failed tool calls** in the edit forms.
 
 ## Config
 
 Config lives at `~/.config/mcpmu/config.json`. All commands support `--config` / `-c` to use a custom config path.
+
+Config edits (CLI, UI or by hand) hot-reload into running serves. Permission
+and compression changes keep upstream instances running; runtime changes
+(command, env, URL, headers…) restart only the affected servers; metrics and
+other global settings trigger a full reload. An invalid hand edit is ignored
+and the last valid config stays in effect (the web UI shows a warning until
+it is fixed).
 
 ## Shell Completions
 
@@ -477,19 +550,14 @@ mcpmu completion fish > ~/.config/fish/completions/mcpmu.fish
 ```
 
 
-## Read-only diagnostics and runtime ownership
+## Diagnostics
 
-`mcpmu status [--json]` reports the resolved config and shared daemon status.
-`mcpmu doctor [--json]` checks config and local executable, cwd and referenced
-HTTP environment prerequisites without starting servers or authenticating.
-Both support `--config`; doctor exits 1 on definite prerequisite failures.
-Checks describe the current CLI environment plus configured overrides, which
-may differ from the daemon's inherited environment. TUI/web status and test
-start/stop actions apply only to their management session.
+```bash
+mcpmu status [--json]   # resolved config, daemon state, running instances
+mcpmu doctor [--json]   # config validity, executables, cwd, env vars referenced by HTTP headers/auth
+```
 
-The TUI and web server forms expose “Share between agent connections”. Turn it
-off for stateful browsers/REPLs to persist `shared: false`. Omitted sharing input
-preserves an existing setting. Reloads retain unaffected instances and subscriptions;
-metadata edits do not restart upstreams, and runtime edits retire affected instances.
-Metrics/global configuration changes conservatively use a full reload. Invalid
-external edits retain the last valid config; the web warning clears on recovery.
+Both are read-only: they never start servers, log in, or start the daemon.
+`doctor` exits 1 on invalid config or a failed prerequisite; env checks show
+variable names and outcomes, never values. Checks reflect the current shell's
+environment, which may differ from what a running daemon inherited.
