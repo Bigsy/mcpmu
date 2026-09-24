@@ -8,7 +8,7 @@
 
 mcpmu lets you configure MCP servers once and expose them through a single
 stdio or Streamable HTTP endpoint. Claude Code, Codex, Cursor, Windsurf, and
-other MCP clients can share the same servers without duplicating configuration.
+other MCP clients can share the same servers without duplicating configuration. Lets you compress large tool lists behind discovery calls to prevent excess context usage in your agent harness.
 
 - **Control tools at the gateway** — Allowlist tools by namespace and globally
   block dangerous operations, regardless of which agent connects.
