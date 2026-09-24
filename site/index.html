@@ -6,57 +6,464 @@
   <title>mcpmu — One MCP config. Every agent.</title>
   <meta name="description" content="Configure MCP servers once and share them across your agents. Save context with on-demand tool schemas and enforce tool permissions at the gateway. Free and open source.">
   <link rel="canonical" href="https://mcpmu.bigsy.uk/">
-  <meta name="theme-color" content="#111313">
+  <meta name="theme-color" content="#0c0d0d">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="mcpmu">
+  <meta property="og:url" content="https://mcpmu.bigsy.uk/">
+  <meta property="og:title" content="mcpmu — One MCP config. Every agent.">
+  <meta property="og:description" content="One secure, context-efficient MCP gateway for Claude Code, Codex, Cursor and every other agent. Free and open source.">
+  <meta property="og:image" content="https://mcpmu.bigsy.uk/assets/og.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="mcpmu — One MCP config. Every agent.">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <link rel="preload" href="assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
+  <script>document.documentElement.classList.add('js')</script>
   <script src="script.js" defer></script>
 </head>
 <body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="mark" viewBox="0 0 130.8 130.8"><path fill="currentColor" fill-rule="evenodd" d="M72 0.2C71.5 0.3 70.9 0.4 70.6 0.4C69.1 0.4 65 1.8 63.4 2.8C63 3.1 62.4 3.4 62.2 3.6C61.9 3.7 61.4 4.1 61 4.4C60.6 4.7 60.1 5.1 59.9 5.3C59.3 5.7 58.3 6.7 57.9 7.4C57.4 8.1 44.8 20.6 44.4 20.8C43.7 21 43.6 20.6 43.6 18.1C43.7 16.4 43.7 16.4 44 15.8C45.3 13.3 42.2 11.3 40.7 13.7C40.3 14.4 40.4 15.2 41 16C41.6 16.7 41.6 16.9 41.6 20.1C41.6 23.5 41.6 23.4 40.6 24.5C39.7 25.6 39.2 25.8 38.9 25.2C38.9 25.1 38.8 21.4 38.8 16.9C38.7 7.8 38.8 8.5 37.8 7.1C36.5 5.5 35.9 5.3 31.7 5.2C27.7 5.1 28 5.2 27.2 4.1C25.7 1.8 22.8 1.4 20.7 3.2C19.2 4.4 19.2 8 20.7 9.2C22.9 11.1 25.6 10.7 27.2 8.3C28 7.2 27.7 7.3 31.3 7.3C35.2 7.3 35.6 7.4 36.4 8.9L36.8 9.6 36.8 18.7C36.8 25 36.8 28 36.7 28.3C36.5 29.1 35 30.5 34.5 30.3C34 30.2 34 30 34 24C34 17.8 34 18.1 33.3 17C31.8 14.7 31 14.4 26.8 14.4C23.7 14.4 23.4 14.3 23 13.7C20.7 10.8 18.2 10.4 16.1 12.6C13.5 15.2 15.4 19.6 19 19.6C20.6 19.6 21.1 19.2 23 17C23.5 16.4 23.8 16.4 26.9 16.4C30 16.5 30.3 16.5 31 17.4C32 18.5 32 18 32 26C32 34.5 32.3 33.1 29 36.4C25.5 39.8 25.6 39.9 25.6 35C25.7 31.8 25.6 32 26.7 31.2C28.5 30 29.3 27.7 28.5 26.2C27.3 24 24.5 22.9 22.7 23.9C19.7 25.6 19.6 29.3 22.5 31.2C23.6 32 23.6 31.5 23.6 36.9C23.6 42.4 23.8 41.6 21.3 44.1C19.3 46.1 18.8 46.4 18.5 45.7C18.5 45.6 18.4 43.4 18.4 40.8C18.3 36 18.3 36 18 35.1C17 32.4 15.7 31.7 11.5 31.6C8.4 31.5 8.5 31.5 7.6 30.4C5.5 27.6 1.9 28.1 0.4 31.3C-0.4 33 0.4 35.5 2.1 36.4C2.8 36.8 2.8 36.8 4.2 36.8C6.2 36.8 6.7 36.4 8.2 34.7C8.6 34.1 8.9 34 11.6 34C14.4 34 14.5 34 15.2 34.7C16.1 35.6 16.5 37 16.2 38C16.1 38.2 16 39.7 16 43.8C16 49.2 16 49.2 15.7 49.6C15.5 49.8 13.6 51.8 11.4 54C6.6 58.9 6.9 58.5 6.9 60.6C6.9 63.3 8.7 65.2 11.4 65.2C13.2 65.2 15.7 63.5 17.2 61.2C17.9 60.2 65.9 12.2 66.9 11.6C73.3 7.3 82.8 10 86.2 16.9C87.5 19.4 87.6 20.1 87.6 23.7C87.5 28.3 87 29.6 83.4 33.2C82.1 34.6 80.9 35.9 80.7 36.1C80.3 36.8 58 59.1 57.4 59.5C56.7 59.9 55.7 60.9 55.2 61.6C54.7 62.3 51.6 65.5 50.9 65.9C50.4 66.3 48 68.6 48 68.8C48 68.8 47.5 69.5 46.8 70.2C44.3 72.8 44.2 75.2 46.3 77.3C47.6 78.4 50 78.8 51.4 78.1C52 77.7 85.2 44.7 86.1 43.5C86.4 43.1 87 42.5 87.4 42.2C88.5 41.3 88.8 41 89.4 40C91.8 36.1 98.6 34.5 104.5 36.4C108.9 37.8 113.2 43.3 113.2 47.4C113.2 47.7 113.3 48.2 113.3 48.6C113.5 49.3 113.5 49.9 113.4 50.4C113.3 50.6 113.3 51.2 113.2 51.8C113 53.7 111.7 56.6 110.4 58.2C110 58.7 109.6 59.1 109.5 59.3C109.4 59.4 109.1 59.7 108.8 59.9C108.1 60.4 70.4 98.2 70.4 98.4C70.4 98.6 69 100 68.3 100.4C68 100.7 67.5 101.2 67.2 101.6C67 101.9 65.5 103.5 64 105C60.3 108.8 60.1 109.3 60.1 112.8C60.1 115.6 60.6 117 62.2 118.8C62.6 119.3 63.1 119.9 63.3 120.1C63.4 120.3 65.8 122.7 68.4 125.4C73.7 130.7 73.5 130.4 75 130.7C77.8 131.2 80.9 128 80.1 125.4C79.7 124 79.8 124.1 74.9 119.1C68.9 113.1 68.9 113.1 70.6 111.2C71.6 110 82.7 99.1 83 98.9C83.9 98.5 84 99 84 102.3C83.9 105.2 83.9 105.2 82.9 106C81.4 107 80.9 107.9 80.9 109.4C80.8 114.1 86.7 115.2 88.9 111C89.7 109.4 88.8 106.9 86.9 105.7C86 105.1 86 105.3 86 100.3C86.1 96 86.1 96 86.3 95.6C86.8 94.9 96.3 85.4 96.7 85.3C97.6 84.9 97.5 84.8 97.6 92.1L97.7 98.5 98 99.1C99 100.9 100.1 101.5 102.9 101.6C105.3 101.7 105.4 101.7 106.3 103C107.4 104.7 109.7 105.3 111.6 104.4C114.6 103 114.8 99 111.9 97.3C109.6 95.9 108.1 96.3 105.8 99C105 99.9 101.5 99.9 100.4 98.9C99.6 98.1 99.7 98.4 99.6 90.3C99.6 81.7 99.5 82.4 100.6 81.3C102.1 79.7 102.5 80 102.4 82.9C102.3 84.3 102.3 84.4 102 85C101.1 86.7 102.1 88.3 103.9 87.9C105.3 87.6 105.9 86.4 105.2 85C104.8 84.3 104.6 78.8 104.9 77.4C105.1 76.6 106 75.7 106.4 76C106.8 76.3 106.8 76.7 106.8 82.3C106.8 89.4 106.8 89.4 108.4 90.9C109.6 92.1 110 92.3 111.6 92.4C113 92.5 113.3 92.6 114 93.5C115.6 95.8 118.1 96.2 120.4 94.5C121.5 93.7 122 91.1 121.2 89.7C119.5 86.6 116.1 86.4 113.9 89.3C112.7 91 110.3 90.7 109.2 88.7L108.9 88.1 108.8 80.9C108.8 72.3 108.6 73.3 110.3 71.5C112.8 69 112.7 69 112.8 74.9L112.9 79.3 113.3 80.1C114.5 82.6 115.7 83.2 119.5 83.2C122.2 83.2 122.3 83.2 122.9 84C125.4 88 130.8 86.7 130.7 82.2C130.7 79.5 129.4 78 126.8 78.1C125.2 78.1 124.9 78.2 123.4 79.6C122.3 80.7 122.2 80.8 120.9 80.8C120.4 80.8 119.7 80.9 119.2 81C117.2 81.4 116.1 81 115.1 79.3C114.9 78.8 114.9 78.8 114.9 72.9C114.9 66.2 114.8 66.6 115.7 65.9C116 65.7 116.5 65.3 116.7 65C116.9 64.7 117.3 64.2 117.6 63.8C118.6 62.7 120 60.4 120.5 59.2C121.2 57.5 121.9 55.3 122 54.6C122.1 54.2 122.2 53.7 122.3 53.4C122.4 52.9 122.4 52 122.4 49.4C122.4 46.8 122.4 45.9 122.3 45.5C122.2 45.1 122.1 44.6 122 44.2C121.9 43.5 121.2 41.3 120.5 39.6C120.1 38.6 118.9 36.6 117.5 34.8C116 32.7 113.1 30.4 110.3 29C108.7 28.2 105.4 27 104.2 26.8C103.8 26.7 103.3 26.6 103 26.5C102.5 26.4 101.7 26.4 100 26.4C96.6 26.4 96.8 26.6 96.8 23.3C96.8 21.2 96.8 20.7 96.6 20C96.5 19.5 96.4 19 96.4 18.8C96.4 18.3 95.9 16.2 95.5 15.3C94.5 12.4 94.3 12 93.1 10.2C92.1 8.8 89.2 5.6 88.1 4.9C87.9 4.7 87.4 4.4 87.1 4.1C85.3 2.7 79.4 0.4 77.4 0.4C77.1 0.4 76.5 0.3 76 0.2C74.9 -0.1 73.1 -0.1 72 0.2M23 4.3C21.8 4.8 21.3 6.2 22 7.2C23.4 9.2 26.1 8.2 25.5 5.8C25.2 4.7 23.9 3.9 23 4.3M18.3 13.6C16.9 14.1 16.5 15.7 17.5 16.8C18.9 18.3 21.6 16.9 21.1 14.9C20.8 13.9 19.4 13.2 18.3 13.6M73.3 18.5C72.9 18.6 72.4 18.8 72.2 19C71.6 19.4 46.4 44.6 46.4 44.8C46.4 45 45 46.4 44.4 46.8C43.7 47.3 42.4 48.7 41.9 49.4C41.7 49.6 39.4 52.1 36.7 54.8C31.4 60.1 31.3 60.2 30.1 62.6C29.1 64.5 28 68.1 28 69.2C28 69.4 27.9 69.9 27.8 70.4C27.5 71.6 27.5 74.4 27.8 75.6C27.9 76.1 28 76.6 28 76.8C28 77.3 28.5 79.3 29 80.8C30.5 85.3 34 89.8 37.7 92C38 92.2 38.5 92.5 38.9 92.8C39.3 93 39.8 93.3 40.1 93.4C41.2 94 44.5 95.2 44.9 95.2C45.1 95.2 45.6 95.3 46 95.4C46.5 95.5 47.2 95.6 47.6 95.6C47.9 95.6 48.7 95.7 49.3 95.8C50.4 96 50.4 96 51.5 95.8C52.1 95.7 52.9 95.6 53.5 95.6C55.7 95.6 60.9 93.7 62.7 92.3C63 92 63.4 91.7 63.6 91.6C64.2 91.2 99.5 55.9 99.9 55.3C100.1 55.1 100.4 54.6 100.7 54.3C102.4 52.2 102.3 49.7 100.5 47.9C98.9 46.4 96.5 46.4 94.8 47.8C94.6 48 94.1 48.3 93.9 48.5C93.2 48.9 92.1 50.1 91.6 50.8C90.9 51.8 58.9 83.9 57.9 84.4C55.8 85.8 53.6 86.4 50.4 86.4C47.3 86.4 46.6 86.3 44.2 85.1C40.8 83.4 37.7 79.5 37.2 76.4C37.2 76.2 37.1 75.6 37 75.2C36.3 72.2 37.1 68 39 65.2C39.6 64.2 40.8 63 58.8 45C81 22.7 78.8 25.2 78.8 22.6C78.8 21.2 78.7 21.1 78.5 20.6C77.5 18.7 75.2 17.8 73.3 18.5M62.2 20.4C61.8 20.7 61.3 21.1 61 21.4C59.7 22.3 59.5 24.1 60.7 24.1C61.5 24.1 64 21.6 64 20.8C64 19.8 63 19.6 62.2 20.4M10.7 20.4C6.9 21.7 6.5 26.4 10 28C12.4 29.1 14.7 28 15.6 25.3C16 24.2 16 24.2 15.6 23.1C15.1 21.5 14.5 20.9 12.9 20.4C11.8 20 11.8 20 10.7 20.4M11.2 22.5C8.9 23.2 9.4 26.3 11.7 26.3C12.7 26.3 13.4 25.7 13.6 24.7C13.8 23.2 12.6 22.1 11.2 22.5M81.1 25.1C80.1 25.6 79.7 26.2 79.6 27.8C79.5 29.1 79.5 29.1 77.6 31C76.9 31.8 76.1 32.7 75.9 32.9C75.5 33.6 73.1 35.9 72.4 36.4C71.7 36.9 70.8 37.9 70.3 38.6C69.8 39.2 66.8 42.3 66 42.8C65.5 43.2 59.1 49.5 58.7 50.1C58.5 50.5 57 52 56.5 52.3C55.8 52.8 48.4 60.2 48 60.8C47.8 61.2 46.9 62.1 46.1 62.9C44.5 64.5 44.2 64.7 43.2 64.6C41.3 64.4 39.8 66.7 40.7 68.5C42 71.1 45.6 70.2 45.6 67.3C45.6 66.9 45.6 66.5 45.7 66.3C45.8 65.9 80.9 30.7 81.6 30.3C81.8 30.2 82.3 30.1 82.6 30C84.8 29.6 85.5 27.2 83.9 25.7C83 24.9 82 24.7 81.1 25.1M56.6 25.9C55.9 26.3 53 29.2 52.4 30.1C51.9 30.8 48.8 33.8 48.2 34.3C47.4 34.8 45.3 36.9 44.8 37.6C44.5 38 40.2 42.5 33.6 49C27.7 54.9 22.9 59.8 22.8 60C22.4 60.8 23.3 61.6 24.1 61.2C24.4 61 58.2 27.1 58.4 26.8C58.9 25.8 57.8 25.2 56.6 25.9M24.1 25.7C23.4 25.9 22.6 26.7 22.5 27.5C22.3 29.8 25.6 30.4 26.4 28.2C27 26.9 25.5 25.3 24.1 25.7M3.3 30.9C2.5 31.2 2 32 2.1 33C2.3 35.4 6.3 35.3 6.3 32.8C6.3 31.5 4.6 30.4 3.3 30.9M96.2 38.1C95.8 38.3 95.6 38.8 95.6 39.5C95.6 40.5 95.2 41.1 94.3 41.6C93.2 42.2 92.5 42.1 91.4 41.3C90.2 40.4 88.8 41 88 42.7C87.5 43.7 87.5 43.8 88.1 44.9C88.6 45.9 88.6 46.3 88.2 47.2C87.6 48.3 87 48.8 85.9 48.8C84.9 48.8 84.4 49.3 84.4 50.2C84.4 50.4 84.3 50.9 84.3 51.3C84.1 52.5 84.4 53 85.7 53.4C86.5 53.6 88 52.6 89.1 50.9C89.3 50.7 89.8 50 90.3 49.5C90.8 49 91.4 48.3 91.6 48C93.2 45.7 95.8 44.1 97.9 44.1C103.3 44.1 106.5 49.5 103.9 54C103.5 54.7 100.8 57.5 100 58C99.6 58.3 98.6 59.2 97.7 60.1C95.8 62 95.7 62.2 95.9 63.1C96.3 64.2 96.8 64.5 98.8 64.4C100.4 64.3 100.7 64.1 100.8 62.6C101 60.5 102.5 59.6 104.2 60.6C105.5 61.3 105.9 61.2 107.2 59.8C108.5 58.5 108.5 58.3 107.7 56.8C106.8 55 107.5 53.4 109.3 53.1C110.6 53 111.2 52.3 111.2 50.8C111.2 49.2 110.8 48.6 109.4 48.4C107.5 48.1 106.6 46.2 107.6 44.6C108.4 43.3 108.4 43 107.1 41.8C105.7 40.4 105.5 40.3 104.2 41.1C102.4 42.3 100.7 41.6 100.4 39.6C100.2 38.2 100 38.1 98 38C96.9 38 96.5 38 96.2 38.1M94 67.2C93.6 67.4 88 73.1 87.6 73.7C87.3 74 84.7 76.8 81.4 80.1C78.2 83.2 75.6 85.9 75.5 86.1C75.1 86.9 75.9 87.7 76.8 87.3C77.1 87.1 95.1 69 95.3 68.7C95.7 67.8 94.8 66.8 94 67.2M126.1 80.1C125.2 80.4 124.6 81.4 124.9 82.5C125.4 84.6 128.1 84.7 128.7 82.6C129.1 81.2 127.5 79.7 126.1 80.1M72.1 89.1C71.6 89.3 69.3 91.7 69.2 92.1C69.1 93 69.7 93.5 70.4 93.2C70.7 93 73.3 90.5 73.5 90.2C73.9 89.3 73 88.6 72.1 89.1M116.9 89.4C115.9 89.8 115.7 90.2 115.7 91.4C115.6 93.6 117.8 94.3 119.2 92.5C120.3 91.1 118.6 88.8 116.9 89.4M109.3 98.9C107.9 99.2 107.4 100.4 108.1 101.6C109.2 103.7 112.1 102.7 111.5 100.3C111.3 99.2 110.4 98.6 109.3 98.9M84.1 107.7C83 108.1 82.6 109.6 83.2 110.5C84.4 112 86.2 111.8 86.8 110.2C87.4 108.7 85.6 107.2 84.1 107.7"/></symbol>
+  <symbol id="gh" viewBox="0 0 16 16"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></symbol>
+  <symbol id="copy" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5.2" y="5.2" width="8.6" height="8.6" rx="1.8"/><path d="M10.8 5.2V3.8A1.6 1.6 0 0 0 9.2 2.2H3.8a1.6 1.6 0 0 0-1.6 1.6v5.4a1.6 1.6 0 0 0 1.6 1.6h1.4"/></g></symbol>
+  <symbol id="check" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="m3 8.5 3.2 3L13 4.5"/></symbol>
+  <symbol id="out" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M5 11 11 5M6 5h5v5"/></symbol>
+  <symbol id="lock" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="3.2" y="7" width="9.6" height="6.8" rx="1.6"/><path d="M5.4 7V5.2a2.6 2.6 0 0 1 5.2 0V7"/></g></symbol>
+</svg>
+
 <a class="skip" href="#main">Skip to content</a>
-<header class="wrap nav"><a class="brand" href="#" aria-label="mcpmu home">mcp<span>μ</span></a><nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#compression">Compression</a><a href="#permissions">Permissions</a><a class="github" href="https://github.com/Bigsy/mcpmu">GitHub ↗</a></nav></header>
-<main id="main">
-<section class="hero wrap">
-  <div class="eyebrow"><span class="dot"></span> FREE &amp; OPEN SOURCE · MIT LICENSE</div>
-  <h1>One MCP config.<br><span>Every agent.</span></h1>
-  <p class="intro">Your tools, shared across Claude Code, Codex, Cursor and beyond. Configure once. Load less context. Decide exactly what each agent can do.</p>
-  <div class="actions"><a class="button" href="#install">Get mcpmu <span>↓</span></a><a class="text-link" href="https://github.com/Bigsy/mcpmu#readme">Read the docs ↗</a></div>
-  <div class="gateway" aria-label="Claude Code, Codex, Cursor and other MCP clients connect through one mcpmu configuration to shared MCP servers. mcpmu applies namespaces, compression and permissions.">
-    <div class="flow-label">YOUR AGENTS</div><div class="clients"><span>Claude Code</span><span>Codex</span><span>Cursor</span><span>Any MCP client</span></div>
-    <div class="connector"></div><div class="hub"><div class="hub-brand">mcp<span>μ</span></div><div class="hub-caption">ONE SHARED CONFIG</div><div class="hub-features"><span>Namespaces</span><span>Compression</span><span>Permissions</span></div></div>
-    <div class="connector lower"></div><div class="servers"><span>Documentation</span><span>Filesystem</span><span>GitHub</span><span>Your servers</span></div><div class="flow-label bottom">LOCAL STDIO + REMOTE HTTP</div>
+
+<header class="nav" id="top">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="mcpmu home"><svg class="brand-mark" aria-hidden="true"><use href="#mark"/></svg><span class="word">mcp<span>μ</span></span></a>
+    <nav class="nav-links" aria-label="Main navigation">
+      <a href="#how-it-works">How it works</a>
+      <a href="#compression">Compression</a>
+      <a href="#permissions">Permissions</a>
+      <a href="#features">Features</a>
+      <a href="https://github.com/Bigsy/mcpmu#documentation">Docs</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="gh-btn" href="https://github.com/Bigsy/mcpmu"><svg aria-hidden="true"><use href="#gh"/></svg><span>GitHub</span></a>
+      <a class="btn btn-sm" href="#install">Install</a>
+    </div>
   </div>
-  <div class="hero-foot"><span>Runs on your machine</span><span>Terminal + web UI</span><span>No subscription</span></div>
-</section>
-<section class="section wrap" id="how-it-works">
-  <div class="section-top numbered"><span class="number">01 / SHARE</span><span class="kicker">Stop maintaining the same setup everywhere.</span></div>
-  <div class="split"><div><h2>Configure your servers.<br>Connect your agents.</h2><p>Add a server to mcpmu once. Point each agent at the gateway and share the same server definitions, authentication and tool rules.</p><p>Keep work, personal and project tools in separate namespaces. Each agent gets the right view of the same configuration.</p><a class="text-link" href="https://github.com/Bigsy/mcpmu#give-each-agent-the-right-tools">Explore namespaces ↗</a></div>
-  <div class="code-panel"><div class="panel-heading"><span>ONE SETUP. MULTIPLE CLIENTS.</span><span class="mini-mark">μ</span></div><pre><code><span class="comment"># Add your server once</span>
-mcpmu add context7 -- npx -y @upstash/context7-mcp
+</header>
 
-<span class="comment"># Connect Claude Code</span>
-claude mcp add mcpmu -- mcpmu serve --stdio
+<main id="main">
 
-<span class="comment"># Connect Codex to the same setup</span>
-codex mcp add mcpmu -- mcpmu serve --stdio</code></pre><div class="panel-note">Use stdio locally, or a persistent Streamable HTTP endpoint.</div></div></div>
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-bg" aria-hidden="true">
+    <div class="hero-grid"></div>
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="wm wm-hero" data-parallax="0.14"></div>
+  </div>
+
+  <div class="wrap hero-inner">
+    <a class="announce" href="https://github.com/Bigsy/mcpmu/blob/main/docs/CLI.md#client-features-elicitation" data-reveal>
+      <span class="announce-tag">New</span>
+      <span>Elicitation &amp; sampling relay</span>
+      <span class="announce-arrow" aria-hidden="true">→</span>
+    </a>
+
+    <h1 data-reveal>One MCP config.<br><span class="grad">Every agent.</span></h1>
+
+    <p class="intro" data-reveal>Your MCP servers, shared across Claude Code, Codex, Cursor and beyond. Configure once. Load less context. Decide exactly what each agent can do.</p>
+
+    <div class="actions" data-reveal>
+      <a class="btn btn-lg" href="#install">Get mcpmu <span aria-hidden="true">→</span></a>
+      <div class="cmd-pill">
+        <span class="prompt" aria-hidden="true">$</span>
+        <code>brew install Bigsy/tap/mcpmu</code>
+        <button type="button" class="icon-btn" data-copy="brew install Bigsy/tap/mcpmu" aria-label="Copy install command"><svg class="i-copy" aria-hidden="true"><use href="#copy"/></svg><svg class="i-check" aria-hidden="true"><use href="#check"/></svg></button>
+      </div>
+    </div>
+
+    <div class="gateway" data-reveal role="img" aria-label="Claude Code, Codex, Cursor and other MCP clients connect through one mcpmu gateway to shared stdio and HTTP MCP servers. mcpmu applies namespaces, compression, permissions and metrics to every call.">
+      <svg class="wires" aria-hidden="true"></svg>
+      <div class="row-label">YOUR AGENTS</div>
+      <div class="chips agents">
+        <span class="chip">Claude Code</span>
+        <span class="chip">Codex</span>
+        <span class="chip">Cursor</span>
+        <span class="chip opt">Windsurf</span>
+        <span class="chip">Any MCP client</span>
+      </div>
+
+      <div class="hub">
+        <div class="hub-ring"></div>
+        <div class="hub-head"><svg class="hub-mark"><use href="#mark"/></svg><span class="word">mcp<span>μ</span></span></div>
+        <div class="hub-caption">ONE SHARED CONFIG</div>
+        <div class="hub-features"><span data-f="ns">Namespaces</span><span data-f="compress">Compression</span><span data-f="perm">Permissions</span><span data-f="metrics" class="opt">Metrics</span></div>
+      </div>
+
+      <div class="chips servers">
+        <span class="chip">Filesystem<em>stdio</em></span>
+        <span class="chip">GitHub<em>http</em></span>
+        <span class="chip opt">Atlassian<em>oauth</em></span>
+        <span class="chip opt">Context7<em>stdio</em></span>
+        <span class="chip">Your servers</span>
+      </div>
+      <div class="row-label bottom">LOCAL STDIO + REMOTE HTTP SERVERS</div>
+    </div>
+
+    <ul class="hero-foot" data-reveal>
+      <li>Runs on your machine</li>
+      <li>Terminal + web UI</li>
+      <li>No account or subscription</li>
+      <li>MIT licensed</li>
+    </ul>
+  </div>
 </section>
-<section class="section compression" id="compression"><div class="wrap">
-  <div class="section-top numbered"><span class="number">02 / COMPRESS</span><span class="kicker">More room for the work that matters.</span></div>
-  <div class="split"><div><h2>Your context is precious.<br><span>Spend it on the task.</span></h2><p>A large tool catalog can fill your context with schemas before an agent starts working. mcpmu replaces that upfront payload with three wrapper tools and a compact catalog.</p><p>Your agent discovers what’s available, fetches full schemas when needed, and calls the underlying tools. You choose how much detail the catalog includes.</p></div><div class="schema-panel"><div class="schema-before"><span class="small-label">FULL TOOL SURFACE</span><div class="schema-lines" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="stat"><b>100</b><span>schemas in context</span></div><p>Every tool. Every schema. Up front.</p></div><div class="schema-after"><span class="small-label">WITH MCPMU COMPRESSION</span><code>list_tools</code><code>get_tool_schema</code><code>invoke_tool</code><div class="stat"><b>3</b><span>schemas in context</span></div><p>Compact catalog. Full schemas on demand.</p></div></div></div>
-  <div class="levels"><div><b>low</b><span>Full descriptions</span></div><div class="recommended"><b>medium <em>START HERE</em></b><span>First sentence</span></div><div><b>high</b><span>Names + arguments</span></div><div><b>max</b><span>Tool names only</span></div></div>
-  <div class="command"><code>mcpmu namespace set-compression work medium</code><button type="button" data-copy="mcpmu namespace set-compression work medium" aria-label="Copy compression command">Copy</button></div>
-  <p class="fine">Opt-in, per namespace. Example counts are from a setup with 8 servers and 100 tools. Actual context savings depend on your tool catalog and compression level. <a href="https://github.com/Bigsy/mcpmu/blob/main/docs/compression.md">How compression works ↗</a></p>
-</div></section>
-<section class="section wrap" id="permissions">
-  <div class="section-top numbered"><span class="number">03 / CONTROL</span><span class="kicker">A shared config doesn’t mean shared access.</span></div>
-  <div class="split"><div><h2>The right tools.<br>For the right agent.</h2><p>Give a research agent read access. Allow a development agent to make changes. Block a dangerous tool across every namespace.</p><p>mcpmu enforces permissions at the gateway, including calls through compression. Denied tools stay out of discovery and their calls are blocked before dispatch.</p><a class="text-link" href="https://github.com/Bigsy/mcpmu/blob/main/docs/permissions.md">Understand tool permissions ↗</a></div><div class="permission-panel"><div class="panel-heading">EXAMPLE ACCESS POLICY</div><table><caption class="sr-only">Example permissions for research and development namespaces</caption><thead><tr><th scope="col">Tool</th><th scope="col">Research</th><th scope="col">Development</th></tr></thead><tbody><tr><th scope="row">read_file</th><td class="allow">✓ Allow</td><td class="allow">✓ Allow</td></tr><tr><th scope="row">write_file</th><td class="deny">− Deny</td><td class="allow">✓ Allow</td></tr><tr><th scope="row">delete_file</th><td class="deny">− Deny</td><td class="deny">− Deny</td></tr></tbody></table><div class="panel-note"><span class="orange">●</span> Global deny rules always take precedence.</div></div></div>
-  <p class="permission-note">With compression enabled, clients see wrapper tools. Set permissions for the underlying tools in mcpmu.</p>
+
+<!-- Clients -->
+<section class="clients" aria-label="Compatible MCP clients">
+  <p class="clients-label">Plain MCP over stdio and Streamable HTTP. Works with</p>
+  <div class="marquee">
+    <ul class="marquee-track">
+      <li>Claude Code</li><li>Codex</li><li>Cursor</li><li>Windsurf</li><li>Claude Desktop</li><li>VS Code</li><li>Zed</li><li>Gemini CLI</li><li>Cline</li><li>Goose</li><li>any MCP client</li>
+    </ul>
+    <ul class="marquee-track" aria-hidden="true">
+      <li>Claude Code</li><li>Codex</li><li>Cursor</li><li>Windsurf</li><li>Claude Desktop</li><li>VS Code</li><li>Zed</li><li>Gemini CLI</li><li>Cline</li><li>Goose</li><li>any MCP client</li>
+    </ul>
+  </div>
 </section>
-<section class="section wrap interface"><div class="section-top"><span class="number">BUILT FOR YOUR WORKFLOW</span></div><h2>See what you’re sharing.</h2><p>Manage servers, namespaces and permissions in your terminal or browser.</p><div class="screens"><figure class="window web"><div class="titlebar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><code>mcpmu web</code></div><a href="assets/web-servers.png"><img src="assets/web-servers.png" alt="mcpmu web interface showing configured servers and management controls" loading="lazy" width="1528" height="955"></a><figcaption><span>Browser UI</span><span>Servers, namespaces, registry and metrics</span></figcaption></figure><figure class="window tui"><div class="titlebar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><code>mcpmu</code></div><a href="assets/terminal-permissions.png"><img src="assets/terminal-permissions.png" alt="mcpmu terminal interface with the namespace tool permissions editor" loading="lazy" width="932" height="651"></a><figcaption><span>Terminal UI</span><span>Keyboard-driven, everything from the terminal</span></figcaption></figure></div></section>
-<section class="install section" id="install"><div class="wrap install-inner"><div><div class="eyebrow">YOUR TOOLS. YOUR CONFIG. YOUR RULES.</div><h2>One small gateway.<br>A better MCP setup.</h2><p>Free and open source. No account or subscription required.</p><a class="text-link" href="https://github.com/Bigsy/mcpmu">View source on GitHub ↗</a></div><div><div class="panel-heading">INSTALL WITH HOMEBREW · MACOS / LINUX</div><div class="command install-command"><pre><code>brew tap Bigsy/tap
-brew install mcpmu</code></pre><button type="button" data-copy="brew tap Bigsy/tap&#10;brew install mcpmu" aria-label="Copy Homebrew installation commands">Copy</button></div><div class="install-links"><a href="https://github.com/Bigsy/mcpmu/releases">Download a release ↗</a><a href="https://github.com/Bigsy/mcpmu#quick-start">Quick start ↗</a></div></div></div></section>
+
+<!-- 01 Share -->
+<section class="section" id="how-it-works">
+  <div class="wrap">
+    <div class="section-top" data-reveal><span class="number">01 / SHARE</span><span class="kicker">Stop maintaining the same setup everywhere.</span></div>
+    <div class="split">
+      <div class="copy" data-reveal>
+        <h2>Configure your servers.<br><span class="dim">Connect your agents.</span></h2>
+        <p>Add a server to mcpmu once. Point each agent at the gateway and share the same server definitions, authentication and tool rules.</p>
+        <p>Keep work, personal and project tools in separate namespaces. Each agent gets the right view of the same configuration.</p>
+        <ul class="ticks">
+          <li><b>stdio or Streamable HTTP.</b> Per-client shims, or one persistent endpoint with a URL per namespace.</li>
+          <li><b>Shared by default.</b> One upstream serves every agent; stateful servers can get a private instance each.</li>
+          <li><b>Hot reload.</b> Edit config while serving. Unaffected upstreams keep running.</li>
+        </ul>
+        <a class="text-link" href="https://github.com/Bigsy/mcpmu#give-each-agent-the-right-tools">Explore namespaces <svg aria-hidden="true"><use href="#out"/></svg></a>
+      </div>
+
+      <div class="term" data-reveal data-tabs>
+        <div class="term-bar">
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div class="tabs" role="tablist" aria-label="Client setup examples">
+            <button type="button" role="tab" id="tab-claude" aria-controls="panel-claude" aria-selected="true">Claude Code</button>
+            <button type="button" role="tab" id="tab-codex" aria-controls="panel-codex" aria-selected="false" tabindex="-1">Codex</button>
+            <button type="button" role="tab" id="tab-json" aria-controls="panel-json" aria-selected="false" tabindex="-1">JSON</button>
+            <button type="button" role="tab" id="tab-http" aria-controls="panel-http" aria-selected="false" tabindex="-1">HTTP</button>
+          </div>
+          <button type="button" class="icon-btn" data-copy-panel aria-label="Copy commands"><svg class="i-copy" aria-hidden="true"><use href="#copy"/></svg><svg class="i-check" aria-hidden="true"><use href="#check"/></svg></button>
+        </div>
+        <div class="term-body">
+<pre role="tabpanel" id="panel-claude" aria-labelledby="tab-claude"><code><span class="c"># Add your servers once</span>
+<span class="k">mcpmu</span> add context7 <span class="f">--</span> npx -y @upstash/context7-mcp
+<span class="k">mcpmu</span> add atlassian <span class="u">https://mcp.atlassian.com/mcp</span> <span class="f">--scopes</span> read,write
+
+<span class="c"># Connect Claude Code to all of them</span>
+<span class="k">claude</span> mcp add mcpmu <span class="f">--</span> mcpmu serve <span class="f">--stdio</span>
+
+<span class="c"># …or to just the work namespace</span>
+<span class="k">claude</span> mcp add work <span class="f">--</span> mcpmu serve <span class="f">--stdio</span> <span class="f">--namespace</span> work</code></pre>
+<pre role="tabpanel" id="panel-codex" aria-labelledby="tab-codex" hidden><code><span class="c"># Same servers, same rules, another agent</span>
+<span class="k">codex</span> mcp add mcpmu <span class="f">--</span> mcpmu serve <span class="f">--stdio</span>
+
+<span class="c"># Scope it to a namespace</span>
+<span class="k">codex</span> mcp add work <span class="f">--</span> mcpmu serve <span class="f">--stdio</span> <span class="f">--namespace</span> work
+
+<span class="c"># Or let your agent import your existing MCP config</span>
+<span class="k">mcpmu</span> skill install</code></pre>
+<pre role="tabpanel" id="panel-json" aria-labelledby="tab-json" hidden><code><span class="c">// Cursor, Windsurf, Claude Desktop and other stdio clients</span>
+<span class="p">{</span>
+  <span class="j">"mcpServers"</span><span class="p">: {</span>
+    <span class="j">"mcpmu"</span><span class="p">: {</span>
+      <span class="j">"command"</span><span class="p">:</span> <span class="s">"mcpmu"</span><span class="p">,</span>
+      <span class="j">"args"</span><span class="p">: [</span><span class="s">"serve"</span><span class="p">,</span> <span class="s">"--stdio"</span><span class="p">]</span>
+    <span class="p">}</span>
+  <span class="p">}</span>
+<span class="p">}</span></code></pre>
+<pre role="tabpanel" id="panel-http" aria-labelledby="tab-http" hidden><code><span class="c"># One long-running endpoint, a URL per namespace</span>
+<span class="k">mcpmu</span> serve <span class="f">--http</span>
+
+<span class="c"># Off loopback, a bearer token is mandatory</span>
+<span class="k">mcpmu</span> serve <span class="f">--http</span> <span class="f">--addr</span> 0.0.0.0:8081 <span class="f">--token</span> <span class="s">"$MCPMU_TOKEN"</span>
+
+<span class="c"># Point any Streamable HTTP client at a namespace</span>
+<span class="p">{</span> <span class="j">"mcpmu"</span><span class="p">: {</span> <span class="j">"url"</span><span class="p">:</span> <span class="s">"http://127.0.0.1:8081/mcp/work"</span> <span class="p">} }</span></code></pre>
+        </div>
+        <div class="term-foot"><span class="live-dot" aria-hidden="true"></span>One config file for every agent · <code>~/.config/mcpmu/config.json</code></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 02 Compress -->
+<section class="section band" id="compression">
+  <div class="wm wm-left" aria-hidden="true" data-parallax="-0.06"></div>
+  <div class="wrap">
+    <div class="section-top" data-reveal><span class="number">02 / COMPRESS</span><span class="kicker">More room for the work that matters.</span></div>
+    <div class="split">
+      <div class="copy" data-reveal>
+        <h2>Your context is precious.<br><span class="grad">Spend it on the task.</span></h2>
+        <p>A large tool catalog can fill your context with schemas before an agent starts working. mcpmu replaces that upfront payload with three wrapper tools and a compact catalog.</p>
+        <p>Your agent discovers what’s available, fetches full schemas when needed, and calls the underlying tools. You choose how much detail the catalog includes.</p>
+      </div>
+
+      <div class="ctx" data-ctx data-mode="full" data-reveal>
+        <div class="ctx-head">
+          <span class="small-label">TOOL SCHEMAS IN CONTEXT</span>
+          <div class="seg" role="group" aria-label="Compare tool surfaces">
+            <button type="button" data-mode="full" aria-pressed="true">Full surface</button>
+            <button type="button" data-mode="compressed" aria-pressed="false">With mcpmu</button>
+          </div>
+        </div>
+        <div class="ctx-body">
+          <div class="cells" aria-hidden="true"></div>
+          <div class="ctx-stat" aria-live="polite">
+            <b data-count>100</b>
+            <span data-when="full">schemas loaded before the first prompt</span>
+            <span data-when="compressed">wrapper tools. Full schemas on demand.</span>
+          </div>
+        </div>
+        <div class="wrappers"><code>list_tools</code><code>get_tool_schema</code><code>invoke_tool</code></div>
+      </div>
+    </div>
+
+    <div class="levels-demo" data-reveal>
+      <div class="levels-intro">
+        <h3>Pick how much the catalog says.</h3>
+        <p>The level shapes the compact listing embedded in <code>invoke_tool</code>. Full schemas stay one <code>get_tool_schema</code> call away.</p>
+      </div>
+      <div class="levels" role="tablist" aria-label="Compression levels">
+        <button type="button" role="tab" data-level="low" aria-selected="false" tabindex="-1"><b>low</b><span>Full descriptions</span></button>
+        <button type="button" role="tab" data-level="medium" aria-selected="true"><b>medium <em>START HERE</em></b><span>First sentence</span></button>
+        <button type="button" role="tab" data-level="high" aria-selected="false" tabindex="-1"><b>high</b><span>Names + arguments</span></button>
+        <button type="button" role="tab" data-level="max" aria-selected="false" tabindex="-1"><b>max</b><span>Tool names only</span></button>
+      </div>
+      <div class="listing" role="tabpanel" aria-label="Example compact listing">
+        <div class="listing-head"><span>invoke_tool · available tools</span><span class="listing-size"><b data-size>—</b> chars <i class="size-bar" aria-hidden="true"><i></i></i></span></div>
+<pre><code data-listing>&lt;tool&gt;filesystem.read_file(path, limit?): Read a file from disk.&lt;/tool&gt;
+&lt;tool&gt;github.create_issue(owner, repo, title, body?): Create an issue in a repository.&lt;/tool&gt;
+&lt;tool&gt;docs.search(query, limit?): Search library documentation for relevant sections.&lt;/tool&gt;
+&lt;tool&gt;jira.get_issue(key, fields?): Fetch a Jira issue by key.&lt;/tool&gt;
+&lt;tool&gt;slack.post_message(channel, text, thread_ts?): Post a message to a channel or thread.&lt;/tool&gt;</code></pre>
+      </div>
+    </div>
+
+    <div class="command" data-reveal><span class="prompt" aria-hidden="true">$</span><code>mcpmu namespace set-compression work medium</code><button type="button" data-copy="mcpmu namespace set-compression work medium" aria-label="Copy compression command">Copy</button></div>
+    <p class="fine">Opt-in, per namespace or per serve process. Example counts are from a setup with 8 servers and 100 tools; actual savings depend on your catalog and level. <a href="https://github.com/Bigsy/mcpmu/blob/main/docs/compression.md">How compression works ↗</a></p>
+  </div>
+</section>
+
+<!-- 03 Control -->
+<section class="section" id="permissions">
+  <div class="wrap">
+    <div class="section-top" data-reveal><span class="number">03 / CONTROL</span><span class="kicker">A shared config doesn’t mean shared access.</span></div>
+    <div class="split">
+      <div class="copy" data-reveal>
+        <h2>The right tools.<br><span class="dim">For the right agent.</span></h2>
+        <p>Give a research agent read access. Allow a development agent to make changes. Block a dangerous tool across every namespace.</p>
+        <p>mcpmu enforces permissions at the gateway, including calls through compression. Denied tools stay out of discovery and their calls are blocked before dispatch.</p>
+        <a class="text-link" href="https://github.com/Bigsy/mcpmu/blob/main/docs/permissions.md">Understand tool permissions <svg aria-hidden="true"><use href="#out"/></svg></a>
+      </div>
+
+      <div class="policy" data-reveal>
+        <div class="panel-heading"><span>EXAMPLE ACCESS POLICY</span><span class="enforced"><span class="live-dot" aria-hidden="true"></span>ENFORCED AT THE GATEWAY</span></div>
+        <table>
+          <caption class="sr-only">Example permissions for research and development namespaces</caption>
+          <thead><tr><th scope="col">Tool</th><th scope="col"><span class="ns">research</span></th><th scope="col"><span class="ns">development</span></th></tr></thead>
+          <tbody>
+            <tr><th scope="row">filesystem.<wbr>read_file</th><td><span class="pill allow">✓ Allow</span></td><td><span class="pill allow">✓ Allow</span></td></tr>
+            <tr><th scope="row">filesystem.<wbr>write_file</th><td><span class="pill deny">✕ Deny</span></td><td><span class="pill allow">✓ Allow</span></td></tr>
+            <tr class="global"><th scope="row">filesystem.<wbr>delete_file</th><td colspan="2"><span class="pill lock"><svg aria-hidden="true"><use href="#lock"/></svg>Global deny · every namespace</span></td></tr>
+          </tbody>
+        </table>
+        <div class="precedence">
+          <span class="small-label">RESOLUTION ORDER</span>
+          <ol>
+            <li class="top">Global deny</li><li>Tool rule</li><li>Server default</li><li>Namespace default</li><li>Allow</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="command" data-reveal><span class="prompt" aria-hidden="true">$</span><code>mcpmu server deny-tool filesystem delete_file</code><button type="button" data-copy="mcpmu server deny-tool filesystem delete_file" aria-label="Copy deny command">Copy</button></div>
+    <p class="permission-note">With compression enabled, clients see wrapper tools. Set permissions for the underlying tools in mcpmu.</p>
+  </div>
+</section>
+
+<!-- 04 Features -->
+<section class="section band" id="features">
+  <div class="wm wm-right" aria-hidden="true" data-parallax="0.05"></div>
+  <div class="wrap">
+    <div class="section-top" data-reveal><span class="number">04 / OPERATE</span><span class="kicker">The details that make a gateway trustworthy.</span></div>
+    <h2 class="center" data-reveal>Everything else a gateway should do.<br><span class="dim">Without the ceremony.</span></h2>
+
+    <div class="bento" data-spotlight>
+      <article class="card wide" data-reveal>
+        <div class="card-text">
+          <div class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></div>
+          <h3>Usage metrics</h3>
+          <p>Per-tool call counts, error rates, latency and unused tools. Click an error count to inspect the failed response, filtered by namespace and time window. Stored locally; successful calls never record inputs or responses.</p>
+        </div>
+        <div class="metrics" aria-hidden="true">
+          <div class="metrics-head"><span>TOOL</span><span>CALLS</span></div>
+          <div class="mrow"><code>filesystem.read_file</code><i style="--w:100%"></i><span>1,284</span></div>
+          <div class="mrow"><code>github.search_code</code><i style="--w:44%"></i><span>562</span></div>
+          <div class="mrow"><code>jira.search</code><i style="--w:17%"></i><span>211 <em class="err">7 errors</em></span></div>
+          <div class="mrow"><code>docs.get_page</code><i style="--w:8%"></i><span>96</span></div>
+          <div class="mrow idle"><code>slack.list_emoji</code><i style="--w:0%"></i><span><em class="unused">unused</em></span></div>
+        </div>
+      </article>
+
+      <article class="card" data-reveal>
+        <div class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M14 9l2 2"/></svg></div>
+        <h3>OAuth 2.1 &amp; headers</h3>
+        <p>PKCE, dynamic client registration, bearer tokens, or custom headers for things like Cloudflare Access. Secrets can come from env vars at request time.</p>
+      </article>
+
+      <article class="card" data-reveal>
+        <div class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6M11 8v6"/></svg></div>
+        <h3>Official MCP registry</h3>
+        <p>Search the official registry from the terminal or browser and add a server with its install spec pre-filled.</p>
+      </article>
+
+      <article class="card" data-reveal>
+        <div class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/></svg></div>
+        <h3>Hot reload</h3>
+        <p>Edit config while agents are connected. Permission and compression edits keep instances running; only affected servers restart.</p>
+      </article>
+
+      <article class="card" data-reveal>
+        <div class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg></div>
+        <h3>Shared or private</h3>
+        <p>Upstreams are shared across agents by default. Browsers, REPLs and other stateful servers can get a private instance per session.</p>
+      </article>
+
+      <article class="card" data-reveal>
+        <div class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H9l-5 4V5Z"/><path d="M9 10h6"/></svg></div>
+        <h3>Elicitation &amp; sampling</h3>
+        <p>Forward an upstream’s forms, sign-in links and sampling requests to the agent that caused them. Opt-in per server, and a tool’s timeout pauses while it waits on you.</p>
+      </article>
+
+      <article class="card" data-reveal>
+        <div class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg></div>
+        <h3>Nothing lost in transit</h3>
+        <p>Tool annotations, output schemas, icons and structured results survive the proxy hop. Cancellation and progress relay both ways.</p>
+      </article>
+
+      <article class="card" data-reveal>
+        <div class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v4a3 3 0 0 1-6 0V3M6 10v3a6 6 0 0 0 12 0v-1"/><circle cx="18" cy="9" r="3"/></svg></div>
+        <h3><code>status</code> &amp; <code>doctor</code></h3>
+        <p>Read-only diagnostics for config, executables, working directories, env vars and running instances. Env checks show names, never values.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- 05 Interfaces -->
+<section class="section" id="interfaces">
+  <div class="wrap">
+    <div class="section-top" data-reveal><span class="number">05 / MANAGE</span><span class="kicker">Built for your workflow.</span></div>
+    <div class="screens-head" data-reveal>
+      <h2>See what you’re sharing.</h2>
+      <p>Manage servers, namespaces and permissions in your terminal or browser.</p>
+    </div>
+    <div class="stage">
+      <figure class="window web">
+        <div class="titlebar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><code>localhost:8080 — mcpmu web</code></div>
+        <a href="assets/web-servers.png"><img src="assets/web-servers.png" alt="mcpmu web interface showing configured servers and management controls" loading="lazy" width="1528" height="955"></a>
+      </figure>
+      <figure class="window tui">
+        <div class="titlebar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><code>~ mcpmu</code></div>
+        <a href="assets/terminal-permissions.png"><img src="assets/terminal-permissions.png" alt="mcpmu terminal interface with the namespace tool permissions editor" loading="lazy" width="932" height="651"></a>
+      </figure>
+    </div>
+    <div class="stage-legend">
+      <div data-reveal><span class="legend-kicker"><code>mcpmu web</code></span><b>Browser UI</b><p>Servers, namespaces, the registry and metrics, with live logs over SSE.</p></div>
+      <div data-reveal><span class="legend-kicker"><code>mcpmu</code></span><b>Terminal UI</b><p>Keyboard-driven. Test, edit and set permissions without leaving the terminal.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- Install -->
+<section class="section install" id="install">
+  <div class="wrap">
+    <div class="install-card" data-reveal>
+      <div class="wm wm-install" aria-hidden="true"></div>
+      <div class="install-copy">
+        <div class="eyebrow">YOUR TOOLS. YOUR CONFIG. YOUR RULES.</div>
+        <h2>One small gateway.<br><span class="grad">A better MCP setup.</span></h2>
+        <p>Free and open source. No account or subscription required.</p>
+        <div class="install-links">
+          <a href="https://github.com/Bigsy/mcpmu"><svg aria-hidden="true"><use href="#gh"/></svg>View source</a>
+          <a href="https://github.com/Bigsy/mcpmu#quick-start">Quick start ↗</a>
+          <a href="https://github.com/Bigsy/mcpmu/releases">Releases ↗</a>
+        </div>
+      </div>
+
+      <ol class="steps">
+        <li>
+          <div class="step-head"><span class="step-n">1</span><b>Install</b>
+            <div class="tabs mini" role="tablist" aria-label="Install method" data-tabs-for="install-panels">
+              <button type="button" role="tab" id="tab-brew" aria-controls="panel-brew" aria-selected="true">Homebrew</button>
+              <button type="button" role="tab" id="tab-go" aria-controls="panel-go" aria-selected="false" tabindex="-1">Go</button>
+            </div>
+          </div>
+          <div id="install-panels">
+            <div class="command" role="tabpanel" id="panel-brew" aria-labelledby="tab-brew"><pre><code>brew tap Bigsy/tap
+brew install mcpmu</code></pre><button type="button" data-copy="brew tap Bigsy/tap&#10;brew install mcpmu" aria-label="Copy Homebrew installation commands">Copy</button></div>
+            <div class="command" role="tabpanel" id="panel-go" aria-labelledby="tab-go" hidden><pre><code>go install github.com/Bigsy/mcpmu/cmd/mcpmu@latest</code></pre><button type="button" data-copy="go install github.com/Bigsy/mcpmu/cmd/mcpmu@latest" aria-label="Copy go install command">Copy</button></div>
+          </div>
+        </li>
+        <li>
+          <div class="step-head"><span class="step-n">2</span><b>Add a server</b><span class="step-alt">or run <code>mcpmu skill install</code> and let your agent import your config</span></div>
+          <div class="command"><pre><code>mcpmu add context7 -- npx -y @upstash/context7-mcp</code></pre><button type="button" data-copy="mcpmu add context7 -- npx -y @upstash/context7-mcp" aria-label="Copy add server command">Copy</button></div>
+        </li>
+        <li>
+          <div class="step-head"><span class="step-n">3</span><b>Connect your agent</b></div>
+          <div class="command"><pre><code>claude mcp add mcpmu -- mcpmu serve --stdio</code></pre><button type="button" data-copy="claude mcp add mcpmu -- mcpmu serve --stdio" aria-label="Copy connect command">Copy</button></div>
+        </li>
+      </ol>
+    </div>
+  </div>
+</section>
+
 </main>
-<footer class="wrap"><a class="brand" href="#">mcp<span>μ</span></a><p>Made by <a href="https://github.com/Bigsy">Bill Hedworth</a> · <a href="https://github.com/Bigsy/mcpmu/blob/main/LICENSE">MIT License</a></p><a href="https://github.com/Bigsy/mcpmu/issues">Feedback ↗</a></footer>
+
+<footer class="footer">
+  <div class="wrap footer-grid">
+    <div class="footer-brand">
+      <a class="brand" href="#top"><svg class="brand-mark" aria-hidden="true"><use href="#mark"/></svg><span class="word">mcp<span>μ</span></span></a>
+      <p>One secure, context-efficient MCP gateway for all your agents.</p>
+    </div>
+    <nav aria-label="Documentation">
+      <h4>Docs</h4>
+      <a href="https://github.com/Bigsy/mcpmu#quick-start">Quick start</a>
+      <a href="https://github.com/Bigsy/mcpmu/blob/main/docs/CLI.md">CLI reference</a>
+      <a href="https://github.com/Bigsy/mcpmu/blob/main/docs/permissions.md">Tool permissions</a>
+      <a href="https://github.com/Bigsy/mcpmu/blob/main/docs/compression.md">Compression</a>
+      <a href="https://github.com/Bigsy/mcpmu/blob/main/ARCHITECTURE.md">Architecture</a>
+    </nav>
+    <nav aria-label="Project">
+      <h4>Project</h4>
+      <a href="https://github.com/Bigsy/mcpmu">GitHub</a>
+      <a href="https://github.com/Bigsy/mcpmu/releases">Releases</a>
+      <a href="https://github.com/Bigsy/mcpmu/issues">Feedback &amp; issues</a>
+      <a href="https://github.com/Bigsy/mcpmu/blob/main/LICENSE">MIT License</a>
+    </nav>
+  </div>
+  <div class="wrap footer-bottom"><span>Made by <a href="https://github.com/Bigsy">Bill Hedworth</a></span><a href="#top">Back to top ↑</a></div>
+  <div class="footer-word" aria-hidden="true"><span>mcp</span><span>μ</span></div>
+</footer>
+
 <div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
 </body>
 </html>
