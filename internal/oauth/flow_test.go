@@ -250,3 +250,101 @@ func TestExchangeCode_IncludesResource(t *testing.T) {
 		t.Errorf("expected resource param in token exchange, got %q", gotResource)
 	}
 }
+
+// newVersionedMCPHost mimics Atlassian's v1 -> v2 move: root RFC 8414 metadata
+// still describes the old endpoint's authorization server, while /v2/mcp
+// advertises its own through a 401 resource_metadata challenge.
+func newVersionedMCPHost(t *testing.T, challenge bool) *httptest.Server {
+	t.Helper()
+	var srv *httptest.Server
+	writeJSON := func(w http.ResponseWriter, v any) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(v)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"issuer": srv.URL, "authorization_endpoint": srv.URL + "/v1/authorize",
+			"token_endpoint": srv.URL + "/v1/token",
+		})
+	})
+	mux.HandleFunc("/.well-known/oauth-protected-resource/v2/mcp", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"resource": srv.URL + "/v2/mcp", "authorization_servers": []string{srv.URL + "/tenant"},
+			"scopes_supported": []string{"read:jira", "offline_access"},
+		})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server/tenant", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"issuer": srv.URL + "/tenant", "authorization_endpoint": srv.URL + "/authorize",
+			"token_endpoint": srv.URL + "/oauth/token",
+		})
+	})
+	mux.HandleFunc("/v2/mcp", func(w http.ResponseWriter, r *http.Request) {
+		if challenge {
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+srv.URL+`/.well-known/oauth-protected-resource/v2/mcp"`)
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	srv = httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestDiscoverServer_PrefersChallengeOverRootMetadata(t *testing.T) {
+	srv := newVersionedMCPHost(t, true)
+
+	result, err := discoverServer(context.Background(), srv.URL+"/v2/mcp")
+	if err != nil {
+		t.Fatalf("discoverServer: %v", err)
+	}
+	if got, want := result.Metadata.TokenEndpoint, srv.URL+"/oauth/token"; got != want {
+		t.Errorf("TokenEndpoint = %q, want %q (root metadata belongs to the old endpoint)", got, want)
+	}
+	if got := strings.Join(result.Scopes, " "); got != "read:jira offline_access" {
+		t.Errorf("Scopes = %q, want resource metadata scopes", got)
+	}
+}
+
+func TestDiscoverServer_FallsBackToStandardDiscovery(t *testing.T) {
+	srv := newVersionedMCPHost(t, false)
+
+	result, err := discoverServer(context.Background(), srv.URL+"/v2/mcp")
+	if err != nil {
+		t.Fatalf("discoverServer: %v", err)
+	}
+	if got, want := result.Metadata.TokenEndpoint, srv.URL+"/v1/token"; got != want {
+		t.Errorf("TokenEndpoint = %q, want %q", got, want)
+	}
+}
+
+func TestDiscoverServer_ChallengeScopeWins(t *testing.T) {
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"resource": srv.URL + "/mcp", "authorization_servers": []string{srv.URL},
+			"scopes_supported": []string{"a", "b", "c"},
+		})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer": srv.URL, "authorization_endpoint": srv.URL + "/authorize",
+			"token_endpoint": srv.URL + "/token", "scopes_supported": []string{"x"},
+		})
+	})
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+srv.URL+`/.well-known/oauth-protected-resource", scope="a b"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	result, err := discoverServer(context.Background(), srv.URL+"/mcp")
+	if err != nil {
+		t.Fatalf("discoverServer: %v", err)
+	}
+	if got := strings.Join(result.Scopes, " "); got != "a b" {
+		t.Errorf("Scopes = %q, want the challenge's scope", got)
+	}
+}

@@ -115,22 +115,15 @@ func NewFlow(config FlowConfig) *Flow {
 // 7. Store credentials
 func (f *Flow) Run(ctx context.Context) error {
 	// Step 1: Discover OAuth metadata
-	// First try standard discovery on the server URL
-	result, err := Discover(ctx, f.config.ServerURL)
+	result, err := discoverServer(ctx, f.config.ServerURL)
 	if err != nil {
-		// Standard discovery failed - try RFC 9728 Protected Resource Metadata flow
-		// This involves triggering a 401 to get WWW-Authenticate header
-		log.Printf("Standard OAuth discovery failed, trying challenge-based discovery: %v", err)
-		result, err = discoverViaChallenge(ctx, f.config.ServerURL)
-		if err != nil {
-			return fmt.Errorf("oauth discovery failed (tried standard and challenge-based): %w", err)
-		}
+		return err
 	}
 	f.metadata = result.Metadata
 
 	// Use discovered scopes as fallback when none configured
-	if len(f.config.Scopes) == 0 && len(f.metadata.ScopesSupported) > 0 {
-		f.config.Scopes = f.metadata.ScopesSupported
+	if len(f.config.Scopes) == 0 && len(result.Scopes) > 0 {
+		f.config.Scopes = result.Scopes
 		log.Printf("Using discovered scopes: %v", f.config.Scopes)
 	}
 
@@ -240,6 +233,21 @@ func (f *Flow) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// discoverServer prefers RFC 9728 challenge discovery over RFC 8414 discovery on
+// the MCP host, whose root metadata may belong to another endpoint on that host.
+func discoverServer(ctx context.Context, serverURL string) (*DiscoverResult, error) {
+	result, challengeErr := discoverViaChallenge(ctx, serverURL)
+	if challengeErr == nil {
+		return result, nil
+	}
+	log.Printf("Challenge-based OAuth discovery failed, trying standard discovery: %v", challengeErr)
+	result, err := Discover(ctx, serverURL)
+	if err != nil {
+		return nil, fmt.Errorf("oauth discovery failed (challenge-based: %v; standard: %w)", challengeErr, err)
+	}
+	return result, nil
 }
 
 // discoverViaChallenge triggers a 401 response from the MCP server to get
@@ -734,13 +742,9 @@ func (m *TokenManager) serverMetadata(ctx context.Context, serverURL string, cre
 		// token_endpoint_auth_methods_supported advertisement gets anyway.
 		metadata = &AuthorizationServerMetadata{TokenEndpoint: cred.TokenEndpoint}
 	} else {
-		result, err := Discover(ctx, serverURL)
+		result, err := discoverServer(ctx, serverURL)
 		if err != nil {
-			challengeResult, challengeErr := discoverViaChallenge(ctx, serverURL)
-			if challengeErr != nil {
-				return nil, fmt.Errorf("discover metadata: %w (challenge-based discovery: %v)", err, challengeErr)
-			}
-			result = challengeResult
+			return nil, fmt.Errorf("discover metadata: %w", err)
 		}
 		metadata = result.Metadata
 	}

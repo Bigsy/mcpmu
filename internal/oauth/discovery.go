@@ -61,6 +61,10 @@ type DiscoverResult struct {
 
 	// URL is the URL where the metadata was found.
 	URL string
+
+	// Scopes to request when none are configured: the challenge's scope, else
+	// the protected resource's scopes_supported, else the server metadata's.
+	Scopes []string
 }
 
 // Discover performs OAuth 2.0 authorization server discovery as per RFC 8414.
@@ -160,6 +164,7 @@ func tryDiscovery(ctx context.Context, client *http.Client, discoveryURL string)
 	return &DiscoverResult{
 		Metadata: &metadata,
 		URL:      discoveryURL,
+		Scopes:   metadata.ScopesSupported,
 	}, nil
 }
 
@@ -225,6 +230,12 @@ func DiscoverFromChallenge(ctx context.Context, challenge *BearerChallenge) (*Di
 		if err != nil {
 			lastErr = err
 			continue
+		}
+		switch {
+		case challenge.Scope != "":
+			result.Scopes = strings.Fields(challenge.Scope)
+		case len(resourceMeta.ScopesSupported) > 0:
+			result.Scopes = resourceMeta.ScopesSupported
 		}
 		return result, nil
 	}
