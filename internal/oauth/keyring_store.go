@@ -2,10 +2,13 @@ package oauth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -16,6 +19,14 @@ const (
 
 	// keyringIndexKey is the key used to store the list of server URLs.
 	keyringIndexKey = "_index"
+
+	// keyringChunkSize keeps each item under macOS's limit: go-keyring
+	// base64-encodes the value into a `security -i` command capped at 4096 bytes.
+	keyringChunkSize = 2000
+
+	// keyringChunkedPrefix marks a value split across items as
+	// "<prefix><generation>:<count>"; chunks live at "<key>#<generation>.<i>".
+	keyringChunkedPrefix = "mcpmu-chunked:"
 )
 
 // KeyringStore stores credentials in the system keychain.
@@ -41,9 +52,9 @@ func (s *KeyringStore) Get(serverURL string) (*Credential, error) {
 	defer s.mu.RUnlock()
 
 	key := urlToKey(serverURL)
-	data, err := keyring.Get(keyringService, key)
+	data, err := readKeyringValue(key)
 	if err != nil {
-		if err == keyring.ErrNotFound {
+		if errors.Is(err, keyring.ErrNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("keyring get: %w", err)
@@ -72,7 +83,7 @@ func (s *KeyringStore) Put(cred *Credential) error {
 	}
 
 	key := urlToKey(cred.ServerURL)
-	if err := keyring.Set(keyringService, key, string(data)); err != nil {
+	if err := writeKeyringValue(key, string(data)); err != nil {
 		return fmt.Errorf("keyring set: %w", err)
 	}
 
@@ -86,8 +97,8 @@ func (s *KeyringStore) Delete(serverURL string) error {
 	defer s.mu.Unlock()
 
 	key := urlToKey(serverURL)
-	if err := keyring.Delete(keyringService, key); err != nil {
-		if err != keyring.ErrNotFound {
+	if err := deleteKeyringValue(key); err != nil {
+		if !errors.Is(err, keyring.ErrNotFound) {
 			return fmt.Errorf("keyring delete: %w", err)
 		}
 	}
@@ -109,9 +120,9 @@ func (s *KeyringStore) List() ([]*Credential, error) {
 	creds := make([]*Credential, 0, len(urls))
 	for _, url := range urls {
 		key := urlToKey(url)
-		data, err := keyring.Get(keyringService, key)
+		data, err := readKeyringValue(key)
 		if err != nil {
-			if err == keyring.ErrNotFound {
+			if errors.Is(err, keyring.ErrNotFound) {
 				continue // Skip missing entries
 			}
 			return nil, fmt.Errorf("keyring get %s: %w", url, err)
@@ -195,6 +206,97 @@ func (s *KeyringStore) removeFromIndex(url string) error {
 	}
 
 	return s.saveIndex(filtered)
+}
+
+// readKeyringValue reads a value written by writeKeyringValue, joining chunks.
+func readKeyringValue(key string) (string, error) {
+	data, err := keyring.Get(keyringService, key)
+	if err != nil {
+		return "", err
+	}
+	gen, count, chunked := parseChunkMarker(data)
+	if !chunked {
+		return data, nil
+	}
+	var b strings.Builder
+	for i := range count {
+		part, err := keyring.Get(keyringService, chunkKey(key, gen, i))
+		if err != nil {
+			return "", fmt.Errorf("chunk %d of %d: %w", i+1, count, err)
+		}
+		b.WriteString(part)
+	}
+	return b.String(), nil
+}
+
+// writeKeyringValue stores data at key, splitting it into chunks when too big
+// for one item. New chunks are written before the marker that points at them.
+func writeKeyringValue(key, data string) error {
+	old, _ := keyring.Get(keyringService, key)
+	if len(data) <= keyringChunkSize {
+		if err := keyring.Set(keyringService, key, data); err != nil {
+			return err
+		}
+		deleteChunks(key, old)
+		return nil
+	}
+
+	gen := strconv.FormatInt(time.Now().UnixNano(), 36)
+	count := (len(data) + keyringChunkSize - 1) / keyringChunkSize
+	for i := range count {
+		part := data[i*keyringChunkSize : min((i+1)*keyringChunkSize, len(data))]
+		if err := keyring.Set(keyringService, chunkKey(key, gen, i), part); err != nil {
+			deleteChunks(key, keyringChunkedPrefix+gen+":"+strconv.Itoa(i))
+			return err
+		}
+	}
+	if err := keyring.Set(keyringService, key, keyringChunkedPrefix+gen+":"+strconv.Itoa(count)); err != nil {
+		deleteChunks(key, keyringChunkedPrefix+gen+":"+strconv.Itoa(count))
+		return err
+	}
+	deleteChunks(key, old)
+	return nil
+}
+
+// deleteKeyringValue removes key and any chunks it points at.
+func deleteKeyringValue(key string) error {
+	old, err := keyring.Get(keyringService, key)
+	if err != nil {
+		return err
+	}
+	deleteChunks(key, old)
+	return keyring.Delete(keyringService, key)
+}
+
+// deleteChunks best-effort removes the chunks a marker value points at.
+func deleteChunks(key, marker string) {
+	gen, count, chunked := parseChunkMarker(marker)
+	if !chunked {
+		return
+	}
+	for i := range count {
+		_ = keyring.Delete(keyringService, chunkKey(key, gen, i))
+	}
+}
+
+func parseChunkMarker(value string) (gen string, count int, ok bool) {
+	rest, found := strings.CutPrefix(value, keyringChunkedPrefix)
+	if !found {
+		return "", 0, false
+	}
+	gen, countStr, found := strings.Cut(rest, ":")
+	if !found || gen == "" {
+		return "", 0, false
+	}
+	count, err := strconv.Atoi(countStr)
+	if err != nil || count < 1 {
+		return "", 0, false
+	}
+	return gen, count, true
+}
+
+func chunkKey(key, gen string, i int) string {
+	return key + "#" + gen + "." + strconv.Itoa(i)
 }
 
 var urlKeyReplacer = strings.NewReplacer("://", "_", "/", "_", ":", "_")
