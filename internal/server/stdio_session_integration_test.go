@@ -163,7 +163,7 @@ func connectStdioPeer(t *testing.T, core *Core) *stdioPeer {
 	p := &stdioPeer{cancel: cancel, conn: client, reader: bufio.NewReader(client), done: make(chan struct{})}
 	go func() {
 		defer close(p.done)
-		defer serverConn.Close()
+		defer func() { _ = serverConn.Close() }()
 		_ = session.Run(ctx)
 	}()
 	t.Cleanup(func() {

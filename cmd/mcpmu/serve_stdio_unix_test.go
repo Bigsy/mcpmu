@@ -16,9 +16,17 @@ func TestEmbeddedOutputInterruptsInheritedPipe(t *testing.T) {
 	if err := unix.Pipe(fds[:]); err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fds[0])
+	defer func() {
+		if err := unix.Close(fds[0]); err != nil {
+			t.Errorf("unable to close pipe reader: %v", err)
+		}
+	}()
 	original := os.NewFile(uintptr(fds[1]), "inherited-stdout")
-	defer original.Close()
+	defer func() {
+		if err := original.Close(); err != nil {
+			t.Errorf("unable to close inherited stdout: %v", err)
+		}
+	}()
 	if err := original.SetWriteDeadline(time.Time{}); !errors.Is(err, os.ErrNoDeadline) {
 		t.Fatalf("expected a blocking inherited pipe, got deadline error %v", err)
 	}
