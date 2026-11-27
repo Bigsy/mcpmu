@@ -63,7 +63,7 @@ func TestStdioSessionConcurrency(t *testing.T) {
 	}
 	left.call(t, "c", "c")
 	denied := left.response(t, "c")
-	if denied.Error == nil || denied.Error.Code != ErrCodeSessionConcurrencyLimit {
+	if denied.Error == nil || denied.Error.Code != 429 {
 		t.Fatalf("request at capacity: %+v", denied)
 	}
 	var detail struct {
