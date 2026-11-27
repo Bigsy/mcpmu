@@ -9,7 +9,7 @@ import (
 )
 
 // This file is the only place in package server that may start a goroutine.
-// Every background task goes through Core.spawn, Session.spawn/spawnRequest,
+// Every background task goes through Core.spawn, Session.spawn/runStdioRequest,
 // or goSafe so that it (a) recovers from panics instead of taking the whole
 // daemon (and every agent's session) down with it, (b) runs under a lifetime
 // context that SIGTERM / Close cancels, and (c) where it is a Session task, is
@@ -48,15 +48,34 @@ func (s *Session) protect(name string, requestID json.RawMessage, fn func(ctx co
 // context. Run's shutdown waits for it; Run's ctx (SIGTERM, client hang-up)
 // and Session.Close cancel it.
 func (s *Session) spawn(name string, fn func(ctx context.Context) error) {
-	s.spawnRequest(nil, name, fn)
+	s.handlersWG.Go(func() { s.protect(name, nil, fn) })
 }
 
-// spawnRequest is spawn for a goroutine that owes the client a response with
-// the given id; if fn panics the client receives -32603 for that id.
-func (s *Session) spawnRequest(requestID json.RawMessage, name string, fn func(ctx context.Context) error) {
-	s.handlersWG.Go(func() {
-		s.protect(name, requestID, fn)
-	})
+// runStdioRequest owns one admitted slot until the response, including a panic
+// response, has finished writing. Register before spawning so a cancellation
+// arriving on the very next frame can find its call.
+func (s *Session) runStdioRequest(ctx context.Context, msg RPCMessage) {
+	async := isUpstreamMethod(msg.Method)
+	var release func()
+	if async {
+		ctx, release = s.TrackRequest(ctx, msg.ID)
+	}
+	run := func() {
+		defer func() { <-s.requestSlots }()
+		if release != nil {
+			defer release()
+		}
+		s.protect("handler "+msg.Method, msg.ID, func(context.Context) error {
+			resp, _ := s.Dispatch(ctx, msg)
+			s.send(resp)
+			return nil
+		})
+	}
+	if async {
+		s.handlersWG.Go(run)
+	} else {
+		run()
+	}
 }
 
 // spawn runs fn on a Core-tracked goroutine under the Core lifetime context.

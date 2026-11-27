@@ -13,6 +13,7 @@ import (
 func metadataOnlyReload(old, next *config.Config) bool {
 	normalize := func(cfg *config.Config) config.Config {
 		c := *cfg
+		c.MaxConcurrentRequestsPerSession = 0 // consumed only at Core startup
 		c.LastModified = time.Time{}
 		c.ToolPermissions = nil
 		// Read per relayed interaction, never baked into a process.
@@ -47,6 +48,7 @@ func metadataOnlyReload(old, next *config.Config) bool {
 func selectiveReload(old, next *config.Config) (map[string]bool, bool) {
 	normalize := func(cfg *config.Config) config.Config {
 		c := *cfg
+		c.MaxConcurrentRequestsPerSession = 0 // consumed only at Core startup
 		c.Servers = nil
 		c.Namespaces = nil
 		c.ToolPermissions = nil

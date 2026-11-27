@@ -22,11 +22,12 @@ import (
 // processes, tool aggregation, configuration, hot-reload input, and the
 // upstream notification entry point.
 type Core struct {
-	coreMu           sync.RWMutex
-	cfg              *config.Config
-	configGeneration uint64
-	retiring         map[string]bool   // guarded by coreMu; acquisitions fail during selective retirement
-	recorder         *metrics.Recorder // nil when metrics are disabled or unavailable
+	stdioRequestLimit int // startup setting shared by all session constructors
+	coreMu            sync.RWMutex
+	cfg               *config.Config
+	configGeneration  uint64
+	retiring          map[string]bool   // guarded by coreMu; acquisitions fail during selective retirement
+	recorder          *metrics.Recorder // nil when metrics are disabled or unavailable
 	// resourceStateMu serializes the two writers that reset all subscription
 	// and resource-map state (Close and hot reload); it is never taken
 	// read-side. resources/* handlers and session teardown perform upstream
@@ -63,6 +64,10 @@ type Core struct {
 // NewCore constructs the shared server core without binding it to a client
 // connection. Call NewSession to attach the single Phase 1 session.
 func NewCore(opts Options) (*Core, error) {
+	limit, err := opts.Config.MaxConcurrentRequestsPerSession.Effective()
+	if err != nil {
+		return nil, err
+	}
 	bus := events.NewBus()
 
 	pidTrackerDir := opts.PIDTrackerDir
@@ -87,18 +92,19 @@ func NewCore(opts Options) (*Core, error) {
 
 	lifetime, cancelLifetime := context.WithCancel(context.Background())
 	c := &Core{
-		lifetime:         lifetime,
-		cancelLifetime:   cancelLifetime,
-		cfg:              opts.Config,
-		configGeneration: 1,
-		recorder:         newRecorderForConfig(opts.Config, opts.ConfigPath),
-		sessions:         make(map[*Session]struct{}),
-		subscriptions:    newResourceSubscriptions(),
-		bus:              bus,
-		supervisor:       supervisor,
-		reloadCh:         make(chan *config.Config, 1),
-		configPath:       opts.ConfigPath,
-		debounceDelay:    opts.DebounceDelay,
+		stdioRequestLimit: limit,
+		lifetime:          lifetime,
+		cancelLifetime:    cancelLifetime,
+		cfg:               opts.Config,
+		configGeneration:  1,
+		recorder:          newRecorderForConfig(opts.Config, opts.ConfigPath),
+		sessions:          make(map[*Session]struct{}),
+		subscriptions:     newResourceSubscriptions(),
+		bus:               bus,
+		supervisor:        supervisor,
+		reloadCh:          make(chan *config.Config, 1),
+		configPath:        opts.ConfigPath,
+		debounceDelay:     opts.DebounceDelay,
 	}
 	c.aggregator = NewAggregator(c.cfg, supervisor, false)
 	c.aggregator.acquire = c.getOrStartHandle

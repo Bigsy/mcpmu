@@ -114,10 +114,11 @@ type Session struct {
 	mu         sync.RWMutex
 
 	// IO
-	reader   *bufio.Reader
-	writer   io.Writer
-	writeMu  sync.Mutex
-	writeErr error // first stream failure, guarded by writeMu
+	requestSlots chan struct{} // stdio requests whose terminal write is outstanding
+	reader       *bufio.Reader
+	writer       io.Writer
+	writeMu      sync.Mutex
+	writeErr     error // first stream failure, guarded by writeMu
 
 	// Tracks in-flight message-handler goroutines so Run() can wait for them
 	// to drain before returning (otherwise stdout writes may race with the
@@ -195,6 +196,9 @@ func NewSession(core *Core, opts Options) (*Session, error) {
 		progress:       newProgressRoutes(),
 		outbound:       newOutboundRequests(),
 		elicitations:   newElicitationRoutes(),
+	}
+	if !opts.HTTP {
+		s.requestSlots = make(chan struct{}, core.stdioRequestLimit)
 	}
 	s.privateAggregator = s.newPrivateAggregator()
 	s.router = NewRouter(s)

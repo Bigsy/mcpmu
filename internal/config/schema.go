@@ -269,14 +269,16 @@ type MetricsConfig struct {
 
 // Config is the root configuration structure.
 type Config struct {
-	SchemaVersion    int                        `json:"schemaVersion"`
-	DaemonMode       *bool                      `json:"daemonMode,omitempty"`
-	DefaultNamespace string                     `json:"defaultNamespace,omitempty"`
-	Servers          map[string]ServerConfig    `json:"servers"`
-	Namespaces       map[string]NamespaceConfig `json:"namespaces,omitempty"`
-	ToolPermissions  []ToolPermission           `json:"toolPermissions,omitempty"`
-	Metrics          *MetricsConfig             `json:"metrics,omitempty"`
-	LastModified     time.Time                  `json:"lastModified"`
+	// MaxConcurrentRequestsPerSession limits unfinished requests on each stdio connection.
+	MaxConcurrentRequestsPerSession RequestLimit               `json:"maxConcurrentRequestsPerSession,omitempty"`
+	SchemaVersion                   int                        `json:"schemaVersion"`
+	DaemonMode                      *bool                      `json:"daemonMode,omitempty"`
+	DefaultNamespace                string                     `json:"defaultNamespace,omitempty"`
+	Servers                         map[string]ServerConfig    `json:"servers"`
+	Namespaces                      map[string]NamespaceConfig `json:"namespaces,omitempty"`
+	ToolPermissions                 []ToolPermission           `json:"toolPermissions,omitempty"`
+	Metrics                         *MetricsConfig             `json:"metrics,omitempty"`
+	LastModified                    time.Time                  `json:"lastModified"`
 
 	// InteractionTimeoutSec bounds one relayed server-to-client interaction
 	// (an elicitation waiting on the user); 0 = DefaultInteractionTimeoutSec.
@@ -574,6 +576,9 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 // Namespace validation runs in AddNamespace/UpdateNamespace instead, where a
 // user is present to see the error.
 func (c *Config) Validate() error {
+	if _, err := c.MaxConcurrentRequestsPerSession.Effective(); err != nil {
+		return err
+	}
 	for name, srv := range c.Servers {
 		if err := srv.Validate(); err != nil {
 			return fmt.Errorf("server %q: %w", name, err)

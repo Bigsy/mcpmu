@@ -23,6 +23,8 @@ const (
 	ErrCodeNamespaceNotFound   = -32004
 	ErrCodeToolNotFound        = -32005
 	ErrCodeToolDenied          = -32006
+	// ErrCodeSessionConcurrencyLimit identifies requests refused before dispatch.
+	ErrCodeSessionConcurrencyLimit = -32007
 )
 
 // RPCError represents a JSON-RPC 2.0 error.
@@ -98,4 +100,10 @@ func ErrToolNotFound(toolName string) *RPCError {
 
 func ErrToolDenied(toolName, reason string) *RPCError {
 	return NewRPCError(ErrCodeToolDenied, fmt.Sprintf("Tool denied: %s - %s", toolName, reason), map[string]string{"toolName": toolName, "reason": reason})
+}
+
+func errSessionConcurrencyLimit(limit int) *RPCError {
+	return NewRPCError(ErrCodeSessionConcurrencyLimit,
+		fmt.Sprintf("Session limit of %d concurrent requests reached. This request was not executed. Retry later with fewer concurrent requests.", limit),
+		map[string]any{"reason": "session_concurrency_limit", "execution": "not_dispatched", "retrySafe": true, "limit": limit})
 }

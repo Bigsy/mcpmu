@@ -195,32 +195,20 @@ func (s *Session) handleMessage(ctx context.Context, data []byte) error {
 		return nil
 	}
 
-	// Requests that dispatch to an upstream MCP server can block for a long
-	// time (up to the per-server tool timeout). Run them in a goroutine so
-	// the main loop stays free to handle other requests — otherwise one
-	// wedged upstream would freeze every other tool call, list, or ping.
-	// JSON-RPC correlates responses by id and send() serializes stdout
-	// writes via writeMu, so concurrent handlers are safe.
-	if msg.ID != nil && isUpstreamMethod(msg.Method) {
-		// Register the call before the goroutine starts so a cancellation that
-		// arrives immediately after the request cannot miss it.
-		callCtx, release := s.TrackRequest(ctx, msg.ID)
-		s.spawnRequest(msg.ID, "handler "+msg.Method, func(context.Context) error {
-			defer release()
-			if resp, ok := s.Dispatch(callCtx, msg); ok {
-				s.send(resp)
-			}
+	if msg.ID == nil {
+		s.protect("notification "+msg.Method, nil, func(context.Context) error {
+			s.Dispatch(ctx, msg)
 			return nil
 		})
 		return nil
 	}
 
-	s.protect("handler "+msg.Method, msg.ID, func(context.Context) error {
-		if resp, ok := s.Dispatch(ctx, msg); ok {
-			s.send(resp)
-		}
-		return nil
-	})
+	select {
+	case s.requestSlots <- struct{}{}:
+		s.runStdioRequest(ctx, msg)
+	default:
+		s.sendError(msg.ID, errSessionConcurrencyLimit(cap(s.requestSlots)))
+	}
 	return nil
 }
 
