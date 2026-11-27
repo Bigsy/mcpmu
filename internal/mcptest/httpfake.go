@@ -27,6 +27,9 @@ type HTTPFakeConfig struct {
 	// OnGETStream maps tools that send their request on the standalone GET
 	// stream, answering the POST with plain JSON once the reply arrives.
 	OnGETStream map[string]fakeserver.ServerRequestScript
+	// OnToolCall observes each tools/call before the fake writes its result.
+	// It may wait for a test barrier and should honor the request context.
+	OnToolCall func(context.Context, string)
 	// Hold keeps a tool's call open this long before answering (plain JSON),
 	// so tests can have calls in flight concurrently.
 	Hold map[string]time.Duration
@@ -140,6 +143,9 @@ func (f *HTTPFake) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *HTTPFake) callTool(w http.ResponseWriter, r *http.Request, id json.RawMessage, name string) {
+	if f.cfg.OnToolCall != nil {
+		f.cfg.OnToolCall(r.Context(), name)
+	}
 	if hold := f.cfg.Hold[name]; hold > 0 {
 		select {
 		case <-time.After(hold):

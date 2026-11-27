@@ -145,8 +145,9 @@ and an empty string both decode to unset). Embedding flattens those fields into
 the handshake object, so the struct's JSON tags *are* the wire contract between
 a shim and a daemon built from different revisions — `TestHandshakeWireShape`
 pins them. Once accepted, the socket is
-ordinary NDJSON MCP. Each Session has one bounded outbound queue; a client that
-cannot drain is disconnected instead of blocking the shared Core. Control
+ordinary NDJSON MCP. Each stdio Session limits outstanding requests and writes
+complete frames synchronously. A request holds its slot until its response has
+been written. Control
 connections have a separately frozen protocol and tolerate executable-build
 mismatch so a newly installed CLI can still inspect or stop an older daemon.
 
@@ -164,8 +165,8 @@ serving compatible clients.
 
 Once connected, the shim copies MCP bytes without interpreting them. Daemon
 EOF ends the shim even while client stdin is open; client stdin EOF half-closes
-the socket so queued responses can drain for at most five seconds. The daemon
-writer uses an ordered flush marker before closing such a completed Session.
+the socket so outstanding responses can drain for at most five seconds. The
+daemon waits for active handlers to finish writing before closing the socket.
 
 The daemon inherits the environment and working directory of the shim that won
 the spawn race. Server configs should therefore use absolute `cwd` values and

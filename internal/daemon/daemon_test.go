@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -164,7 +165,7 @@ func TestDaemonSessionHandshakeAndMCP(t *testing.T) {
 		t.Fatalf("handshake rejected: %+v", response)
 	}
 
-	status, fallback, err := Inspect(context.Background(), d.configPath)
+	status, fallback, err := Inspect(t.Context(), d.configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,6 +195,25 @@ func TestDaemonSessionHandshakeAndMCP(t *testing.T) {
 	}
 	if _, ok := capabilities["prompts"]; !ok {
 		t.Fatalf("prompts capability missing despite session flag: %s", line)
+	}
+
+	// EOF on the input side still permits the final response on this socket.
+	if _, err := io.WriteString(conn, `{"jsonrpc":"2.0","id":"last","method":"ping"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	line, err = reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last server.RPCResponse
+	if err := json.Unmarshal(line, &last); err != nil || string(last.ID) != `"last"` || string(last.Result) != "{}" {
+		t.Fatalf("final response after half-close: %s (%v)", line, err)
+	}
+	if _, err := reader.ReadByte(); err != io.EOF {
+		t.Fatalf("after final frame: %v, want EOF", err)
 	}
 }
 
