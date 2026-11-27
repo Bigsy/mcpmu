@@ -19,9 +19,22 @@ type readResult struct {
 func (s *Session) Run(ctx context.Context) error {
 	// Run's ctx ending (SIGTERM, client hang-up) cancels the session
 	// lifetime so in-flight handlers and background discovery stop promptly.
-	stopLifetime := context.AfterFunc(ctx, s.cancelLifetime)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopRun := context.AfterFunc(s.lifetime, cancel)
+	stopIO := context.AfterFunc(ctx, func() {
+		s.cancelLifetime()
+		if w, ok := s.writer.(io.Closer); ok {
+			_ = w.Close()
+		}
+		if r, ok := s.opts.Stdin.(io.Closer); ok {
+			_ = r.Close()
+		}
+	})
+	defer stopIO()
 	defer func() {
-		stopLifetime()
+		// On ordinary EOF, keep the output open until accepted writes finish.
+		stopRun()
 		s.cancelLifetime()
 		// Detach from upstream notifications *before* waiting: a notification
 		// arriving mid-drain would otherwise Add to handlersWG while Wait is
@@ -402,24 +415,15 @@ func (s *Session) sendError(id json.RawMessage, rpcErr *RPCError) {
 	s.send(resp)
 }
 
-// send writes a JSON-RPC message to the session writer as exactly one Write
-// call per frame (payload + trailing newline together), so a non-stdio writer
-// like the daemon's queuedWriter or the HTTP sseHub receives whole frames.
+// send encodes and writes one complete JSON-RPC frame.
 func (s *Session) send(msg any) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("Failed to marshal response: %v", err)
 		return
 	}
 
-	if DebugLogging {
-		log.Printf("Send: %s", string(data))
-	}
-
-	if _, err := s.writer.Write(append(data, '\n')); err != nil {
+	if err := s.writeFrame(data); err != nil {
 		log.Printf("Failed to write response: %v", err)
 	}
 }

@@ -114,9 +114,10 @@ type Session struct {
 	mu         sync.RWMutex
 
 	// IO
-	reader  *bufio.Reader
-	writer  io.Writer
-	writeMu sync.Mutex
+	reader   *bufio.Reader
+	writer   io.Writer
+	writeMu  sync.Mutex
+	writeErr error // first stream failure, guarded by writeMu
 
 	// Tracks in-flight message-handler goroutines so Run() can wait for them
 	// to drain before returning (otherwise stdout writes may race with the

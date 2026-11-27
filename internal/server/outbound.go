@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -202,8 +203,24 @@ func (s *Session) writeFrame(frame []byte) error {
 	if DebugLogging {
 		log.Printf("Send: %s", string(frame))
 	}
-	_, err := s.writer.Write(append(append([]byte(nil), frame...), '\n'))
-	return err
+	if s.writeErr != nil {
+		return s.writeErr
+	}
+	for data := append(frame, '\n'); len(data) > 0; {
+		n, err := s.writer.Write(data)
+		if err == nil && n == 0 {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			if !s.opts.HTTP {
+				s.writeErr = err
+				s.cancelLifetime()
+			}
+			return err
+		}
+		data = data[n:]
+	}
+	return nil
 }
 
 // HandleClientResponse routes a client's response to the request mcpmu sent

@@ -22,7 +22,6 @@ const (
 	defaultLinger           = 60 * time.Second
 	defaultDrainTimeout     = 30 * time.Second
 	defaultHandshakeTimeout = 5 * time.Second
-	defaultOutboundQueue    = 64
 	maxHandshakeLine        = 64 * 1024
 )
 
@@ -34,7 +33,6 @@ type Options struct {
 	Linger           time.Duration
 	DrainTimeout     time.Duration
 	HandshakeTimeout time.Duration
-	OutboundQueue    int
 }
 
 type Daemon struct {
@@ -70,9 +68,6 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.HandshakeTimeout <= 0 {
 		opts.HandshakeTimeout = defaultHandshakeTimeout
-	}
-	if opts.OutboundQueue <= 0 {
-		opts.OutboundQueue = defaultOutboundQueue
 	}
 	return opts
 }
@@ -250,11 +245,10 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	writer := newQueuedWriter(conn, d.opts.OutboundQueue, ctx.Done(), cancel)
 	session, err := server.NewSession(d.core, server.Options{
 		SessionOptions: handshake.SessionOptions,
 		ConfigPath:     d.opts.ConfigPath,
-		Stdin:          reader, Stdout: writer, Stderr: io.Discard,
+		Stdin:          reader, Stdout: conn, Stderr: io.Discard,
 		ServerName: "mcpmu", ServerVersion: d.opts.Version,
 	})
 	if err != nil {
@@ -264,15 +258,6 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 	}
 	if err := session.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("daemon session ended with error: %v", err)
-	}
-	flushCtx, flushCancel := context.WithTimeout(context.Background(), time.Second)
-	_ = writer.Flush(flushCtx)
-	flushCancel()
-	cancel()
-	_ = conn.Close()
-	select {
-	case <-writer.exited:
-	case <-time.After(time.Second):
 	}
 }
 

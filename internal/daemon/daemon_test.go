@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -66,7 +65,7 @@ func startTestDaemonWithConfig(t *testing.T, configJSON string, mutate func(*Opt
 	opts := Options{
 		ConfigPath: canonical, Build: build, Version: "test", Revision: "test-revision",
 		Linger: 5 * time.Second, DrainTimeout: 500 * time.Millisecond,
-		HandshakeTimeout: time.Second, OutboundQueue: 8,
+		HandshakeTimeout: time.Second,
 	}
 	if mutate != nil {
 		mutate(&opts)
@@ -615,32 +614,6 @@ func TestReadBoundedLineRejectsOversize(t *testing.T) {
 	reader := bufio.NewReaderSize(strings.NewReader(strings.Repeat("x", 32)+"\n"), 16)
 	if _, err := readBoundedLine(reader, 16); err == nil {
 		t.Fatal("oversized line was accepted")
-	}
-}
-
-func TestQueuedWriterDisconnectsFullQueue(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer func() { _ = clientConn.Close() }()
-	ctx, cancel := context.WithCancel(context.Background())
-	writer := newQueuedWriter(serverConn, 1, ctx.Done(), cancel)
-
-	if _, err := writer.Write([]byte("first")); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for len(writer.queue) != 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if _, err := writer.Write([]byte("second")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := writer.Write([]byte("third")); !errors.Is(err, errOutboundQueueFull) {
-		t.Fatalf("third write error = %v, want %v", err, errOutboundQueueFull)
-	}
-	select {
-	case <-writer.exited:
-	case <-time.After(time.Second):
-		t.Fatal("writer did not exit after queue exhaustion")
 	}
 }
 

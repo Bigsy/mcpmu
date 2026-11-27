@@ -30,7 +30,7 @@ var (
 // sseHub is an HTTP session's writer. Every Session notification arrives as
 // exactly one Write call per frame (send() writes payload+newline together);
 // the hub queues frames and hands them to the currently attached standalone
-// GET stream. Unlike the daemon's queuedWriter it never kills the session on
+// GET stream. It keeps the session alive on
 // overflow — responses do not flow through here, only notifications, and the
 // load-bearing ones are idempotent "go re-fetch" signals that coalesce.
 // Server→client requests that cannot ride a POST stream arrive through
