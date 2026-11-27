@@ -276,7 +276,7 @@ func serveUntilShutdown(ctx context.Context, srv httpListener, grace time.Durati
 func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string, session server.SessionOptions) error {
 	stdout, releaseOutput, err := interruptibleStdout(os.Stdout)
 	if err != nil {
-		return fmt.Errorf("could not make stdout writes interruptible: %w", err)
+		return fmt.Errorf("unable to make stdout writes interruptible: %w", err)
 	}
 	defer releaseOutput()
 

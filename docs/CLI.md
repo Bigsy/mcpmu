@@ -207,7 +207,7 @@ false; use false as the global kill switch:
 
 Both stdio modes accept up to `maxConcurrentRequestsPerSession` requests per
 connection. At capacity, mcpmu returns its application-defined JSON-RPC error
-`429` with the original request ID and `data.execution = "not_dispatched"`. Retry that
+`-32007` with the original request ID and `data.execution = "not_dispatched"`. Retry that
 request later with lower concurrency. A transport disconnect alone leaves
 the outcome of outstanding calls unknown. The setting counts requests and
 does not limit payload sizes or apply to downstream HTTP POSTs.

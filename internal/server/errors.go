@@ -25,7 +25,7 @@ const (
 	ErrCodeToolDenied          = -32006
 
 	// ErrCodeSessionConcurrencyLimit is mcpmu's application-defined code for a request refused before dispatch.
-	ErrCodeSessionConcurrencyLimit = 429
+	ErrCodeSessionConcurrencyLimit = -32007
 )
 
 // RPCError represents a JSON-RPC 2.0 error.
@@ -105,6 +105,6 @@ func ErrToolDenied(toolName, reason string) *RPCError {
 
 func errSessionConcurrencyLimit(limit int) *RPCError {
 	return NewRPCError(ErrCodeSessionConcurrencyLimit,
-		fmt.Sprintf("Could not start the request: all %d request slots for this session are in use. Retry later with fewer concurrent requests.", limit),
+		fmt.Sprintf("Unable to start the request: all %d request slots for this session are in use. Retry later with fewer concurrent requests.", limit),
 		map[string]any{"reason": "session_concurrency_limit", "execution": "not_dispatched", "retrySafe": true, "limit": limit})
 }

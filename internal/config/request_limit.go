@@ -9,7 +9,7 @@ import (
 // Its zero value selects the default when the configuration field is absent.
 type RequestLimit int
 
-var errRequestLimit = errors.New("could not set maxConcurrentRequestsPerSession: expected an integer from 1 to 4096")
+var errRequestLimit = errors.New("unable to set maxConcurrentRequestsPerSession: expected an integer from 1 to 4096")
 
 // Effective returns the configured limit, or 64 for the zero value.
 func (l RequestLimit) Effective() (int, error) {
