@@ -274,14 +274,19 @@ func serveUntilShutdown(ctx context.Context, srv httpListener, grace time.Durati
 }
 
 func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string, session server.SessionOptions) error {
-	// Create server options
+	stdout, releaseOutput, err := interruptibleStdio(os.Stdout)
+	if err != nil {
+		return fmt.Errorf("prepare stdout: %w", err)
+	}
+	defer releaseOutput()
+
 	opts := server.Options{
 		SessionOptions: session,
 		Config:         cfg,
 		ConfigPath:     resolvedConfigPath, // For hot-reload watching
 		LogLevel:       serveLogLevel,
 		Stdin:          os.Stdin,
-		Stdout:         os.Stdout,
+		Stdout:         stdout,
 		Stderr:         os.Stderr,
 		ServerName:     "mcpmu",
 		ServerVersion:  version,
