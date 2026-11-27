@@ -19,7 +19,10 @@ func TestEmbeddedOutputInterruptsInheritedPipe(t *testing.T) {
 	defer unix.Close(fds[0])
 	original := os.NewFile(uintptr(fds[1]), "inherited-stdout")
 	defer original.Close()
-	stream, cleanup, err := interruptibleStdio(original)
+	if err := original.SetWriteDeadline(time.Time{}); !errors.Is(err, os.ErrNoDeadline) {
+		t.Fatalf("expected a blocking inherited pipe, got deadline error %v", err)
+	}
+	stream, cleanup, err := interruptibleStdout(original)
 	if err != nil {
 		t.Fatal(err)
 	}

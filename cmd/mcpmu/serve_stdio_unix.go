@@ -3,17 +3,16 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-// interruptibleStdio gives the embedded session a pollable handle to an
+// interruptibleStdout gives the embedded session a pollable handle to an
 // inherited pipe or socket. Close on a blocking os.File cannot wake a
 // goroutine stuck in the kernel writing to a client that stopped reading.
-func interruptibleStdio(file *os.File) (*os.File, func(), error) {
+func interruptibleStdout(file *os.File) (*os.File, func(), error) {
 	info, err := file.Stat()
 	if err != nil {
 		return nil, nil, err
@@ -46,7 +45,7 @@ func interruptibleStdio(file *os.File) (*os.File, func(), error) {
 	}
 	if err := stream.SetDeadline(time.Time{}); err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("prepare interruptible %s: %w", file.Name(), err)
+		return nil, nil, err
 	}
 	return stream, cleanup, nil
 }
