@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/Bigsy/mcpmu/internal/config"
 )
@@ -25,13 +26,22 @@ func TestStdioSlotCoversResponseWrite(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- session.handleMessage(t.Context(), []byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)) }()
-	<-started
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not start writing the response")
+	}
 	if got := len(session.requestSlots); got != 1 {
 		t.Errorf("occupied slots during write = %d", got)
 	}
 	close(finish)
-	if err := <-done; err != nil || len(session.requestSlots) != 0 {
-		t.Fatalf("after write: err = %v, slots = %d", err, len(session.requestSlots))
+	select {
+	case err := <-done:
+		if err != nil || len(session.requestSlots) != 0 {
+			t.Fatalf("after write: err = %v, slots = %d", err, len(session.requestSlots))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not finish writing the response")
 	}
 }
 
