@@ -17,7 +17,7 @@
   <div class="card-body">
     <details>
       <summary>Input</summary>
-      {{if .Input}}<pre class="mono text-sm" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto">{{.Input}}</pre>{{else}}<p class="text-faint">No input was recorded. Enable “Record inputs for failed tool calls” in this server’s settings for future failures.</p>{{end}}
+      {{if .Input}}<pre class="mono text-sm" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto">{{.Input}}</pre>{{else}}<p class="text-faint">No input was recorded for this error. {{if $.RecordErrorInputs}}Input recording is currently enabled for this server. Inputs missing from historical errors cannot be recovered.{{else if $.ServerExists}}Enable “Record inputs for failed tool calls” in this server’s settings for future failures.{{else}}Inputs missing from historical errors cannot be recovered.{{end}}</p>{{end}}
     </details>
     <details open>
       <summary>Error response</summary>

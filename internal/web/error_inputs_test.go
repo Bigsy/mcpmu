@@ -61,3 +61,38 @@ func TestMetricsInputDisplay(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsMissingInputSetting(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		removed bool
+		want    string
+	}{
+		{name: "enabled", enabled: true, want: "Input recording is currently enabled for this server."},
+		{name: "disabled", want: "Enable “Record inputs for failed tool calls”"},
+		{name: "removed", removed: true, want: "Inputs missing from historical errors cannot be recovered."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newMetricsTestServer(t)
+			if err := srv.mutateConfig(func(cfg *config.Config) error {
+				server := cfg.Servers["github"]
+				server.RecordErrorInputs = tc.enabled
+				cfg.Servers["github"] = server
+				if tc.removed {
+					return cfg.DeleteServer("github")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			status, body := get(t, srv, "/metrics/errors?server=github&tool=create_issue&ns=work")
+			if status != 200 || !strings.Contains(body, "No input was recorded for this error.") || !strings.Contains(body, tc.want) {
+				t.Fatalf("unexpected response (%d): %s", status, body)
+			}
+			if (tc.enabled || tc.removed) && strings.Contains(body, "Enable “Record inputs for failed tool calls”") {
+				t.Fatal("incorrectly prompted to enable input recording")
+			}
+		})
+	}
+}

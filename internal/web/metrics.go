@@ -1001,6 +1001,7 @@ type metricsErrorsData struct {
 	Page, ConfigPath, Qualified, BackURL, PreviousURL, NextURL string
 	Days, Total                                                int
 	Rows                                                       []metricsErrorRow
+	ServerExists, RecordErrorInputs                            bool
 }
 type metricsErrorRow struct {
 	Time, Namespace, Outcome, Duration, Response, Input string
@@ -1022,6 +1023,9 @@ func (s *Server) handleMetricsErrors(w http.ResponseWriter, r *http.Request) {
 	const pageSize = 50
 	calls, total := s.loadMetricsStore().Errors(f, tool, (page-1)*pageSize, pageSize)
 	data := metricsErrorsData{Page: "metrics", ConfigPath: s.configPathDisplay(), Qualified: server + "." + tool, BackURL: "/metrics?" + q.sortValues().Encode(), Days: q.Days, Total: total}
+	srv, exists := s.configSnapshot().GetServer(server)
+	data.ServerExists = exists
+	data.RecordErrorInputs = srv.RecordErrorInputs
 	pageURL := func(n int) string {
 		v := q.sortValues()
 		v.Set("server", server)
