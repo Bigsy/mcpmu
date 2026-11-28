@@ -22,8 +22,17 @@ const (
 	defaultLinger           = 60 * time.Second
 	defaultDrainTimeout     = 30 * time.Second
 	defaultHandshakeTimeout = 5 * time.Second
-	defaultOutboundQueue    = 64
 	maxHandshakeLine        = 64 * 1024
+
+	// A session's unsent output may grow to this many bytes before the
+	// session is dropped, so a burst of large responses waits for a slow
+	// client instead of disconnecting it.
+	defaultOutboundBudget = 64 << 20
+	// A session whose socket accepts no bytes for this long is dropped.
+	defaultWriteStallTimeout = 30 * time.Second
+	// How long a finished session may spend writing its backlog. It matches
+	// the shim's drain window after client stdin EOF.
+	sessionFlushTimeout = 5 * time.Second
 )
 
 type Options struct {
@@ -34,7 +43,11 @@ type Options struct {
 	Linger           time.Duration
 	DrainTimeout     time.Duration
 	HandshakeTimeout time.Duration
-	OutboundQueue    int
+	// OutboundBudget bounds a session's unsent output in bytes.
+	OutboundBudget int
+	// WriteStallTimeout drops a session whose socket accepts no bytes for
+	// this long.
+	WriteStallTimeout time.Duration
 }
 
 type Daemon struct {
@@ -71,8 +84,11 @@ func normalizeOptions(opts Options) Options {
 	if opts.HandshakeTimeout <= 0 {
 		opts.HandshakeTimeout = defaultHandshakeTimeout
 	}
-	if opts.OutboundQueue <= 0 {
-		opts.OutboundQueue = defaultOutboundQueue
+	if opts.OutboundBudget <= 0 {
+		opts.OutboundBudget = defaultOutboundBudget
+	}
+	if opts.WriteStallTimeout <= 0 {
+		opts.WriteStallTimeout = defaultWriteStallTimeout
 	}
 	return opts
 }
@@ -250,7 +266,7 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	writer := newQueuedWriter(conn, d.opts.OutboundQueue, ctx.Done(), cancel)
+	writer := newQueuedWriter(conn, d.opts.OutboundBudget, d.opts.WriteStallTimeout, ctx.Done(), cancel)
 	session, err := server.NewSession(d.core, server.Options{
 		SessionOptions: handshake.SessionOptions,
 		ConfigPath:     d.opts.ConfigPath,
@@ -265,7 +281,7 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 	if err := session.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("daemon session ended with error: %v", err)
 	}
-	flushCtx, flushCancel := context.WithTimeout(context.Background(), time.Second)
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), sessionFlushTimeout)
 	_ = writer.Flush(flushCtx)
 	flushCancel()
 	cancel()
