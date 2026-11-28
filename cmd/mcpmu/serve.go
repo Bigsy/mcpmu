@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -274,32 +275,66 @@ func serveUntilShutdown(ctx context.Context, srv httpListener, grace time.Durati
 }
 
 func runEmbeddedServe(ctx context.Context, cfg *config.Config, resolvedConfigPath string, session server.SessionOptions) error {
-	stdout, releaseOutput, err := interruptibleStdout(os.Stdout)
-	if err != nil {
-		return fmt.Errorf("unable to make stdout writes interruptible: %w", err)
-	}
-	defer releaseOutput()
-
-	opts := server.Options{
+	return serveEmbeddedSession(ctx, os.Stdin, server.Options{
 		SessionOptions: session,
 		Config:         cfg,
 		ConfigPath:     resolvedConfigPath, // For hot-reload watching
 		LogLevel:       serveLogLevel,
-		Stdin:          os.Stdin,
-		Stdout:         stdout,
+		Stdout:         os.Stdout,
 		Stderr:         os.Stderr,
 		ServerName:     "mcpmu",
 		ServerVersion:  version,
-	}
+	}, time.Second)
+}
 
-	// Create and run server
+// embeddedInput signals EOF even when the session loop is busy writing a
+// synchronous reply. Only the session's stdin reader calls Read.
+type embeddedInput struct {
+	io.ReadCloser
+	startDrain context.CancelFunc
+}
+
+func (in *embeddedInput) Read(p []byte) (int, error) {
+	n, err := in.ReadCloser.Read(p)
+	if err != nil {
+		in.startDrain()
+	}
+	return n, err
+}
+
+func serveEmbeddedSession(ctx context.Context, stdin io.ReadCloser, opts server.Options, grace time.Duration) error {
+	shutdown, startDrain := context.WithCancel(ctx)
+	defer startDrain()
+	opts.Stdin = &embeddedInput{stdin, startDrain}
 	srv, err := server.New(opts)
 	if err != nil {
 		return fmt.Errorf("failed to create server: %w", err)
 	}
 
-	// Run the server
-	if err := srv.Run(ctx); err != nil && err != context.Canceled {
+	// An inherited blocking file may stay in Write even after Close. Only
+	// the embedded command can leave that syscall to process exit.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- srv.Run(ctx) }()
+	select {
+	case err = <-done:
+	case <-shutdown.Done():
+		select {
+		case err = <-done:
+		case <-time.After(grace):
+			cancel()
+			// Reap upstreams even if Run cannot reach its deferred cleanup.
+			coreDone := make(chan struct{})
+			go func() { srv.Core.Close(); close(coreDone) }()
+			select {
+			case <-coreDone:
+			case <-time.After(grace):
+			}
+			return fmt.Errorf("unable to drain embedded stdio session within %s", grace)
+		}
+	}
+	if err != nil && err != context.Canceled {
 		return fmt.Errorf("server error: %w", err)
 	}
 

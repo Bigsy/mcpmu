@@ -154,7 +154,10 @@ Control connections have a separately frozen protocol and tolerate executable-bu
 mismatch so a newly installed CLI can still inspect or stop an older daemon.
 
 The daemon owns config watching and applies each reload once at Core scope.
-Embedded serve retains its single-Session reload consumer. See Config watching
+Embedded serve retains its single-Session reload consumer and uses inherited
+stdio without changing descriptor flags. On input EOF or shutdown it allows
+one second for the session to drain. If a write is still blocked, the command
+allows one further second for Core cleanup before the process exits. See Config watching
 and reload below for instance retention, subscription cleanup and fallbacks.
 
 A spawn lock serializes concurrent cold starts. The winning shim rechecks the
