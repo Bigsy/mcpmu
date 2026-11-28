@@ -212,6 +212,12 @@ request later with lower concurrency. A transport disconnect alone leaves
 the outcome of outstanding calls unknown. The setting counts requests and
 does not limit payload sizes or apply to downstream HTTP POSTs.
 
+For shared Unix daemon connections, `daemon_write_stall_timeout_sec` controls how
+long a socket write can make no progress before the daemon disconnects that
+session. A partial write renews the interval for the remaining bytes. An idle
+connection with no pending write can stay open. Longer intervals can delay
+shared reload notifications while the daemon waits for a stalled client.
+
 An absent or true `daemonMode` uses the shared daemon. `--isolated` always runs
 only the calling serve embedded. Windows remains embedded.
 
@@ -522,6 +528,7 @@ With bearer token auth:
 | Field | Description |
 |-------|-------------|
 | `daemonMode` | Unix shared-daemon serve mode; absent/true enables it, false is the global embedded-mode kill switch |
+| `daemon_write_stall_timeout_sec` | Daemon session socket write stall timeout in whole seconds. Omitted, `0`, or `null` uses 30 seconds. Changes take effect after a daemon restart. |
 | `maxConcurrentRequestsPerSession` | Max outstanding incoming requests per stdio session, including responses waiting to be written. Integer 1–4096, default 64. Takes effect when the daemon or embedded process starts. |
 | `interaction_timeout_sec` | How long one relayed interaction (an elicitation waiting on the user) may take (default: 600) |
 | `interaction_budget_sec` | Total time one call may spend paused on relayed interactions; its hard lifetime is the tool timeout plus this (default: 1800) |

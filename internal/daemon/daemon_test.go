@@ -218,7 +218,7 @@ func TestDaemonSessionHandshakeAndMCP(t *testing.T) {
 }
 
 func TestDaemonStalledSessionDoesNotBlockReload(t *testing.T) {
-	d := startTestDaemon(t, func(opts *Options) { opts.writeStallTimeout = 250 * time.Millisecond })
+	d := startTestDaemonWithConfig(t, `{"schemaVersion":1,"servers":{},"daemon_write_stall_timeout_sec":1}`, nil)
 	open := func() (*net.UnixConn, *bufio.Reader) {
 		t.Helper()
 		conn, r, ack := dialHandshake(t, d, Handshake{Type: "session", Protocol: SessionProtocol, Build: d.build})
@@ -233,17 +233,9 @@ func TestDaemonStalledSessionDoesNotBlockReload(t *testing.T) {
 		return conn, r
 	}
 	healthy, reader := open()
-	stalled, _ := open()
-	// ping echoes the id. A single response larger than the socket buffers
-	// blocks the writer without relying on a particular request arrival rate.
-	if err := stalled.SetReadBuffer(4096); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fmt.Fprintf(stalled, `{"jsonrpc":"2.0","id":"%s","method":"ping"}`+"\n", strings.Repeat("x", 2<<20)); err != nil {
-		t.Fatal(err)
-	}
-	for _, timeout := range []int{601, 602} {
-		cfg := fmt.Sprintf(`{"schemaVersion":1,"servers":{},"namespaces":{},"interaction_timeout_sec":%d}`, timeout)
+	reload := func(timeout int) {
+		t.Helper()
+		cfg := fmt.Sprintf(`{"schemaVersion":1,"servers":{},"namespaces":{},"daemon_write_stall_timeout_sec":%d}`, timeout)
 		if err := os.WriteFile(d.configPath, []byte(cfg), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -256,6 +248,19 @@ func TestDaemonStalledSessionDoesNotBlockReload(t *testing.T) {
 			t.Fatalf("reload %d: unexpected frame %q (%v)", timeout, line, err)
 		}
 	}
+	// Even a session opened after a reload uses the startup interval.
+	reload(60)
+	stalled, _ := open()
+	// ping echoes the id. A single response larger than the socket buffers
+	// blocks the writer without relying on a particular request arrival rate.
+	if err := stalled.SetReadBuffer(4096); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(stalled, `{"jsonrpc":"2.0","id":"%s","method":"ping"}`+"\n", strings.Repeat("x", 2<<20)); err != nil {
+		t.Fatal(err)
+	}
+	reload(61)
+	reload(62)
 	// A buffered prefix can remain readable after the stalled session is
 	// dropped. A complete newline-terminated ping response must not follow.
 	if _, err := bufio.NewReader(stalled).ReadBytes('\n'); err != io.EOF {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -280,6 +281,9 @@ type Config struct {
 	Metrics                         *MetricsConfig             `json:"metrics,omitempty"`
 	LastModified                    time.Time                  `json:"lastModified"`
 
+	// DaemonWriteStallTimeoutSec limits a stalled daemon socket write in seconds; zero selects 30 seconds.
+	DaemonWriteStallTimeoutSec int64 `json:"daemon_write_stall_timeout_sec,omitempty"`
+
 	// InteractionTimeoutSec bounds one relayed server-to-client interaction
 	// (an elicitation waiting on the user); 0 = DefaultInteractionTimeoutSec.
 	// InteractionBudgetSec bounds the total time one call may spend paused on
@@ -316,6 +320,15 @@ func (c Config) IsDaemonModeEnabled() bool {
 		return DefaultDaemonMode
 	}
 	return *c.DaemonMode
+}
+
+// DaemonWriteStallTimeout returns the socket write stall interval for a daemon
+// starting with this config. Its default is 30 seconds.
+func (c *Config) DaemonWriteStallTimeout() time.Duration {
+	if c.DaemonWriteStallTimeoutSec == 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(c.DaemonWriteStallTimeoutSec) * time.Second
 }
 
 // DefaultMetricsRetentionDays is how long daily usage buckets are kept when
@@ -576,6 +589,10 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 // Namespace validation runs in AddNamespace/UpdateNamespace instead, where a
 // user is present to see the error.
 func (c *Config) Validate() error {
+	const maxSeconds = math.MaxInt64 / int64(time.Second)
+	if c.DaemonWriteStallTimeoutSec < 0 || c.DaemonWriteStallTimeoutSec > maxSeconds {
+		return fmt.Errorf("unable to set daemon_write_stall_timeout_sec: expected an integer from 0 to %d", maxSeconds)
+	}
 	if _, err := c.MaxConcurrentRequestsPerSession.Effective(); err != nil {
 		return err
 	}

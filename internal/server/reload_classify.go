@@ -14,6 +14,7 @@ func metadataOnlyReload(old, next *config.Config) bool {
 	normalize := func(cfg *config.Config) config.Config {
 		c := *cfg
 		c.MaxConcurrentRequestsPerSession = 0 // consumed only at Core startup
+		c.DaemonWriteStallTimeoutSec = 0      // captured by the daemon at startup
 		c.LastModified = time.Time{}
 		c.ToolPermissions = nil
 		// Read per relayed interaction, never baked into a process.
@@ -49,6 +50,7 @@ func selectiveReload(old, next *config.Config) (map[string]bool, bool) {
 	normalize := func(cfg *config.Config) config.Config {
 		c := *cfg
 		c.MaxConcurrentRequestsPerSession = 0 // consumed only at Core startup
+		c.DaemonWriteStallTimeoutSec = 0      // captured by the daemon at startup
 		c.Servers = nil
 		c.Namespaces = nil
 		c.ToolPermissions = nil

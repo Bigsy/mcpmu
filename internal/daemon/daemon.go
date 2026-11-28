@@ -26,23 +26,23 @@ const (
 )
 
 type Options struct {
-	ConfigPath        string
-	Build             string
-	Version           string
-	Revision          string
-	Linger            time.Duration
-	DrainTimeout      time.Duration
-	HandshakeTimeout  time.Duration
-	writeStallTimeout time.Duration
+	ConfigPath       string
+	Build            string
+	Version          string
+	Revision         string
+	Linger           time.Duration
+	DrainTimeout     time.Duration
+	HandshakeTimeout time.Duration
 }
 
 type Daemon struct {
-	opts       Options
-	paths      Paths
-	core       *server.Core
-	listener   *net.UnixListener
-	lifetime   context.Context
-	cancelLife context.CancelFunc
+	opts              Options
+	writeStallTimeout time.Duration
+	paths             Paths
+	core              *server.Core
+	listener          *net.UnixListener
+	lifetime          context.Context
+	cancelLife        context.CancelFunc
 
 	mu       sync.Mutex
 	stopping bool
@@ -69,9 +69,6 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.HandshakeTimeout <= 0 {
 		opts.HandshakeTimeout = defaultHandshakeTimeout
-	}
-	if opts.writeStallTimeout <= 0 {
-		opts.writeStallTimeout = 30 * time.Second
 	}
 	return opts
 }
@@ -135,7 +132,8 @@ func Run(ctx context.Context, opts Options) error {
 	lifetime, cancelLife := context.WithCancel(context.Background())
 	d := &Daemon{
 		opts: opts, paths: paths, core: core, listener: listener,
-		lifetime: lifetime, cancelLife: cancelLife,
+		writeStallTimeout: cfg.DaemonWriteStallTimeout(),
+		lifetime:          lifetime, cancelLife: cancelLife,
 		sessions: make(map[uint64]*liveSession), stopCh: make(chan struct{}),
 	}
 	core.StartWatching(lifetime)
@@ -252,7 +250,7 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 	session, err := server.NewSession(d.core, server.Options{
 		SessionOptions: handshake.SessionOptions,
 		ConfigPath:     d.opts.ConfigPath,
-		Stdin:          reader, Stdout: sessionWriter{conn, d.opts.writeStallTimeout}, Stderr: io.Discard,
+		Stdin:          reader, Stdout: sessionWriter{conn, d.writeStallTimeout}, Stderr: io.Discard,
 		ServerName: "mcpmu", ServerVersion: d.opts.Version,
 	})
 	if err != nil {

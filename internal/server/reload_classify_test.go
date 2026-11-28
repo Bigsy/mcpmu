@@ -15,6 +15,7 @@ func TestMetadataReloadClassification(t *testing.T) {
 		want   bool
 	}{
 		{"compression", func(c *config.Config) { n := c.Namespaces["work"]; n.Compression = "max"; c.Namespaces["work"] = n }, true},
+		{"daemon write stall timeout", func(c *config.Config) { c.DaemonWriteStallTimeoutSec = 45 }, true},
 		{"permission", func(c *config.Config) {
 			c.ToolPermissions = []config.ToolPermission{{Namespace: "work", Server: "srv1", ToolName: "read_file", Enabled: false}}
 		}, true},
@@ -34,6 +35,18 @@ func TestMetadataReloadClassification(t *testing.T) {
 				t.Fatalf("got %t", got)
 			}
 		})
+	}
+}
+
+func TestDaemonWriteStallTimeoutKeepsSelectiveReload(t *testing.T) {
+	old, next := nsCompressConfig(""), nsCompressConfig("")
+	next.DaemonWriteStallTimeoutSec = 45
+	srv := next.Servers["srv1"]
+	srv.Command = "changed"
+	next.Servers["srv1"] = srv
+	changed, ok := selectiveReload(old, next)
+	if !ok || len(changed) != 1 || !changed["srv1"] {
+		t.Fatalf("selective reload = %v, changed servers = %v", ok, changed)
 	}
 }
 
