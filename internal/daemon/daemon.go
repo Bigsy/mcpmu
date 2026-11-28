@@ -26,13 +26,14 @@ const (
 )
 
 type Options struct {
-	ConfigPath       string
-	Build            string
-	Version          string
-	Revision         string
-	Linger           time.Duration
-	DrainTimeout     time.Duration
-	HandshakeTimeout time.Duration
+	ConfigPath        string
+	Build             string
+	Version           string
+	Revision          string
+	Linger            time.Duration
+	DrainTimeout      time.Duration
+	HandshakeTimeout  time.Duration
+	writeStallTimeout time.Duration
 }
 
 type Daemon struct {
@@ -68,6 +69,9 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.HandshakeTimeout <= 0 {
 		opts.HandshakeTimeout = defaultHandshakeTimeout
+	}
+	if opts.writeStallTimeout <= 0 {
+		opts.writeStallTimeout = 30 * time.Second
 	}
 	return opts
 }
@@ -248,7 +252,7 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 	session, err := server.NewSession(d.core, server.Options{
 		SessionOptions: handshake.SessionOptions,
 		ConfigPath:     d.opts.ConfigPath,
-		Stdin:          reader, Stdout: conn, Stderr: io.Discard,
+		Stdin:          reader, Stdout: sessionWriter{conn, d.opts.writeStallTimeout}, Stderr: io.Discard,
 		ServerName: "mcpmu", ServerVersion: d.opts.Version,
 	})
 	if err != nil {
@@ -259,6 +263,35 @@ func (d *Daemon) handleSession(conn *net.UnixConn, reader *bufio.Reader, handsha
 	if err := session.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("daemon session ended with error: %v", err)
 	}
+}
+
+// sessionWriter bounds stalls on a single daemon connection. A large frame
+// may take several intervals while the client continues to drain its socket.
+type sessionWriter struct {
+	net.Conn
+	stallTimeout time.Duration
+}
+
+func (w sessionWriter) Write(p []byte) (int, error) {
+	written := 0
+	for written < len(p) {
+		if err := w.SetWriteDeadline(time.Now().Add(w.stallTimeout)); err != nil {
+			return written, err
+		}
+		n, err := w.Conn.Write(p[written:])
+		written += n
+		// A stream write can report both progress and a deadline error.
+		if n > 0 && errors.Is(err, os.ErrDeadlineExceeded) {
+			continue
+		}
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrShortWrite
+		}
+	}
+	return written, nil
 }
 
 func (d *Daemon) handleControl(conn *net.UnixConn, reader *bufio.Reader, handshake Handshake) {

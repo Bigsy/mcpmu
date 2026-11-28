@@ -147,8 +147,10 @@ a shim and a daemon built from different revisions — `TestHandshakeWireShape`
 pins them. Once accepted, the socket is
 ordinary NDJSON MCP. Each stdio Session limits outstanding requests and writes
 complete frames synchronously. A request holds its slot until its response has
-been written. Control
-connections have a separately frozen protocol and tolerate executable-build
+been written. If a daemon socket write makes no progress for 30 seconds,
+the daemon disconnects that session so shared reloads and notifications can
+continue. Large responses may span multiple intervals while bytes are moving.
+Control connections have a separately frozen protocol and tolerate executable-build
 mismatch so a newly installed CLI can still inspect or stop an older daemon.
 
 The daemon owns config watching and applies each reload once at Core scope.

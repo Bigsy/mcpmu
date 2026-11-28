@@ -217,6 +217,82 @@ func TestDaemonSessionHandshakeAndMCP(t *testing.T) {
 	}
 }
 
+func TestDaemonStalledSessionDoesNotBlockReload(t *testing.T) {
+	d := startTestDaemon(t, func(opts *Options) { opts.writeStallTimeout = 250 * time.Millisecond })
+	open := func() (*net.UnixConn, *bufio.Reader) {
+		t.Helper()
+		conn, r, ack := dialHandshake(t, d, Handshake{Type: "session", Protocol: SessionProtocol, Build: d.build})
+		t.Cleanup(func() { _ = conn.Close() })
+		if !ack.OK {
+			t.Fatalf("handshake: %+v", ack)
+		}
+		if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		rpcCall(t, conn, r, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
+		return conn, r
+	}
+	healthy, reader := open()
+	stalled, _ := open()
+	// ping echoes the id. A single response larger than the socket buffers
+	// blocks the writer without relying on a particular request arrival rate.
+	if err := stalled.SetReadBuffer(4096); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(stalled, `{"jsonrpc":"2.0","id":"%s","method":"ping"}`+"\n", strings.Repeat("x", 2<<20)); err != nil {
+		t.Fatal(err)
+	}
+	for _, timeout := range []int{601, 602} {
+		cfg := fmt.Sprintf(`{"schemaVersion":1,"servers":{},"namespaces":{},"interaction_timeout_sec":%d}`, timeout)
+		if err := os.WriteFile(d.configPath, []byte(cfg), 0600); err != nil {
+			t.Fatal(err)
+		}
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("reload %d: %v", timeout, err)
+		}
+		var notification server.RPCMessage
+		if err := json.Unmarshal(line, &notification); err != nil || notification.Method != "notifications/tools/list_changed" {
+			t.Fatalf("reload %d: unexpected frame %q (%v)", timeout, line, err)
+		}
+	}
+	// A buffered prefix can remain readable after the stalled session is
+	// dropped. A complete newline-terminated ping response must not follow.
+	if _, err := bufio.NewReader(stalled).ReadBytes('\n'); err != io.EOF {
+		t.Fatalf("stalled connection after reloads: %v, want EOF", err)
+	}
+	if got := rpcCall(t, healthy, reader, `{"jsonrpc":"2.0","id":2,"method":"ping"}`); got["result"] == nil {
+		t.Fatalf("healthy connection after reloads: %v", got)
+	}
+}
+
+func TestSessionWriterResumesPartialWrite(t *testing.T) {
+	socket, peer := net.Pipe()
+	defer func() { _ = socket.Close(); _ = peer.Close() }()
+	if err := peer.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := (sessionWriter{socket, time.Second}).Write([]byte("abc"))
+		done <- err
+	}()
+	var data [3]byte
+	if _, err := io.ReadFull(peer, data[:1]); err != nil {
+		t.Fatal(err)
+	}
+	// Expire the active Write after one byte, then read the remaining bytes.
+	if err := socket.SetWriteDeadline(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(peer, data[1:]); err != nil || string(data[:]) != "abc" {
+		t.Fatalf("incomplete frame %q: %v", data, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 // rpcCall writes one JSON-RPC line onto a handshaken session connection and
 // decodes the next line back off its reader.
 func rpcCall(t *testing.T, conn *net.UnixConn, reader *bufio.Reader, line string) map[string]any {
